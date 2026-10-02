@@ -1,0 +1,98 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Benchmark datasets, predictions, and evaluation reports
+/data/
+!src/rag_eval/legal/data/
+predictions/
+reports/
+.cache/
+.holdout_vault/
+*.vault
+
+# QA & test caches
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Multi-agent teamwork execution tracks (keep only skills & plugins)
+.agents/*
+!.agents/skills/
+!.agents/plugins/
+!.agents/plugins.json
+!.agents/mcp_config.json
+
+# Logs & editor temp files
+logs/
+*.log
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+
+# Frontend & Node / Vite dependencies and build outputs
+node_modules/
+.pnp
+.pnp.js
+dist-ssr/
+*.local
+.vite/
+.vite-temp/
+*.tsbuildinfo
+.eslintcache
+
+# Frontend environment files
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env.*.local
+
+# Node & package manager logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# System & OS artifacts
+.DS_Store
+Thumbs.db
+
+# Playwright
+frontend/test-results/
+frontend/e2e-results.json
+frontend/playwright-report/
+
+# Generated audit and experiment logs. Untracked deliberately, not deleted:
+# `audits/` was produced by an automated review pass and contains conclusions
+# that later measurement contradicted, and `experiments/` holds 65 per-iteration
+# reports from a tuning loop. Both are working notes, and a public repository
+# is the wrong place to publish either as if they were findings.
+audits/
+experiments/
+
+# No loose Markdown at the repository root. Documentation belongs in `docs/`
+# or beside what it documents; a file dropped at the root is almost always a
+# working note, and this repository accumulated several. README.md is the one
+# exception because GitHub reads it from exactly here.
+#
+# `AGENTS.md` is excluded by this rule and that is deliberate: 7,312 lines of
+# internal operating instructions for AI agents is not project documentation,
+# and it stays on disk where the tooling reads it.
+/*.md
+!/README.md

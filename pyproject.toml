@@ -1,0 +1,52 @@
+[project]
+name = "rag"
+version = "0.1.0"
+description = "RAG Evaluation and Ingestion Benchmark Suite"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Le Bao Hung" }]
+requires-python = ">=3.13.11"
+dependencies = [
+    "asyncpg>=0.31.0",
+    "fastapi>=0.115.0",
+    "httpx>=0.28.0",
+    "markitdown>=0.1.8",
+    "mcp>=2.1.1",
+    "pdfplumber>=0.11.10",
+    "pgvector>=0.5.0",
+    "pydantic>=2.13.4",
+    "pymupdf4llm>=1.28.2",
+    "python-multipart>=0.0.20",
+    "rich>=15.0.0",
+    "ruff>=0.16.3",
+    "sentence-transformers>=6.0.1",
+    "torch>=2.13.0",
+    "tqdm>=4.67.1",
+    "ty>=0.0.74",
+    "typer>=0.27.1",
+    "tzdata>=2026.3",
+    "uvicorn[standard]>=0.34.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rag_eval"]
+
+[tool.uv]
+package = true
+
+[project.scripts]
+rag-eval = "rag_eval.cli:main"
+
+[tool.ruff]
+extend-exclude = [".agents"]
+
+[tool.ruff.lint]
+extend-select = ["ANN401"]
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/*" = ["ANN401"]
