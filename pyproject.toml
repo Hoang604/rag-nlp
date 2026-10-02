@@ -50,3 +50,9 @@ extend-select = ["ANN401"]
 
 [tool.ruff.lint.per-file-ignores]
 "scripts/*" = ["ANN401"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+]

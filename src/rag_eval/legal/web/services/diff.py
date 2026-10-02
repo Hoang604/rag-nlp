@@ -64,8 +64,14 @@ class DiffCalculator:
                 init_item = initial_map[path]
                 modified_fields: list[str] = []
 
+                field_diffs_map: dict[str, dict[str, object]] = {}
+
                 if chunk.verbatim_text != init_item.get("verbatim_text"):
                     modified_fields.append("verbatim_text")
+                    field_diffs_map["verbatim_text"] = {
+                        "old": init_item.get("verbatim_text"),
+                        "new": chunk.verbatim_text,
+                    }
                     diff_entries.append(
                         AuditDiffEntry(
                             path=path,
@@ -79,6 +85,10 @@ class DiffCalculator:
 
                 if chunk.contextualized_text != init_item.get("contextualized_text"):
                     modified_fields.append("contextualized_text")
+                    field_diffs_map["contextualized_text"] = {
+                        "old": init_item.get("contextualized_text"),
+                        "new": chunk.contextualized_text,
+                    }
                     diff_entries.append(
                         AuditDiffEntry(
                             path=path,
@@ -90,8 +100,30 @@ class DiffCalculator:
                         )
                     )
 
+
+                if chunk.start_line != init_item.get("start_line") or chunk.end_line != init_item.get("end_line"):
+                    modified_fields.append("line_bounds")
+                    field_diffs_map["line_bounds"] = {
+                        "old": {"start_line": init_item.get("start_line"), "end_line": init_item.get("end_line")},
+                        "new": {"start_line": chunk.start_line, "end_line": chunk.end_line},
+                    }
+                    diff_entries.append(
+                        AuditDiffEntry(
+                            path=path,
+                            change_type="MODIFIED",
+                            field_name="line_bounds",
+                            old_value={"start_line": init_item.get("start_line"), "end_line": init_item.get("end_line")},
+                            new_value={"start_line": chunk.start_line, "end_line": chunk.end_line},
+                            description=f"Line bounds updated on '{path}'.",
+                        )
+                    )
+
                 if chunk.metadata != init_item.get("metadata", {}):
                     modified_fields.append("metadata")
+                    field_diffs_map["metadata"] = {
+                        "old": init_item.get("metadata"),
+                        "new": chunk.metadata,
+                    }
                     diff_entries.append(
                         AuditDiffEntry(
                             path=path,
@@ -107,8 +139,11 @@ class DiffCalculator:
                     modified_chunks.append({
                         "path": path,
                         "modified_fields": modified_fields,
+                        "field_diffs": field_diffs_map,
                         "current": chunk.model_dump(mode="json"),
+                        "current_chunk": chunk.model_dump(mode="json"),
                         "baseline": init_item,
+                        "baseline_chunk": init_item,
                     })
 
         edge_diffs: list[dict[str, object]] = [e.model_dump(mode="json") for e in session.edges]

@@ -38,6 +38,7 @@ def apply_chunk_deltas_to_session(
     removed_paths: list[str] | None = None,
     cascade_breadcrumbs: bool = True,
     actor: str = "AGENT",
+    applied_at: datetime.datetime | None = None,
 ) -> StagingDeltaReport:
     """Applies surgical field-level updates and removals to chunks in the session."""
     if session.status not in (StagingStatus.DRAFT, StagingStatus.AMENDMENT):
@@ -68,7 +69,6 @@ def apply_chunk_deltas_to_session(
                     path=clean_p,
                     verbatim_text=delta.verbatim_text,
                     contextualized_text=delta.contextualized_text or delta.verbatim_text,
-                    lead_sentence=delta.lead_sentence or "",
                     start_line=delta.start_line or 1,
                     end_line=delta.end_line or 1,
                     metadata=delta.metadata or {},
@@ -134,28 +134,8 @@ def apply_chunk_deltas_to_session(
             chunk.finalization_state = delta.finalization_state
             fields_modified_set.add("finalization_state")
 
-        if delta.lead_sentence is not None and delta.lead_sentence != chunk.lead_sentence:
-            old_lead = chunk.lead_sentence
-            chunk.lead_sentence = delta.lead_sentence
-            fields_modified_set.add("lead_sentence")
-
-            if cascade_breadcrumbs:
-                child_prefix = f"{clean_p}."
-                for other_p, other_c in chunk_map.items():
-                    if other_p.startswith(child_prefix):
-                        other_c.lead_sentence = delta.lead_sentence
-                        if old_lead and old_lead in other_c.contextualized_text:
-                            other_c.contextualized_text = other_c.contextualized_text.replace(
-                                old_lead, delta.lead_sentence
-                            )
-                        elif delta.lead_sentence not in other_c.contextualized_text:
-                            other_c.contextualized_text = (
-                                f"{other_c.contextualized_text}\n{delta.lead_sentence}"
-                            )
-                        cascaded_count += 1
-
     session.chunks = sorted(chunk_map.values(), key=lambda x: x.path)
-    now = datetime.datetime.now(datetime.UTC)
+    now = applied_at or datetime.datetime.now(datetime.UTC)
     session.updated_at = now
     session.mutation_history.append(
         StagingMutationRecord(
@@ -187,6 +167,7 @@ def finalize_chunks_in_session(
     session: StagingDocumentSession,
     paths: Sequence[str],
     actor: str = "AGENT",
+    applied_at: datetime.datetime | None = None,
 ) -> tuple[int, list[dict[str, object]]]:
     """Marks designated chunk paths as FINALIZED and records CHUNKS_FINALIZED mutation."""
     if session.status not in (StagingStatus.DRAFT, StagingStatus.AMENDMENT):
@@ -224,7 +205,7 @@ def finalize_chunks_in_session(
                 "finalization_state": target_chunk.finalization_state,
             })
 
-    now = datetime.datetime.now(datetime.UTC)
+    now = applied_at or datetime.datetime.now(datetime.UTC)
     session.updated_at = now
     session.mutation_history.append(
         StagingMutationRecord(
@@ -242,6 +223,7 @@ def validate_and_attach_edges_to_session(
     session: StagingDocumentSession,
     edges: Sequence[StagingEdge],
     actor: str = "AGENT",
+    applied_at: datetime.datetime | None = None,
 ) -> tuple[int, list[StagingEdge]]:
     """Pre-commit lints candidate relation edges and attaches valid ones to the session."""
     if session.status not in (StagingStatus.DRAFT, StagingStatus.AMENDMENT):
@@ -254,19 +236,19 @@ def validate_and_attach_edges_to_session(
     valid_paths = {c.path for c in session.chunks}
     doc_prefix = sanitize_ltree_label(session.doc_slug)
 
-    existing_edges: dict[tuple[str, str | None, str], StagingEdge] = {
-        (e.source_path, e.target_path, e.relation_type): e for e in session.edges
+    existing_edges: dict[tuple[str, str, str], StagingEdge] = {
+        (e.source_path, e.target_path, e.relation_type.value if hasattr(e.relation_type, "value") else str(e.relation_type)): e
+        for e in session.edges
     }
 
     for new_edge in edges:
         clean_src = validate_ltree_path(new_edge.source_path)
-        clean_tgt = validate_ltree_path(new_edge.target_path) if new_edge.target_path else None
-        clean_ext = new_edge.target_external_ref.strip() if new_edge.target_external_ref else None
+        clean_tgt = validate_ltree_path(new_edge.target_path)
 
-        if not clean_tgt and not clean_ext:
+        if not clean_tgt:
             raise CorpusDomainError(
                 error_code=E_AST_GROUNDING_VALIDATION,
-                message=f"Invalid edge from '{clean_src}': must specify either target_path or target_external_ref.",
+                message=f"Invalid edge from '{clean_src}': must specify target_path.",
                 data={"doc_slug": session.doc_slug, "source_path": clean_src},
             )
 
@@ -277,14 +259,14 @@ def validate_and_attach_edges_to_session(
                 data={"doc_slug": session.doc_slug, "source_path": clean_src},
             )
 
-        if clean_tgt and clean_src == clean_tgt:
+        if clean_src == clean_tgt:
             raise CorpusDomainError(
                 error_code=E_AST_GROUNDING_VALIDATION,
                 message=f"Self-referencing edge loop detected on '{clean_src}'.",
                 data={"doc_slug": session.doc_slug, "path": clean_src},
             )
 
-        if clean_tgt and clean_tgt.startswith(f"{doc_prefix}.") and clean_tgt not in valid_paths:
+        if clean_tgt.startswith(f"{doc_prefix}.") and clean_tgt not in valid_paths:
             raise CorpusDomainError(
                 error_code=E_AST_GROUNDING_VALIDATION,
                 message=f"Invalid edge target path '{clean_tgt}': intra-document target does not exist in staged document '{session.doc_slug}'.",
@@ -293,13 +275,12 @@ def validate_and_attach_edges_to_session(
 
         new_edge.source_path = clean_src
         new_edge.target_path = clean_tgt
-        key = (clean_src, clean_tgt, new_edge.relation_type)
+        rel_str = new_edge.relation_type.value if hasattr(new_edge.relation_type, "value") else str(new_edge.relation_type)
+        key = (clean_src, clean_tgt, rel_str)
         existing_edges[key] = new_edge
-        if clean_tgt is not None:
-            existing_edges.pop((clean_src, None, new_edge.relation_type), None)
 
     session.edges = list(existing_edges.values())
-    now = datetime.datetime.now(datetime.UTC)
+    now = applied_at or datetime.datetime.now(datetime.UTC)
     session.updated_at = now
     session.mutation_history.append(
         StagingMutationRecord(
@@ -320,6 +301,7 @@ def reparent_subtree_in_session(
     new_path_prefix: str,
     dry_run: bool = False,
     actor: str = "AGENT",
+    applied_at: datetime.datetime | None = None,
 ) -> StgReparentResult:
     """Atomically migrates an entire subtree and its graph edges to a new parent prefix."""
     if session.status not in (StagingStatus.DRAFT, StagingStatus.AMENDMENT):
@@ -414,7 +396,7 @@ def reparent_subtree_in_session(
     for c in target_chunks:
         c.path = path_rename_map[c.path]
 
-    existing_edges: dict[tuple[str, str | None, str], StagingEdge] = {}
+    existing_edges: dict[tuple[str, str, str], StagingEdge] = {}
     for e in session.edges:
         new_src = path_rename_map.get(e.source_path)
         if new_src is None and e.source_path.startswith(old_dot):
@@ -429,13 +411,14 @@ def reparent_subtree_in_session(
             if new_tgt:
                 e.target_path = new_tgt
 
-        key = (e.source_path, e.target_path, e.relation_type)
+        rel_str = e.relation_type.value if hasattr(e.relation_type, "value") else str(e.relation_type)
+        key = (e.source_path, e.target_path, rel_str)
         existing_edges[key] = e
 
     session.edges = list(existing_edges.values())
     session.chunks.sort(key=lambda x: x.path)
 
-    now = datetime.datetime.now(datetime.UTC)
+    now = applied_at or datetime.datetime.now(datetime.UTC)
     session.updated_at = now
     session.mutation_history.append(
         StagingMutationRecord(

@@ -27,16 +27,16 @@ export const DeleteConfirmModal: React.FC<DeleteConfirmModalProps> = ({
           </div>
           <div className="flex-1">
             <h3 className="text-base font-bold text-slate-100">
-              Xác Nhận Xóa Điều Khoản
+              Xác Nhận Xóa Chunk
             </h3>
             <p className="mt-2 text-xs text-slate-300 leading-relaxed">
-              Bạn có chắc chắn muốn xóa điều khoản có đường dẫn:
+              Bạn có chắc chắn muốn xóa chunk có đường dẫn:
             </p>
             <div className="mt-2 rounded bg-slate-950 p-2 font-mono text-xs text-rose-300 border border-slate-800 break-all">
               {path}
             </div>
             <p className="mt-2 text-[11px] text-amber-400">
-              Cảnh báo: Nếu điều khoản này có các mục con hoặc cạnh liên kết, việc xóa có thể tạo ra lỗi mồ côi (Orphan chunks).
+              Cảnh báo: Nếu chunk này có các mục con hoặc cạnh liên kết, việc xóa có thể tạo ra lỗi mồ côi (Orphan chunks).
             </p>
           </div>
         </div>

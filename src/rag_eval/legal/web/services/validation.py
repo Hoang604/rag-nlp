@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from rag_eval.legal.ingestion.staging.models import ChunkReviewStatus
 from rag_eval.legal.ingestion.staging.session import StagingDocumentSession
 from rag_eval.legal.schemas import (
     LTREE_PATH_REGEX,
@@ -14,13 +15,14 @@ from rag_eval.legal.web.schemas import (
 class PreFlightValidator:
     """Runs automated integrity checks against a StagingDocumentSession before promotion."""
 
-    TOTAL_CHECKS = 7
+    TOTAL_CHECKS = 8
 
     def validate(self, session: StagingDocumentSession) -> PreFlightValidationResponse:
-        """Executes all 7 integrity validation rules against the session."""
+        """Executes all 8 integrity validation rules against the session."""
         issues: list[ValidationIssue] = []
         summary: dict[str, object] = {}
 
+        # Rule 1: LTREE_PATH_SYNTAX
         invalid_path_count = 0
         for chunk in session.chunks:
             if not chunk.path or not LTREE_PATH_REGEX.match(chunk.path.strip()):
@@ -39,11 +41,12 @@ class PreFlightValidator:
             "violations": invalid_path_count,
         }
 
+        # Rule 2: ROOT_CODE_ALIGNMENT
         sanitized_doc_slug = sanitize_ltree_label(session.doc_slug)
         mismatched_root_count = 0
         for chunk in session.chunks:
             prefix = chunk.path.split(".")[0] if "." in chunk.path else chunk.path
-            if prefix != sanitized_doc_slug and not prefix.startswith(sanitized_doc_slug):
+            if prefix != sanitized_doc_slug:
                 mismatched_root_count += 1
                 issues.append(
                     ValidationIssue(
@@ -62,6 +65,7 @@ class PreFlightValidator:
             "violations": mismatched_root_count,
         }
 
+        # Rule 3: PARENT_CHILD_CONTINUITY
         continuity_violations = 0
         staged_paths = {c.path for c in session.chunks}
         if not session.chunks:
@@ -75,12 +79,33 @@ class PreFlightValidator:
                     blocking=True,
                 )
             )
+        else:
+            for chunk in session.chunks:
+                parts = chunk.path.split(".")
+                if len(parts) > 1:
+                    for level in range(1, len(parts)):
+                        ancestor_path = ".".join(parts[:level])
+                        if ancestor_path == sanitized_doc_slug:
+                            continue
+                        if ancestor_path not in staged_paths:
+                            continuity_violations += 1
+                            issues.append(
+                                ValidationIssue(
+                                    rule="PARENT_CHILD_CONTINUITY",
+                                    severity="ERROR",
+                                    path=chunk.path,
+                                    message=f"Chunk '{chunk.path}' is missing ancestor segment '{ancestor_path}'.",
+                                    blocking=True,
+                                )
+                            )
+                            break
 
         summary["parent_child_continuity"] = {
             "passed": continuity_violations == 0,
             "violations": continuity_violations,
         }
 
+        # Rule 4: VALIDITY_DATES
         date_violations = 0
         if (
             session.valid_from is not None
@@ -106,6 +131,7 @@ class PreFlightValidator:
             "violations": date_violations,
         }
 
+        # Rule 5: CONTENT_GROUNDING
         empty_text_violations = 0
         for chunk in session.chunks:
             if not chunk.verbatim_text or not chunk.verbatim_text.strip():
@@ -136,6 +162,7 @@ class PreFlightValidator:
             "violations": empty_text_violations,
         }
 
+        # Rule 6: GRAPH_EDGE_INTEGRITY
         edge_violations = 0
         for edge in session.edges:
             if edge.source_path not in staged_paths:
@@ -152,17 +179,29 @@ class PreFlightValidator:
                         blocking=True,
                     )
                 )
-            if not edge.target_path and not edge.target_external_ref:
+            if not edge.target_path:
                 edge_violations += 1
                 issues.append(
                     ValidationIssue(
                         rule="GRAPH_EDGE_INTEGRITY",
                         severity="ERROR",
                         path=edge.source_path,
-                        message=(
-                            f"Graph edge from source '{edge.source_path}' must specify either "
-                            f"a target_path or target_external_ref."
-                        ),
+                        message=f"Graph edge from source '{edge.source_path}' must specify a target_path.",
+                        blocking=True,
+                    )
+                )
+            if (
+                edge.target_path
+                and edge.target_path.startswith(f"{sanitized_doc_slug}.")
+                and edge.target_path not in staged_paths
+            ):
+                edge_violations += 1
+                issues.append(
+                    ValidationIssue(
+                        rule="GRAPH_EDGE_INTEGRITY",
+                        severity="ERROR",
+                        path=edge.source_path,
+                        message=f"Graph edge target_path '{edge.target_path}' does not exist in staged chunks for this document.",
                         blocking=True,
                     )
                 )
@@ -172,6 +211,7 @@ class PreFlightValidator:
             "violations": edge_violations,
         }
 
+        # Rule 7: DUPLICATE_PATH_COLLISION
         seen_paths: set[str] = set()
         duplicate_paths: set[str] = set()
         for chunk in session.chunks:
@@ -195,6 +235,23 @@ class PreFlightValidator:
             "violations": len(duplicate_paths),
         }
 
+        # Rule 8: CHUNK_REVIEW_COMPLETION
+        unreviewed_chunks = [c.path for c in session.chunks if c.review_status != ChunkReviewStatus.REVIEWED]
+        summary["chunk_review_completion"] = {
+            "passed": len(unreviewed_chunks) == 0,
+            "violations": len(unreviewed_chunks),
+        }
+        if unreviewed_chunks:
+            issues.append(
+                ValidationIssue(
+                    rule="CHUNK_REVIEW_COMPLETION",
+                    severity="WARNING",
+                    path=None,
+                    message=f"There are {len(unreviewed_chunks)} unreviewed chunk(s). Promotion requires 100% reviewed chunks.",
+                    blocking=False,
+                )
+            )
+
         blocking_issues = [i for i in issues if i.blocking]
         passed = len(blocking_issues) == 0
         status = "PASSED" if passed else "FAILED"
@@ -202,7 +259,7 @@ class PreFlightValidator:
         return PreFlightValidationResponse(
             status=status,
             passed=passed,
-            total_checks=7,
+            total_checks=8,
             issues=issues,
             summary=summary,
         )

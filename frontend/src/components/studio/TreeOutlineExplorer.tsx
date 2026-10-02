@@ -8,7 +8,7 @@ import {
 } from 'lucide-react';
 import { DocumentTreeNode } from '../../types/tree';
 import { getNodeTypeColor } from '../../utils/ltree';
-import { naturalLegalCompare } from '../../utils/sorting';
+import { naturalPathCompare } from '../../utils/sorting';
 
 interface TreeOutlineExplorerProps {
   rootNode: DocumentTreeNode | null;
@@ -108,7 +108,7 @@ const OutlineItem: React.FC<OutlineItemProps> = ({
       {hasChildren && !isCollapsed && (
         <div>
           {[...node.children]
-            .sort((a, b) => naturalLegalCompare(a.path, b.path))
+            .sort((a, b) => naturalPathCompare(a.path, b.path))
             .map((child) => (
               <OutlineItem
                 key={child.path}

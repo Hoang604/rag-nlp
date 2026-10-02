@@ -9,10 +9,15 @@ from pathlib import Path
 
 import asyncpg
 
-from rag_eval.legal.exceptions import E_CORPUS_INTEGRITY_VIOLATION, CorpusDomainError
+from rag_eval.legal.exceptions import (
+    E_AST_GROUNDING_VALIDATION,
+    E_CORPUS_INTEGRITY_VIOLATION,
+    CorpusDomainError,
+)
 from rag_eval.legal.ingestion.staging.models import (
     DEFAULT_STAGING_DIR,
     ChunkReviewStatus,
+    RelationType,
     StagingChunk,
     StagingChunkDelta,
     StagingEdge,
@@ -165,7 +170,6 @@ class StagingManager:
                             path=item.path,
                             verbatim_text=item.verbatim_text,
                             contextualized_text=item.contextualized_text,
-                            lead_sentence=item.lead_sentence,
                             start_line=item.start_line,
                             end_line=item.end_line,
                             metadata=item.metadata,
@@ -274,7 +278,6 @@ class StagingManager:
         doc_slug: str,
         source_path: str,
         target_path: str | None = None,
-        target_external_ref: str | None = None,
         relation_type: str | None = None,
         clear_all_targets: bool = False,
         actor: str = "HUMAN:reviewer",
@@ -285,7 +288,6 @@ class StagingManager:
         flt = StagingEdgeFilter(
             source_path=source_path,
             target_path=target_path,
-            target_external_ref=target_external_ref,
             relation_type=relation_type,
             clear_all_targets=clear_all_targets,
         )
@@ -375,6 +377,16 @@ class StagingManager:
                 message=f"Staging session for document '{doc_slug}' does not exist at {wal_store.session_dir}",
                 data={"doc_slug": doc_slug},
             )
+
+        if status in (StagingStatus.AGENT_COMMITTED, StagingStatus.APPROVED):
+            current_session = wal_store.load_materialized_session()
+            unreviewed = [c.path for c in current_session.chunks if c.review_status != ChunkReviewStatus.REVIEWED]
+            if unreviewed:
+                raise CorpusDomainError(
+                    error_code=E_AST_GROUNDING_VALIDATION,
+                    message=f"Cannot transition to {status.value} with {len(unreviewed)} unreviewed chunk(s). All chunks must be REVIEWED.",
+                    data={"unreviewed_count": len(unreviewed), "sample_paths": unreviewed[:10]},
+                )
 
         payload = {
             "new_status": status.value,
@@ -549,7 +561,6 @@ class StagingManager:
     ) -> StagingDocumentSession:
         """Reconstructs genesis.json, wal.jsonl, and state.json directly from PostgreSQL production tables."""
         from rag_eval.legal.db.repositories import CorpusRepository
-        from rag_eval.legal.ingestion.staging.models import RelationType
         from rag_eval.legal.schemas import FinalizationState
 
         wal_store = self._get_wal_store(doc_slug)
@@ -579,16 +590,6 @@ class StagingManager:
         chunk_uuid_to_path: dict[uuid.UUID, str] = {}
         for c in chunks:
             chunk_uuid_to_path[c.id] = c.path
-            lead_sentence = str(c.metadata.get("lead_sentence") or "")
-            if not lead_sentence and c.contextualized_text != c.verbatim_text:
-                ctx = c.contextualized_text
-                verb = c.verbatim_text
-                if verb in ctx:
-                    pre = ctx.split(verb)[0].strip()
-                    lines = [line.strip() for line in pre.splitlines() if line.strip()]
-                    if len(lines) >= 2:
-                        lead_sentence = lines[-1]
-
             f_state = (
                 FinalizationState.FINALIZED_SELF_CONTAINED
                 if c.context_type == "SELF_CONTAINED"
@@ -604,7 +605,6 @@ class StagingManager:
                     path=c.path,
                     verbatim_text=c.verbatim_text,
                     contextualized_text=c.contextualized_text,
-                    lead_sentence=lead_sentence,
                     start_line=c.start_line,
                     end_line=c.end_line,
                     metadata=dict(c.metadata or {}),
@@ -617,20 +617,26 @@ class StagingManager:
             raw_text = "\n\n".join(c.verbatim_text for c in stg_chunks)
 
         edges = await corpus_repo.graph.list_edges_for_chunks(chunk_ids)
+        external_target_ids = [
+            e.target_chunk_id
+            for e in edges
+            if e.target_chunk_id not in chunk_uuid_to_path
+        ]
+        external_target_map: dict[uuid.UUID, str] = {}
+        if external_target_ids:
+            external_target_map = await corpus_repo.chunks.resolve_ids_batch(external_target_ids)
+
         stg_edges: list[StagingEdge] = []
         for e in edges:
             src_path = chunk_uuid_to_path.get(e.source_chunk_id)
-            tgt_path = chunk_uuid_to_path.get(e.target_chunk_id)
+            tgt_path = chunk_uuid_to_path.get(e.target_chunk_id) or external_target_map.get(e.target_chunk_id)
             if not src_path or not tgt_path:
                 continue
             stg_edges.append(
                 StagingEdge(
                     source_path=src_path,
                     target_path=tgt_path,
-                    target_external_ref=None,
                     relation_type=RelationType(e.relation_type) if e.relation_type in RelationType.__members__ else RelationType.REFERENCES,
-                    citation_text=None,
-                    metadata={},
                 )
             )
 

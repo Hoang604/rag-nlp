@@ -4,7 +4,6 @@ export interface StagingChunk {
   path: string;
   verbatim_text: string;
   contextualized_text: string;
-  lead_sentence?: string;
   start_line: number;
   end_line: number;
   metadata?: Record<string, unknown>;
@@ -14,11 +13,8 @@ export interface StagingChunk {
 
 export interface StagingEdge {
   source_path: string;
-  target_path?: string | null;
-  target_external_ref?: string | null;
+  target_path: string;
   relation_type: string;
-  citation_text?: string | null;
-  metadata?: Record<string, unknown>;
 }
 
 export interface StagingMutationRecord {

@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 import asyncpg
 
 from rag_eval.legal.exceptions import (
+    E_AST_GROUNDING_VALIDATION,
     E_STORAGE_CONNECTION,
     CorpusDomainError,
 )
@@ -41,6 +42,12 @@ class BaseRepository:
     def _translate_error(self, operation: str, exc: Exception) -> CorpusDomainError:
         """Translates raw asyncpg/system errors into typed domain exceptions."""
         logger.error("Database operation '%s' failed: %s", operation, exc)
+        if isinstance(exc, (asyncpg.DataError, asyncpg.PostgresSyntaxError)):
+            return CorpusDomainError(
+                error_code=E_AST_GROUNDING_VALIDATION,
+                message=f"Database input validation or syntax error in '{operation}': {exc}",
+                data={"operation": operation, "original_error": str(exc)},
+            )
         return CorpusDomainError(
             error_code=E_STORAGE_CONNECTION,
             message=f"Database operation '{operation}' failed: {exc}",

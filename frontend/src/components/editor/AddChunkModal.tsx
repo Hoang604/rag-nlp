@@ -46,7 +46,7 @@ export const AddChunkModal: React.FC<AddChunkModalProps> = ({
         onClose();
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Lỗi khi thêm điều khoản');
+      setError(err instanceof Error ? err.message : 'Lỗi khi thêm mục');
     } finally {
       setLoading(false);
     }

@@ -39,7 +39,6 @@ class TreeHierarchyBuilder:
             node_type="DOCUMENT",
             verbatim_text="",
             contextualized_text=f"[{session.title or session.doc_slug}]",
-            lead_sentence="",
             metadata=session.metadata,
             children=[],
         )
@@ -70,7 +69,6 @@ class TreeHierarchyBuilder:
                         node_type="NODE",
                         verbatim_text=chunk.verbatim_text if is_leaf else "",
                         contextualized_text=chunk.contextualized_text if is_leaf else "",
-                        lead_sentence=chunk.lead_sentence if is_leaf else "",
                         start_line=chunk.start_line if is_leaf else 1,
                         end_line=chunk.end_line if is_leaf else 1,
                         metadata=chunk.metadata if is_leaf else {},
@@ -88,7 +86,6 @@ class TreeHierarchyBuilder:
                     if is_leaf:
                         existing.verbatim_text = chunk.verbatim_text
                         existing.contextualized_text = chunk.contextualized_text
-                        existing.lead_sentence = chunk.lead_sentence
                         existing.start_line = chunk.start_line
                         existing.end_line = chunk.end_line
                         existing.metadata = chunk.metadata

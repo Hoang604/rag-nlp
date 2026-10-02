@@ -35,17 +35,13 @@ export interface FinalizeChunksResponse {
 
 export interface CreateEdgePayload {
   source_path: string;
-  target_path?: string | null;
-  target_external_ref?: string | null;
+  target_path: string;
   relation_type: string;
-  citation_text?: string | null;
-  metadata?: Record<string, unknown>;
 }
 
 export interface DeleteEdgePayload {
   source_path: string;
   target_path?: string | null;
-  target_external_ref?: string | null;
   relation_type?: string | null;
   clear_all_targets?: boolean;
 }

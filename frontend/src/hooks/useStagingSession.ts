@@ -97,17 +97,30 @@ export function useStagingSession(initialDocSlug?: string) {
           removed_paths: removedPaths,
         };
         await api.patchChunks(activeDocSlug, payload);
-        await loadActiveSession(activeDocSlug);
+        setSession((prev) => {
+          if (!prev) return prev;
+          const updatedMap = new Map(updatedChunks.map((c) => [c.path, c]));
+          const removedSet = new Set(removedPaths);
+          const remaining = prev.chunks
+            .filter((c) => !removedSet.has(c.path))
+            .map((c) => updatedMap.get(c.path) ?? c);
+          const existingPaths = new Set(prev.chunks.map((c) => c.path));
+          const newlyAdded = updatedChunks.filter((c) => !existingPaths.has(c.path));
+          return {
+            ...prev,
+            chunks: [...remaining, ...newlyAdded],
+          };
+        });
         await loadTreeHierarchy(activeDocSlug);
-        await refreshSessions();
+        void refreshSessions();
         return true;
       } catch (err) {
-        const msg = err instanceof Error ? err.message : 'Lỗi cập nhật điều khoản';
+        const msg = err instanceof Error ? err.message : 'Lỗi cập nhật chunk';
         setError(msg);
         return false;
       }
     },
-    [activeDocSlug, loadActiveSession, loadTreeHierarchy, refreshSessions]
+    [activeDocSlug, loadTreeHierarchy, refreshSessions]
   );
 
   // Mutation helper: add edge
@@ -117,10 +130,10 @@ export function useStagingSession(initialDocSlug?: string) {
       try {
         await api.addEdges(activeDocSlug, [edge]);
         await loadActiveSession(activeDocSlug);
-        await refreshSessions();
+        void refreshSessions();
         return true;
       } catch (err) {
-        const msg = err instanceof Error ? err.message : 'Lỗi thêm quan hệ pháp lý';
+        const msg = err instanceof Error ? err.message : 'Lỗi thêm quan hệ đồ thị';
         setError(msg);
         return false;
       }
@@ -135,10 +148,10 @@ export function useStagingSession(initialDocSlug?: string) {
       try {
         await api.deleteEdge(activeDocSlug, payload);
         await loadActiveSession(activeDocSlug);
-        await refreshSessions();
+        void refreshSessions();
         return true;
       } catch (err) {
-        const msg = err instanceof Error ? err.message : 'Lỗi xóa quan hệ pháp lý';
+        const msg = err instanceof Error ? err.message : 'Lỗi xóa quan hệ đồ thị';
         setError(msg);
         return false;
       }
@@ -153,7 +166,7 @@ export function useStagingSession(initialDocSlug?: string) {
       try {
         await api.updateSessionStatus(activeDocSlug, status, actor, description);
         await loadActiveSession(activeDocSlug);
-        await refreshSessions();
+        void refreshSessions();
         return true;
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'Lỗi chuyển trạng thái';
@@ -170,17 +183,26 @@ export function useStagingSession(initialDocSlug?: string) {
       if (!activeDocSlug) return false;
       try {
         await api.finalizeChunks(activeDocSlug, paths);
-        await loadActiveSession(activeDocSlug);
+        setSession((prev) => {
+          if (!prev) return prev;
+          const pathsSet = new Set(paths);
+          return {
+            ...prev,
+            chunks: prev.chunks.map((c) =>
+              pathsSet.has(c.path) ? { ...c, review_status: 'REVIEWED' as const } : c
+            ),
+          };
+        });
         await loadTreeHierarchy(activeDocSlug);
-        await refreshSessions();
+        void refreshSessions();
         return true;
       } catch (err) {
-        const msg = err instanceof Error ? err.message : 'Lỗi chốt điều khoản';
+        const msg = err instanceof Error ? err.message : 'Lỗi chốt chunk';
         setError(msg);
         return false;
       }
     },
-    [activeDocSlug, loadActiveSession, loadTreeHierarchy, refreshSessions]
+    [activeDocSlug, loadTreeHierarchy, refreshSessions]
   );
 
   return {

@@ -91,10 +91,6 @@ class StagingChunkDelta(BaseModel):
         None,
         description="Nội dung ngữ cảnh đầy đủ mới sau khi ghép chuỗi phả hệ.",
     )
-    lead_sentence: str | None = Field(
-        None,
-        description="Câu dẫn đề mới của phân vị cha.",
-    )
     start_line: int | None = Field(
         None,
         ge=1,
@@ -229,7 +225,6 @@ class StagingChunk(BaseModel):
     contextualized_text: str = Field(..., description="Synthesized context text")
     start_line: int = Field(default=1, ge=1, description="1-indexed starting line number in source text")
     end_line: int = Field(default=1, ge=1, description="1-indexed ending line number in source text")
-    lead_sentence: str = Field("", description="Inherited lead sentence")
     metadata: dict[str, object] = Field(default_factory=dict, description="Dynamic metadata payload")
     char_length: int = Field(default=0, description="Total character count of verbatim text")
     review_status: ChunkReviewStatus = Field(
@@ -261,10 +256,6 @@ class StagingEdgeFilter(BaseModel):
         None,
         description="Đường dẫn ltree của chunk đích nội bộ cần xóa (nếu có).",
     )
-    target_external_ref: str | None = Field(
-        None,
-        description="Chuỗi trích dẫn nguyên văn đầy đủ của văn bản bên ngoài cần xóa (nếu có).",
-    )
     relation_type: RelationType | str | None = Field(
         None,
         description="Loại quan hệ cần xóa (ví dụ: 'REFERENCES', 'SUPPORTS'). Nếu để trống, sẽ khớp mọi loại quan hệ với đích đã chỉ định.",
@@ -283,11 +274,10 @@ class StagingEdgeFilter(BaseModel):
         self.source_path = validate_ltree_path(clean_src)
 
         clean_tgt = self.target_path.strip() if self.target_path else None
-        clean_ext = self.target_external_ref.strip() if self.target_external_ref else None
 
-        if not clean_tgt and not clean_ext and not self.clear_all_targets:
+        if not clean_tgt and not self.clear_all_targets:
             raise ValueError(
-                f"Thao tác xóa cạnh từ '{self.source_path}' yêu cầu phải chỉ định 'target_path' hoặc 'target_external_ref' "
+                f"Thao tác xóa cạnh từ '{self.source_path}' yêu cầu phải chỉ định 'target_path' "
                 "để xác định đúng cạnh cần xóa. Nếu thực sự muốn xóa toàn bộ mọi cạnh xuất phát từ nút này, "
                 "bắt buộc phải đặt 'clear_all_targets=True'."
             )
@@ -296,7 +286,6 @@ class StagingEdgeFilter(BaseModel):
             self.target_path = validate_ltree_path(clean_tgt)
         else:
             self.target_path = None
-        self.target_external_ref = clean_ext
         return self
 
 
@@ -309,50 +298,32 @@ class StagingEdge(BaseModel):
         ...,
         description="Đường dẫn phân cấp ltree của chunk nguồn phát sinh quan hệ.",
     )
-    target_path: str | None = Field(
-        None,
+    target_path: str = Field(
+        ...,
         description="Đường dẫn phân cấp ltree của chunk đích trong cùng văn bản hoặc văn bản đã nạp.",
-    )
-    target_external_ref: str | None = Field(
-        None,
-        description="Chuỗi viện dẫn nguyên văn đầy đủ tới tài liệu bên ngoài chưa nạp vào CSDL (ví dụ: 'Document Title, Section 5'). Tuyệt đối không tự bịa đặt mã ltree giả khi tài liệu chưa được nạp.",
     )
     relation_type: RelationType = Field(
         default=RelationType.REFERENCES,
         description="Loại quan hệ có hướng giữa hai chunk.",
-    )
-    citation_text: str | None = Field(
-        None,
-        description="Đoạn văn bản nguyên văn trích dẫn làm căn cứ xác lập quan hệ (ví dụ: 'theo quy định tại Phần 5').",
-    )
-    metadata: dict[str, object] = Field(
-        default_factory=dict,
-        description="Siêu dữ liệu ngữ nghĩa bổ trợ cho cạnh quan hệ.",
     )
 
     @model_validator(mode="after")
     def validate_edge_targets(self) -> StagingEdge:
 
         clean_src = self.source_path.strip() if self.source_path else ""
+        clean_tgt = self.target_path.strip() if self.target_path else ""
+
         if not clean_src:
             raise ValueError("source_path không được để trống")
+        if not clean_tgt:
+            raise ValueError("target_path không được để trống")
+
         self.source_path = validate_ltree_path(clean_src)
+        self.target_path = validate_ltree_path(clean_tgt)
 
-        clean_tgt = self.target_path.strip() if self.target_path else None
-        clean_ext = self.target_external_ref.strip() if self.target_external_ref else None
+        if self.source_path == self.target_path:
+            raise ValueError(f"Self-referencing edge loop detected on '{self.source_path}'.")
 
-        if not clean_tgt and not clean_ext:
-            raise ValueError(
-                f"Cạnh quan hệ đồ thị xuất phát từ '{self.source_path}' bắt buộc phải có ít nhất một đích đến: "
-                "'target_path' (cho liên kết nội bộ) hoặc 'target_external_ref' (cho viện dẫn văn bản ngoài)."
-            )
-
-        if clean_tgt:
-            self.target_path = validate_ltree_path(clean_tgt)
-        else:
-            self.target_path = None
-
-        self.target_external_ref = clean_ext
         return self
 
 
@@ -382,7 +353,6 @@ class StgPreviewHit(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     path: str
-    lead_sentence: str
     preview_text: str
     char_length: int = 0
     is_truncated: bool = False

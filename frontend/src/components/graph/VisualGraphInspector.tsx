@@ -38,8 +38,7 @@ export const VisualGraphInspector: React.FC<VisualGraphInspectorProps> = ({
       const matchSearch =
         !searchPath ||
         e.source_path.toLowerCase().includes(searchPath.toLowerCase()) ||
-        (e.target_path && e.target_path.toLowerCase().includes(searchPath.toLowerCase())) ||
-        (e.citation_text && e.citation_text.toLowerCase().includes(searchPath.toLowerCase()));
+        (e.target_path && e.target_path.toLowerCase().includes(searchPath.toLowerCase()));
       return matchRel && matchSearch;
     });
   }, [session.edges, filterRelation, searchPath]);
@@ -139,14 +138,15 @@ export const VisualGraphInspector: React.FC<VisualGraphInspectorProps> = ({
               className="rounded-md border border-slate-700 bg-slate-950 px-3 py-1.5 text-xs text-slate-100 focus:border-blue-500 focus:outline-none"
             >
               <option value="">Tất cả loại quan hệ</option>
-              <option value="MODIFIES_AND_REPLACES">Sửa đổi &amp; Thay thế</option>
-              <option value="SANCTIONS">Xử phạt</option>
-              <option value="HAS_ADDITIONAL_SANCTION">Phạt bổ sung</option>
-              <option value="REFERENCES">Dẫn chiếu pháp luật</option>
-              <option value="REFERENCES_TECHNICAL_STANDARD">Dẫn chiếu QCVN</option>
-              <option value="OVERRIDES">Ghi đè ưu tiên</option>
-              <option value="EXEMPTS">Miễn trừ</option>
-              <option value="GUIDES">Hướng dẫn thi hành</option>
+              <option value="REFERENCES">Tham chiếu / Dẫn nguồn (REFERENCES)</option>
+              <option value="SUPPORTS">Bổ trợ / Củng cố luận điểm (SUPPORTS)</option>
+              <option value="CONTRADICTS">Mâu thuẫn / Phản bác (CONTRADICTS)</option>
+              <option value="DEFINES">Định nghĩa / Khái niệm (DEFINES)</option>
+              <option value="EXTENDS">Mở rộng / Phát triển thêm (EXTENDS)</option>
+              <option value="EXEMPLIFIES">Ví dụ minh họa (EXEMPLIFIES)</option>
+              <option value="DEPENDS_ON">Phụ thuộc điều kiện (DEPENDS_ON)</option>
+              <option value="SUPERSEDES">Thay thế / Bãi bỏ (SUPERSEDES)</option>
+              <option value="SEE_ALSO">Tham khảo thêm (SEE_ALSO)</option>
             </select>
           </div>
         </div>

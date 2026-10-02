@@ -36,7 +36,7 @@ export const NavigationTabs: React.FC<NavigationTabsProps> = ({
   const tabs = [
     {
       id: 'studio' as TabId,
-      label: 'Legal Studio (3-Pane)',
+      label: 'Document Studio (3-Pane)',
       icon: FolderTree,
       badge: chunksCount > 0 ? `${chunksCount} mục` : undefined,
     },

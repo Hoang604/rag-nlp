@@ -9,7 +9,7 @@ import {
 import { StagingEdge } from '../../types/staging';
 import { DocumentTreeNode } from '../../types/tree';
 import { getNodeTypeColor } from '../../utils/ltree';
-import { naturalLegalCompare } from '../../utils/sorting';
+import { naturalPathCompare } from '../../utils/sorting';
 
 interface DocumentReaderEditorProps {
   rootNode: DocumentTreeNode | null;
@@ -121,7 +121,7 @@ const RenderSection: React.FC<RenderSectionProps> = memo(
             </button>
             <button
               type="button"
-              title="Sửa điều khoản"
+              title="Sửa chunk"
               onClick={(e) => {
                 e.stopPropagation();
                 onEditNode(node);
@@ -132,7 +132,7 @@ const RenderSection: React.FC<RenderSectionProps> = memo(
             </button>
             <button
               type="button"
-              title="Xóa điều khoản"
+              title="Xóa chunk"
               onClick={(e) => {
                 e.stopPropagation();
                 onDeleteNode(node.path);
@@ -144,12 +144,6 @@ const RenderSection: React.FC<RenderSectionProps> = memo(
           </div>
         </div>
 
-        {/* Lead sentence if available */}
-        {node.lead_sentence && (
-          <div className="text-xs italic text-slate-300 mb-2 leading-relaxed">
-            {node.lead_sentence}
-          </div>
-        )}
 
         {/* Verbatim statutory legal text */}
         {node.verbatim_text && (
@@ -180,7 +174,7 @@ const RenderSection: React.FC<RenderSectionProps> = memo(
                 key={idx}
                 className="rounded bg-blue-950/80 px-2 py-0.5 text-[10px] font-mono text-blue-300 border border-blue-800"
               >
-                {e.relation_type} &rarr; {e.target_path || e.target_external_ref || 'Ngoại vi'}
+                {e.relation_type} &rarr; {e.target_path}
               </span>
             ))}
           </div>
@@ -190,7 +184,7 @@ const RenderSection: React.FC<RenderSectionProps> = memo(
         {node.children && node.children.length > 0 && (
           <div className="mt-2 space-y-2">
             {[...node.children]
-              .sort((a, b) => naturalLegalCompare(a.path, b.path))
+              .sort((a, b) => naturalPathCompare(a.path, b.path))
               .map((child) => (
                 <RenderSection
                   key={child.path}
@@ -238,7 +232,7 @@ export const DocumentReaderEditor: React.FC<DocumentReaderEditorProps> = ({
   if (!rootNode) {
     return (
       <div className="flex h-full w-full items-center justify-center p-8 text-center text-xs text-slate-500">
-        Chưa có dữ liệu điều khoản trong phiên này.
+        Chưa có dữ liệu chunk trong phiên này.
       </div>
     );
   }

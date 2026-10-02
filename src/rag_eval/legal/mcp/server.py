@@ -13,10 +13,16 @@ from mcp.server.mcpserver import MCPServer
 from mcp.shared.exceptions import MCPError
 from mcp.types import CallToolResult, TextContent
 
-from rag_eval.legal.exceptions import CorpusDomainError
+from rag_eval.legal.exceptions import (
+    E_AST_GROUNDING_VALIDATION,
+    E_CORPUS_INTEGRITY_VIOLATION,
+    E_INVALID_DOCUMENT_HIERARCHY,
+    CorpusDomainError,
+)
 from rag_eval.legal.mcp.registry import register_mcp_tools
 from rag_eval.legal.mcp.tools import (
     CorpusMCPTools,
+    CorpusReranker,
     CorpusRuntimeSensors,
     CorpusStagingTools,
     QueryEmbedder,
@@ -32,6 +38,7 @@ class FlushingFileHandler(logging.FileHandler):
     def emit(self, record: logging.LogRecord) -> None:
         super().emit(record)
         self.flush()
+
 
 SERVER_NAME = "rag-corpus-mcp"
 SERVER_VERSION = "3.0.0"
@@ -66,13 +73,16 @@ CORPUS_SERVER_INSTRUCTIONS = render_server_instructions()
 
 def create_default_corpus_mcp_tools(
     embedding_engine: QueryEmbedder | None = None,
+    reranker: CorpusReranker | None = None,
 ) -> CorpusMCPTools:
     """Composition root factory explicitly assembling runtime sensors and staging tools via pure DI."""
     from rag_eval.legal.ingestion.staging.manager import StagingManager
+    from rag_eval.legal.retrieval.reranker import CrossEncoderReranker
 
     embedder = embedding_engine or SentenceTransformerQueryEmbedder()
+    re_rank = reranker or CrossEncoderReranker()
     staging_mgr = StagingManager()
-    sensors = CorpusRuntimeSensors(embedding_engine=embedder, staging_manager=staging_mgr)
+    sensors = CorpusRuntimeSensors(embedding_engine=embedder, reranker=re_rank)
     staging = CorpusStagingTools(staging_manager=staging_mgr)
     return CorpusMCPTools(sensors=sensors, staging=staging)
 
@@ -83,7 +93,19 @@ def create_corpus_mcp_server(
 ) -> MCPServer:
     """Builds and configures the official MCP MCPServer instance with all canonical tools."""
     tool_impl = tools if tools is not None else create_default_corpus_mcp_tools()
-    instructions_text = render_server_instructions(manifest_block=manifest_block)
+
+    rendered_manifest = manifest_block
+    if rendered_manifest is None:
+        try:
+            import asyncio
+
+            loop = asyncio.get_event_loop()
+            if not loop.is_running():
+                rendered_manifest = loop.run_until_complete(tool_impl.build_dynamic_corpus_manifest())
+        except (RuntimeError, OSError, ValueError) as exc:
+            logger.debug("Could not build dynamic corpus manifest: %s", exc)
+
+    instructions_text = render_server_instructions(manifest_block=rendered_manifest)
     server = MCPServer(
         SERVER_NAME,
         version=SERVER_VERSION,
@@ -92,6 +114,17 @@ def create_corpus_mcp_server(
     )
     register_mcp_tools(server=server, tool_impl=tool_impl)
     return server
+
+
+def map_domain_error_to_jsonrpc(err: CorpusDomainError) -> tuple[int, str, dict[str, object]]:
+    """Maps internal domain errors to strict JSON-RPC 2.0 error specifications."""
+    code = (
+        -32602
+        if err.error_code in (E_AST_GROUNDING_VALIDATION, E_INVALID_DOCUMENT_HIERARCHY)
+        else -32603
+    )
+    data = {"domain_code": err.error_code, **err.data}
+    return code, err.message, data
 
 
 class CorpusMCPServer:
@@ -119,14 +152,26 @@ class CorpusMCPServer:
 
     async def execute_tool(self, name: str, args: dict[str, object]) -> dict[str, object]:
         logger.info("[TOOL] START name=%s args=%s", name, args)
-        res = await self.mcp_server.call_tool(name, args)
+        try:
+            res = await self.mcp_server.call_tool(name, args)
+        except Exception as exc:
+            cause = getattr(exc, "__cause__", None) or exc
+            if isinstance(cause, CorpusDomainError):
+                raise cause from exc
+            logger.error("[TOOL] ERROR name=%s: %s", name, exc)
+            raise CorpusDomainError(
+                error_code=E_AST_GROUNDING_VALIDATION if "value" in str(exc).lower() else E_CORPUS_INTEGRITY_VIOLATION,
+                message=str(cause),
+                data={"tool": name, "error": str(cause)},
+            ) from exc
+
         if isinstance(res, CallToolResult) and res.is_error:
             err_msg = "\n".join(
                 c.text for c in res.content if isinstance(c, TextContent)
             )
             logger.error("[TOOL] ERROR name=%s: %s", name, err_msg)
             raise CorpusDomainError(
-                error_code=-32603,
+                error_code=E_AST_GROUNDING_VALIDATION,
                 message=err_msg or f"Error executing tool '{name}'",
             )
         if isinstance(res, CallToolResult):
@@ -216,18 +261,28 @@ class CorpusMCPServer:
                 "error": {"code": -32601, "message": f"Method not found: {method}"},
             }
 
-        except (CorpusDomainError, MCPError) as err:
-            code = err.error_code if isinstance(err, CorpusDomainError) else err.code
+        except CorpusDomainError as err:
+            code, message, data = map_domain_error_to_jsonrpc(err)
             return {
                 "jsonrpc": "2.0",
                 "id": req_id,
                 "error": {
                     "code": code,
+                    "message": message,
+                    "data": data,
+                },
+            }
+        except MCPError as err:
+            return {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "error": {
+                    "code": err.code,
                     "message": err.message,
                     "data": err.data,
                 },
             }
-        except (RuntimeError, ValueError, TypeError, KeyError, OSError) as exc:
+        except Exception as exc:
             logger.exception("Error handling request")
             return {
                 "jsonrpc": "2.0",
@@ -255,7 +310,6 @@ def run_mcp_server(log_file: str | None = None) -> None:
         root_logger.setLevel(logging.INFO)
         root_logger.addHandler(handler)
         logger.setLevel(logging.INFO)
-        logger.addHandler(handler)
 
     logger.info("=== MCP SERVER PROCESS LAUNCHED ===")
     logger.info("PID: %d | PPID: %d | CWD: %s", os.getpid(), os.getppid(), os.getcwd())
@@ -264,10 +318,10 @@ def run_mcp_server(log_file: str | None = None) -> None:
 
     def _sig_handler(signum: int, frame: object) -> None:
         signame = signal.Signals(signum).name if signum in signal.Signals.__members__.values() else str(signum)
-        logger.warning("[SIGNAL] Caught signal %s (%d) on pid=%d, ppid=%d. Exiting cleanly with status 0...", signame, signum, os.getpid(), os.getppid())
+        logger.warning("[SIGNAL] Caught signal %s (%d) on pid=%d, ppid=%d. Unwinding cleanly...", signame, signum, os.getpid(), os.getppid())
         for h in list(logger.handlers) + list(logging.getLogger().handlers):
             h.flush()
-        sys.exit(0)
+        raise KeyboardInterrupt(f"Received signal {signame}")
 
     try:
         signal.signal(signal.SIGTERM, _sig_handler)
@@ -286,4 +340,26 @@ def run_mcp_server(log_file: str | None = None) -> None:
     atexit.register(_on_exit)
 
     server = CorpusMCPServer()
-    server.run(transport="stdio")
+    try:
+        server.run(transport="stdio")
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("[SHUTDOWN] MCPServer exited via signal or exit request.")
+    finally:
+        try:
+            import asyncio
+
+            from rag_eval.legal.db.connection import close_db_pool
+
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    loop.create_task(close_db_pool())
+                else:
+                    loop.run_until_complete(close_db_pool())
+            except (RuntimeError, OSError) as exc:
+                logger.debug("Event loop not available for pool close: %s, running asyncio.run", exc)
+                asyncio.run(close_db_pool())
+        except (RuntimeError, OSError, ValueError) as exc:
+            logger.debug("Failed closing db pool on shutdown: %s", exc)
+        for h in list(logger.handlers) + list(logging.getLogger().handlers):
+            h.flush()

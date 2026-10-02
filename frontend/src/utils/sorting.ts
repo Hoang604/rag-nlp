@@ -47,8 +47,6 @@ export function parseSegment(seg: string): [string, number, number, string] {
   return [prefix, 1, 0, rest.toLowerCase()];
 }
 
-export const parseLegalSegment = parseSegment;
-
 export function naturalPathCompare(pathA: string, pathB: string): number {
   if (!pathA) return -1;
   if (!pathB) return 1;
@@ -79,5 +77,3 @@ export function naturalPathCompare(pathA: string, pathB: string): number {
 
   return partsA.length - partsB.length;
 }
-
-export const naturalLegalCompare = naturalPathCompare;

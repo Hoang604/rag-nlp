@@ -95,6 +95,34 @@ class ChunkRepository(BaseRepository):
         except (asyncpg.PostgresError, OSError, RuntimeError) as exc:
             raise self._translate_error("upsert_chunks_batch", exc) from exc
 
+    async def resolve_paths_batch(
+        self, paths: list[str], conn: asyncpg.Connection | None = None
+    ) -> dict[str, uuid.UUID]:
+        """Resolves multiple ltree paths to chunk UUIDs in a single query."""
+        if not paths:
+            return {}
+        query = "SELECT id, path::text FROM chunks WHERE path = ANY($1::ltree[]);"
+        try:
+            async with self._connection_scope(conn) as c:
+                rows = await c.fetch(query, paths)
+                return {str(r["path"]): uuid.UUID(str(r["id"])) for r in rows}
+        except (asyncpg.PostgresError, OSError, RuntimeError) as exc:
+            raise self._translate_error("resolve_paths_batch", exc) from exc
+
+    async def resolve_ids_batch(
+        self, chunk_ids: list[uuid.UUID], conn: asyncpg.Connection | None = None
+    ) -> dict[uuid.UUID, str]:
+        """Resolves multiple chunk UUIDs to their ltree paths in a single query."""
+        if not chunk_ids:
+            return {}
+        query = "SELECT id, path::text FROM chunks WHERE id = ANY($1::uuid[]);"
+        try:
+            async with self._connection_scope(conn) as c:
+                rows = await c.fetch(query, chunk_ids)
+                return {uuid.UUID(str(r["id"])): str(r["path"]) for r in rows}
+        except (asyncpg.PostgresError, OSError, RuntimeError) as exc:
+            raise self._translate_error("resolve_ids_batch", exc) from exc
+
     async def get_by_id(
         self, chunk_id: uuid.UUID, conn: asyncpg.Connection | None = None
     ) -> ChunkEntity | None:
@@ -214,13 +242,13 @@ class ChunkRepository(BaseRepository):
 
     async def verbatim_grep(
         self, query: VerbatimGrepQuery, conn: asyncpg.Connection | None = None
-    ) -> list[SearchHitDTO]:
-        """Executes exact / trigram grep search via verbatim_grep stored proc."""
+    ) -> tuple[list[SearchHitDTO], int]:
+        """Executes exact / trigram grep search via verbatim_grep stored proc returning hits and total count."""
         sql = """
         SELECT 
             chunk_id, doc_slug, doc_title, path, start_line, end_line,
             verbatim_text, contextualized_text, context_type, is_all_refs_resolved,
-            metadata, similarity_score
+            metadata, similarity_score, full_count
         FROM verbatim_grep(
             $1, $2::text[], $3::ltree, $4::boolean, $5::boolean, $6::boolean, $7::int
         );
@@ -237,7 +265,10 @@ class ChunkRepository(BaseRepository):
                     query.case_sensitive,
                     query.match_limit,
                 )
-                return [
+                if not rows:
+                    return [], 0
+                total_count = int(rows[0]["full_count"])
+                hits = [
                     SearchHitDTO(
                         chunk_id=uuid.UUID(str(r["chunk_id"])),
                         doc_slug=str(r["doc_slug"]),
@@ -257,6 +288,7 @@ class ChunkRepository(BaseRepository):
                     )
                     for r in rows
                 ]
+                return hits, total_count
         except (asyncpg.PostgresError, OSError, RuntimeError) as exc:
             raise self._translate_error("verbatim_grep", exc) from exc
 
@@ -303,7 +335,7 @@ class ChunkRepository(BaseRepository):
               AND c.path <@ $2::ltree
               AND c.path != $2::ltree
               AND nlevel(c.path) = nlevel($2::ltree) + 1
-            ORDER BY c.path ASC;
+            ORDER BY c.start_line ASC, c.path ASC;
             """
         elif dir_val == "PARENT_CHAIN":
             query = """
@@ -326,7 +358,7 @@ class ChunkRepository(BaseRepository):
               AND subpath(c.path, 0, nlevel(c.path) - 1) = subpath($2::ltree, 0, nlevel($2::ltree) - 1)
               AND nlevel(c.path) = nlevel($2::ltree)
               AND c.path != $2::ltree
-            ORDER BY c.path ASC;
+            ORDER BY c.start_line ASC, c.path ASC;
             """
         else:
             raise ValueError(f"Unsupported navigation direction: '{direction}'")

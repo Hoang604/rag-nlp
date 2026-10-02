@@ -32,7 +32,7 @@ export const PromotionModal: React.FC<PromotionModalProps> = ({
         reviewer_notes: reviewerNotes.trim() || undefined,
         compute_embeddings: computeEmbeddings,
       });
-      if (res && res.status === 'SUCCESS') {
+      if (res && (res.status === 'SUCCESS' || (res.status as string) === 'PROMOTED')) {
         setResult(res);
       }
     } catch (err) {

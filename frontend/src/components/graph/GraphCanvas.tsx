@@ -154,10 +154,10 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
             <Info className="h-6 w-6" />
           </div>
           <h4 className="text-sm font-bold text-slate-200">
-            Chưa Có Cạnh Đồ Thị Quan Hệ Pháp Lý
+            Chưa Có Cạnh Đồ Thị Quan Hệ
           </h4>
           <p className="mt-1.5 text-xs text-slate-400 leading-relaxed">
-            Văn bản này chưa có các liên kết dẫn chiếu, xử phạt, bãi bỏ hoặc quy chuẩn. Bạn có thể bấm nút &ldquo;Thêm Quan Hệ Mới&rdquo; để nối 2 điều khoản lại với nhau.
+            Văn bản này chưa có các liên kết dẫn chiếu, bổ trợ hoặc quy chuẩn. Bạn có thể bấm nút &ldquo;Thêm Quan Hệ Mới&rdquo; để nối 2 chunks lại với nhau.
           </p>
         </div>
       </div>
@@ -234,28 +234,6 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
       >
         <defs>
           <marker
-            id="arrow-MODIFIES_AND_REPLACES"
-            viewBox="0 0 10 10"
-            refX="9"
-            refY="5"
-            markerWidth="6"
-            markerHeight="6"
-            orient="auto-start-reverse"
-          >
-            <path d="M 0 1 L 10 5 L 0 9 z" fill="#a855f7" />
-          </marker>
-          <marker
-            id="arrow-SANCTIONS"
-            viewBox="0 0 10 10"
-            refX="9"
-            refY="5"
-            markerWidth="6"
-            markerHeight="6"
-            orient="auto-start-reverse"
-          >
-            <path d="M 0 1 L 10 5 L 0 9 z" fill="#f59e0b" />
-          </marker>
-          <marker
             id="arrow-REFERENCES"
             viewBox="0 0 10 10"
             refX="9"
@@ -267,7 +245,18 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
             <path d="M 0 1 L 10 5 L 0 9 z" fill="#38bdf8" />
           </marker>
           <marker
-            id="arrow-OVERRIDES"
+            id="arrow-SUPPORTS"
+            viewBox="0 0 10 10"
+            refX="9"
+            refY="5"
+            markerWidth="6"
+            markerHeight="6"
+            orient="auto-start-reverse"
+          >
+            <path d="M 0 1 L 10 5 L 0 9 z" fill="#10b981" />
+          </marker>
+          <marker
+            id="arrow-CONTRADICTS"
             viewBox="0 0 10 10"
             refX="9"
             refY="5"
@@ -278,7 +267,7 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
             <path d="M 0 1 L 10 5 L 0 9 z" fill="#f43f5e" />
           </marker>
           <marker
-            id="arrow-EXEMPTS"
+            id="arrow-DEFINES"
             viewBox="0 0 10 10"
             refX="9"
             refY="5"
@@ -286,7 +275,62 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
             markerHeight="6"
             orient="auto-start-reverse"
           >
-            <path d="M 0 1 L 10 5 L 0 9 z" fill="#10b981" />
+            <path d="M 0 1 L 10 5 L 0 9 z" fill="#a855f7" />
+          </marker>
+          <marker
+            id="arrow-EXTENDS"
+            viewBox="0 0 10 10"
+            refX="9"
+            refY="5"
+            markerWidth="6"
+            markerHeight="6"
+            orient="auto-start-reverse"
+          >
+            <path d="M 0 1 L 10 5 L 0 9 z" fill="#6366f1" />
+          </marker>
+          <marker
+            id="arrow-EXEMPLIFIES"
+            viewBox="0 0 10 10"
+            refX="9"
+            refY="5"
+            markerWidth="6"
+            markerHeight="6"
+            orient="auto-start-reverse"
+          >
+            <path d="M 0 1 L 10 5 L 0 9 z" fill="#f59e0b" />
+          </marker>
+          <marker
+            id="arrow-DEPENDS_ON"
+            viewBox="0 0 10 10"
+            refX="9"
+            refY="5"
+            markerWidth="6"
+            markerHeight="6"
+            orient="auto-start-reverse"
+          >
+            <path d="M 0 1 L 10 5 L 0 9 z" fill="#06b6d4" />
+          </marker>
+          <marker
+            id="arrow-SUPERSEDES"
+            viewBox="0 0 10 10"
+            refX="9"
+            refY="5"
+            markerWidth="6"
+            markerHeight="6"
+            orient="auto-start-reverse"
+          >
+            <path d="M 0 1 L 10 5 L 0 9 z" fill="#ef4444" />
+          </marker>
+          <marker
+            id="arrow-SEE_ALSO"
+            viewBox="0 0 10 10"
+            refX="9"
+            refY="5"
+            markerWidth="6"
+            markerHeight="6"
+            orient="auto-start-reverse"
+          >
+            <path d="M 0 1 L 10 5 L 0 9 z" fill="#64748b" />
           </marker>
           <marker
             id="arrow-DEFAULT"
@@ -330,21 +374,33 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
 
           let strokeColor = '#64748b';
           let markerId = 'arrow-DEFAULT';
-          if (edge.relation_type === 'MODIFIES_AND_REPLACES') {
-            strokeColor = '#a855f7';
-            markerId = 'arrow-MODIFIES_AND_REPLACES';
-          } else if (edge.relation_type === 'SANCTIONS' || edge.relation_type === 'HAS_ADDITIONAL_SANCTION') {
-            strokeColor = '#f59e0b';
-            markerId = 'arrow-SANCTIONS';
-          } else if (edge.relation_type.startsWith('REFERENCES')) {
+          if (edge.relation_type === 'REFERENCES') {
             strokeColor = '#38bdf8';
             markerId = 'arrow-REFERENCES';
-          } else if (edge.relation_type === 'OVERRIDES') {
-            strokeColor = '#f43f5e';
-            markerId = 'arrow-OVERRIDES';
-          } else if (edge.relation_type === 'EXEMPTS') {
+          } else if (edge.relation_type === 'SUPPORTS') {
             strokeColor = '#10b981';
-            markerId = 'arrow-EXEMPTS';
+            markerId = 'arrow-SUPPORTS';
+          } else if (edge.relation_type === 'CONTRADICTS') {
+            strokeColor = '#f43f5e';
+            markerId = 'arrow-CONTRADICTS';
+          } else if (edge.relation_type === 'DEFINES') {
+            strokeColor = '#a855f7';
+            markerId = 'arrow-DEFINES';
+          } else if (edge.relation_type === 'EXTENDS') {
+            strokeColor = '#6366f1';
+            markerId = 'arrow-EXTENDS';
+          } else if (edge.relation_type === 'EXEMPLIFIES') {
+            strokeColor = '#f59e0b';
+            markerId = 'arrow-EXEMPLIFIES';
+          } else if (edge.relation_type === 'DEPENDS_ON') {
+            strokeColor = '#06b6d4';
+            markerId = 'arrow-DEPENDS_ON';
+          } else if (edge.relation_type === 'SUPERSEDES') {
+            strokeColor = '#ef4444';
+            markerId = 'arrow-SUPERSEDES';
+          } else if (edge.relation_type === 'SEE_ALSO') {
+            strokeColor = '#64748b';
+            markerId = 'arrow-SEE_ALSO';
           }
 
           return (
@@ -371,7 +427,7 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
                 fill="none"
                 stroke={strokeColor}
                 strokeWidth={isSelected || isConnectedToHover ? '3.5' : '2'}
-                strokeDasharray={edge.target_external_ref ? '4 3' : 'none'}
+                strokeDasharray="none"
                 markerEnd={`url(#${markerId})`}
                 className="transition-all duration-150 group-hover:stroke-white opacity-85 group-hover:opacity-100"
               />
@@ -484,18 +540,9 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
             <div>
               <span className="text-[11px] text-slate-400">Nút đích (Target):</span>
               <div className="font-mono text-slate-100 bg-slate-950 p-1.5 rounded border border-slate-800 mt-0.5">
-                {selectedEdge.target_path || selectedEdge.target_external_ref || 'Ngoại vi'}
+                {selectedEdge.target_path}
               </div>
             </div>
-
-            {selectedEdge.citation_text && (
-              <div>
-                <span className="text-[11px] text-slate-400">Căn cứ trích dẫn:</span>
-                <div className="italic text-slate-300 bg-slate-950/80 p-2 rounded border border-slate-800 mt-0.5">
-                  &ldquo;{selectedEdge.citation_text}&rdquo;
-                </div>
-              </div>
-            )}
           </div>
 
           <div className="mt-4 flex items-center justify-end gap-2 pt-3 border-t border-slate-800">

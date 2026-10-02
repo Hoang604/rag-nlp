@@ -84,7 +84,12 @@ def create_app(
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=[
+            "http://127.0.0.1:5173",
+            "http://localhost:5173",
+            "http://127.0.0.1:8000",
+            "http://localhost:8000",
+        ],
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -121,17 +126,29 @@ def create_app(
     target_static = Path(static_dir) if static_dir else Path("frontend/dist")
     if target_static.exists() and target_static.is_dir():
         logger.info("Mounting SPA static files from %s", target_static)
-        app.mount(
-            "/assets", StaticFiles(directory=target_static / "assets"), name="assets"
-        )
+        assets_dir = target_static / "assets"
+        if assets_dir.exists() and assets_dir.is_dir():
+            app.mount(
+                "/assets", StaticFiles(directory=assets_dir), name="assets"
+            )
 
         @app.get("/{full_path:path}")
         async def serve_spa(full_path: str) -> Response:
             if full_path == "api" or full_path.startswith("api/"):
                 return JSONResponse(status_code=404, content={"detail": "Not Found"})
-            file_path = target_static / full_path
+            resolved_static = target_static.resolve()
+            file_path = (target_static / full_path).resolve()
+            if not file_path.is_relative_to(resolved_static):
+                return JSONResponse(
+                    status_code=403,
+                    content={"detail": "Forbidden: Path traversal detected"},
+                )
             if file_path.is_file():
                 return FileResponse(file_path)
+            if Path(full_path).suffix:
+                return JSONResponse(
+                    status_code=404, content={"detail": "Asset not found"}
+                )
             index_path = target_static / "index.html"
             if index_path.exists():
                 return FileResponse(index_path)

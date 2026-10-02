@@ -13,7 +13,6 @@ export interface DocumentTreeNode {
   node_type: NodeType | string;
   verbatim_text: string;
   contextualized_text: string;
-  lead_sentence: string;
   start_line: number;
   end_line: number;
   metadata: Record<string, unknown>;

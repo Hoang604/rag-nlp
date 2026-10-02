@@ -22,7 +22,7 @@ const EXAMPLE_QUERIES = [
   'Quy định về thời hạn thẩm định văn bản',
   'Nguyên tắc xử lý và chế tài áp dụng',
   'Thẩm quyền ban hành và ký quyết định',
-  'Trách nhiệm thi hành và điều khoản chuyển tiếp',
+  'Trách nhiệm thi hành và hiệu lực thi hành',
 ];
 
 export const DryRunSearchSimulator: React.FC<DryRunSearchSimulatorProps> = ({
@@ -95,7 +95,7 @@ export const DryRunSearchSimulator: React.FC<DryRunSearchSimulatorProps> = ({
     },
     low: {
       title: 'Độ tương đồng thấp',
-      body: 'Không có điều khoản nào thực sự gần với câu hỏi. Hãy đọc kỹ trước khi sử dụng — kết quả có thể không liên quan.',
+      body: 'Không có mục nào thực sự gần với câu hỏi. Hãy đọc kỹ trước khi sử dụng — kết quả có thể không liên quan.',
       tone: 'border-amber-900 bg-amber-950/40 text-amber-200',
     },
   };
@@ -351,7 +351,7 @@ export const DryRunSearchSimulator: React.FC<DryRunSearchSimulatorProps> = ({
                     {editable && (
                       <button
                         type="button"
-                        title="Chỉnh sửa điều khoản này"
+                        title="Chỉnh sửa mục này"
                         onClick={() =>
                           onEditChunk({
                             path: hit.path,
@@ -359,7 +359,6 @@ export const DryRunSearchSimulator: React.FC<DryRunSearchSimulatorProps> = ({
                             node_type: 'NODE',
                             verbatim_text: hit.verbatim_text,
                             contextualized_text: hit.contextualized_text,
-                            lead_sentence: '',
                             start_line: 1,
                             end_line: 1,
                             metadata: {},

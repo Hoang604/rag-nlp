@@ -38,10 +38,6 @@ from rag_eval.legal.mcp.tools import (
     VerbatimGrepResult,
 )
 
-_EMPTY_STR_LIST: list[str] = []
-_EMPTY_CHUNK_DELTAS: list[StagingChunkDelta] = []
-_EMPTY_METADATA_DICT: dict[str, object] = {}
-
 
 def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
     """Registers all 18 canonical Agent-First corpus tools onto the MCPServer instance."""
@@ -72,11 +68,12 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
             ),
         ] = 10,
         doc_slugs: Annotated[
-            list[str],
+            list[str] | None,
             Field(
-                description="Giới hạn phạm vi tìm kiếm theo danh sách doc_slug. Để danh sách rỗng để tìm trên toàn bộ kho.",
+                default=None,
+                description="Giới hạn phạm vi tìm kiếm theo danh sách doc_slug. Để None để tìm trên toàn bộ kho.",
             ),
-        ] = _EMPTY_STR_LIST,
+        ] = None,
         rerank: Annotated[
             bool,
             Field(
@@ -146,18 +143,19 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
     )
     async def hierarchical_navigate(
         path: Annotated[
-            str,
+            str | None,
             Field(
-                description="Đường dẫn cây phân cấp ltree của nút mục tiêu. Cung cấp 'path' hoặc truyền chuỗi rỗng kèm 'chunk_id'.",
+                default=None,
+                description="Đường dẫn cây phân cấp ltree của nút mục tiêu. Cung cấp 'path' hoặc 'chunk_id'.",
             ),
-        ],
+        ] = None,
         chunk_id: Annotated[
-            str,
+            str | None,
             Field(
-                default="",
+                default=None,
                 description="Mã định danh UUID tùy chọn của chunk cần điều hướng mở rộng (dùng khi không có path).",
             ),
-        ] = "",
+        ] = None,
         direction: Annotated[
             HierarchicalDirection,
             Field(
@@ -199,11 +197,19 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
                 description="Độ sâu bước nhảy tối đa trên đồ thị quan hệ.",
             ),
         ] = 2,
+        filter_relations: Annotated[
+            list[str] | None,
+            Field(
+                default=None,
+                description="Danh sách các mã quan hệ cần lọc (REFERENCES, AMENDS, v.v.). Để None để duyệt tất cả.",
+            ),
+        ] = None,
     ) -> GraphTraverseResult:
         return await tool_impl.graph_traverse(
             source_path=source_path,
             direction=direction,
             max_depth=max_depth,
+            filter_relations=filter_relations,
         )
 
     @server.tool(
@@ -370,17 +376,19 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
             ),
         ],
         updated_chunks: Annotated[
-            list[StagingChunkDelta],
+            list[StagingChunkDelta] | None,
             Field(
+                default=None,
                 description="Danh sách các bản vá hoặc tạo mới chunk chi tiết theo StagingChunkDelta.",
             ),
-        ] = _EMPTY_CHUNK_DELTAS,
+        ] = None,
         removed_paths: Annotated[
-            list[str],
+            list[str] | None,
             Field(
+                default=None,
                 description="Danh sách các đường dẫn ltree của các chunk cần xóa khỏi phiên làm việc.",
             ),
-        ] = _EMPTY_STR_LIST,
+        ] = None,
         cascade_breadcrumbs: Annotated[
             bool,
             Field(
@@ -621,20 +629,13 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
                 description="Đường dẫn ltree của chunk đích nội bộ cần xóa.",
             ),
         ] = None,
-        target_external_ref: Annotated[
-            str | None,
+        relation_type: Annotated[
+            RelationTypeFilter | None,
             Field(
                 default=None,
-                description="Chuỗi viện dẫn tài liệu bên ngoài nếu là quan hệ ngoại biên.",
+                description="Loại quan hệ cần xóa. Nếu để trống/None, sẽ xóa cạnh khớp nguồn và đích bất kể loại quan hệ.",
             ),
         ] = None,
-        relation_type: Annotated[
-            RelationTypeFilter,
-            Field(
-                default="",
-                description="Loại quan hệ cần xóa. Nếu để trống, sẽ xóa cạnh khớp nguồn và đích bất kể loại quan hệ.",
-            ),
-        ] = "",
         clear_all_targets: Annotated[
             bool,
             Field(
@@ -654,7 +655,6 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
             doc_slug=doc_slug,
             source_path=source_path,
             target_path=target_path,
-            target_external_ref=target_external_ref,
             relation_type=relation_type or None,
             clear_all_targets=clear_all_targets,
             edges=edges,

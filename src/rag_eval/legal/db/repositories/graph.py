@@ -58,10 +58,10 @@ class GraphRepository(BaseRepository):
         self,
         edges: list[GraphEdgeEntity],
         conn: asyncpg.Connection | None = None,
-    ) -> int:
-        """Upserts graph edges after validating relation codes against DB catalog."""
+    ) -> dict[tuple[uuid.UUID, uuid.UUID, str], uuid.UUID]:
+        """Upserts graph edges, returning a mapping of (source, target, relation) to authoritative database edge UUID."""
         if not edges:
-            return 0
+            return {}
 
         valid_codes = await self.get_valid_relation_codes(conn)
         for e in edges:
@@ -73,20 +73,30 @@ class GraphRepository(BaseRepository):
         query = """
         INSERT INTO graph_edges (
             id, source_chunk_id, target_chunk_id, relation_type
-        ) VALUES (
-            $1, $2, $3, $4
         )
-        ON CONFLICT (source_chunk_id, target_chunk_id, relation_type) DO NOTHING;
+        SELECT r.id, r.source_chunk_id, r.target_chunk_id, r.relation_type
+        FROM unnest($1::uuid[], $2::uuid[], $3::uuid[], $4::varchar(32)[]) 
+            AS r(id, source_chunk_id, target_chunk_id, relation_type)
+        ON CONFLICT (source_chunk_id, target_chunk_id, relation_type) 
+        DO UPDATE SET relation_type = EXCLUDED.relation_type
+        RETURNING id, source_chunk_id, target_chunk_id, relation_type;
         """
-        records: list[GraphEdgeInsertTuple] = [
-            (e.id, e.source_chunk_id, e.target_chunk_id, e.relation_type)
-            for e in edges
-        ]
+        edge_ids = [e.id for e in edges]
+        source_ids = [e.source_chunk_id for e in edges]
+        target_ids = [e.target_chunk_id for e in edges]
+        relations = [e.relation_type for e in edges]
 
         try:
             async with self._connection_scope(conn) as c:
-                await c.executemany(query, records)
-                return len(records)
+                rows = await c.fetch(query, edge_ids, source_ids, target_ids, relations)
+                return {
+                    (
+                        uuid.UUID(str(r["source_chunk_id"])),
+                        uuid.UUID(str(r["target_chunk_id"])),
+                        str(r["relation_type"]),
+                    ): uuid.UUID(str(r["id"]))
+                    for r in rows
+                }
         except (asyncpg.PostgresError, OSError, RuntimeError) as exc:
             raise self._translate_error("upsert_edges", exc) from exc
 

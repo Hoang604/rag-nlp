@@ -43,9 +43,9 @@ export const NodeInspectorPanel: React.FC<NodeInspectorPanelProps> = ({
     return (
       <div className="flex h-full w-full flex-col items-center justify-center p-6 text-center text-xs text-slate-500 border-l border-slate-800 bg-slate-950">
         <Sliders className="h-8 w-8 text-slate-600 mb-2" />
-        <p className="font-semibold text-slate-400">Chưa chọn điều khoản</p>
+        <p className="font-semibold text-slate-400">Chưa chọn chunk</p>
         <p className="mt-1 text-[11px]">
-          Bấm vào bất kỳ điều khoản nào ở danh sách hoặc toàn văn để xem chi tiết
+          Bấm vào bất kỳ chunk nào ở danh sách hoặc toàn văn để xem chi tiết
         </p>
       </div>
     );
@@ -71,7 +71,7 @@ export const NodeInspectorPanel: React.FC<NodeInspectorPanelProps> = ({
         <div className="flex items-center gap-2">
           <Sliders className="h-4 w-4 text-brand-400" />
           <span className="text-xs font-bold uppercase tracking-wider text-slate-200">
-            Inspector Điều Khoản
+            Inspector Chunk
           </span>
         </div>
 
@@ -152,7 +152,7 @@ export const NodeInspectorPanel: React.FC<NodeInspectorPanelProps> = ({
             className="flex-1 flex items-center justify-center gap-1.5 rounded-lg bg-brand-600 px-3 py-2 text-xs font-semibold text-white shadow hover:bg-brand-500 transition"
           >
             <Edit3 className="h-3.5 w-3.5" />
-            <span>Sửa Điều Khoản</span>
+            <span>Sửa Chunk</span>
           </button>
           <button
             type="button"
@@ -246,7 +246,7 @@ export const NodeInspectorPanel: React.FC<NodeInspectorPanelProps> = ({
             <div className="flex items-center gap-1.5">
               <Share2 className="h-3.5 w-3.5 text-blue-400" />
               <span className="text-[11px] font-semibold text-slate-300 uppercase tracking-wider">
-                Quan Hệ Pháp Lý ({relatedEdges.length})
+                Quan Hệ Đồ Thị ({relatedEdges.length})
               </span>
             </div>
             {onOpenAddEdge && (
@@ -263,7 +263,7 @@ export const NodeInspectorPanel: React.FC<NodeInspectorPanelProps> = ({
 
           {relatedEdges.length === 0 ? (
             <div className="rounded-lg bg-slate-900/40 p-3 text-center text-[11px] text-slate-500 border border-slate-800/80">
-              Chưa có liên kết dẫn chiếu hoặc xử phạt nào gắn với điều khoản này.
+              Chưa có liên kết dẫn chiếu hoặc quan hệ nào gắn với chunk này.
             </div>
           ) : (
             <div className="space-y-2">
@@ -283,15 +283,9 @@ export const NodeInspectorPanel: React.FC<NodeInspectorPanelProps> = ({
 
                   <div className="font-mono text-[11px] text-slate-200 truncate">
                     {e.source_path === selectedNode.path
-                      ? `&rarr; ${e.target_path || e.target_external_ref}`
+                      ? `&rarr; ${e.target_path}`
                       : `&larr; ${e.source_path}`}
                   </div>
-
-                  {e.citation_text && (
-                    <p className="text-[10px] text-slate-400 italic">
-                      &ldquo;{e.citation_text}&rdquo;
-                    </p>
-                  )}
                 </div>
               ))}
             </div>

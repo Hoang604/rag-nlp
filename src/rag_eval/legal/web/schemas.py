@@ -113,7 +113,6 @@ class DocumentTreeNodeResponse(BaseModel):
     )
     verbatim_text: str = Field("", description="Raw verbatim text")
     contextualized_text: str = Field("", description="Synthesized contextual text")
-    lead_sentence: str = Field("", description="Stem / lead sentence")
     start_line: int = Field(default=1, ge=1, description="1-indexed starting line in raw text")
     end_line: int = Field(default=1, ge=1, description="1-indexed ending line in raw text")
     metadata: dict[str, object] = Field(
@@ -172,9 +171,6 @@ class ChunkPatchItem(BaseModel):
     contextualized_text: str | None = Field(
         None, description="Synthesized contextual text (optional for deltas)"
     )
-    lead_sentence: str | None = Field(
-        None, description="Lead sentence (optional for deltas)"
-    )
     start_line: int | None = Field(
         None, ge=1, description="Optional updated starting line number"
     )
@@ -220,17 +216,8 @@ class CreateEdgeRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     source_path: str = Field(..., description="Source chunk ltree path")
-    target_path: str | None = Field(None, description="Target chunk ltree path")
-    target_external_ref: str | None = Field(
-        None, description="External citation text if uningested"
-    )
+    target_path: str = Field(..., description="Target chunk ltree path")
     relation_type: str = Field(..., description="Relation type enum string")
-    citation_text: str | None = Field(
-        None, description="Verbatim citation phrase"
-    )
-    metadata: dict[str, object] = Field(
-        default_factory=dict, description="Dynamic edge metadata"
-    )
 
 
 class DeleteEdgeRequest(BaseModel):
@@ -240,7 +227,6 @@ class DeleteEdgeRequest(BaseModel):
 
     source_path: str = Field(..., description="Source chunk ltree path")
     target_path: str | None = Field(None, description="Target chunk ltree path")
-    target_external_ref: str | None = Field(None, description="External citation text")
     relation_type: str | None = Field(None, description="Relation type enum string")
     clear_all_targets: bool = Field(
         default=False,
@@ -254,15 +240,8 @@ class StagingEdgeResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     source_path: str = Field(..., description="Source chunk ltree path")
-    target_path: str | None = Field(None, description="Target chunk ltree path")
-    target_external_ref: str | None = Field(None, description="External citation text")
+    target_path: str = Field(..., description="Target chunk ltree path")
     relation_type: str = Field(..., description="Relation type enum string")
-    citation_text: str | None = Field(
-        None, description="Verbatim citation phrase"
-    )
-    metadata: dict[str, object] = Field(
-        default_factory=dict, description="Dynamic edge metadata"
-    )
 
 
 class StatusTransitionRequest(BaseModel):

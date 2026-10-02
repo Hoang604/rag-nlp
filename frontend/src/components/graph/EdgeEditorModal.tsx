@@ -19,23 +19,22 @@ export const EdgeEditorModal: React.FC<EdgeEditorModalProps> = ({
 }) => {
   const [sourcePath, setSourcePath] = useState(initialSourcePath || defaultSourcePath);
   const [targetPath, setTargetPath] = useState('');
-  const [targetExternalRef, setTargetExternalRef] = useState('');
   const [relationType, setRelationType] = useState('REFERENCES');
-  const [citationText, setCitationText] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
   const relationTypes = [
-    { key: 'MODIFIES_AND_REPLACES', label: 'Sửa đổi & Thay thế (MODIFIES_AND_REPLACES)' },
-    { key: 'SANCTIONS', label: 'Xử phạt (SANCTIONS)' },
-    { key: 'HAS_ADDITIONAL_SANCTION', label: 'Phạt bổ sung (HAS_ADDITIONAL_SANCTION)' },
-    { key: 'REFERENCES', label: 'Dẫn chiếu pháp luật (REFERENCES)' },
-    { key: 'REFERENCES_TECHNICAL_STANDARD', label: 'Dẫn chiếu Quy chuẩn kỹ thuật (QCVN)' },
-    { key: 'OVERRIDES', label: 'Ghi đè ưu tiên (OVERRIDES)' },
-    { key: 'EXEMPTS', label: 'Miễn trừ / Đặc cách (EXEMPTS)' },
-    { key: 'GUIDES', label: 'Hướng dẫn thi hành (GUIDES)' },
+    { key: 'REFERENCES', label: 'Tham chiếu / Dẫn nguồn (REFERENCES)' },
+    { key: 'SUPPORTS', label: 'Bổ trợ / Củng cố luận điểm (SUPPORTS)' },
+    { key: 'CONTRADICTS', label: 'Mâu thuẫn / Phản bác (CONTRADICTS)' },
+    { key: 'DEFINES', label: 'Định nghĩa / Khái niệm (DEFINES)' },
+    { key: 'EXTENDS', label: 'Mở rộng / Phát triển thêm (EXTENDS)' },
+    { key: 'EXEMPLIFIES', label: 'Ví dụ minh họa (EXEMPLIFIES)' },
+    { key: 'DEPENDS_ON', label: 'Phụ thuộc điều kiện (DEPENDS_ON)' },
+    { key: 'SUPERSEDES', label: 'Thay thế / Bãi bỏ (SUPERSEDES)' },
+    { key: 'SEE_ALSO', label: 'Tham khảo thêm (SEE_ALSO)' },
   ];
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -44,8 +43,8 @@ export const EdgeEditorModal: React.FC<EdgeEditorModalProps> = ({
       setError('Vui lòng nhập source_path.');
       return;
     }
-    if (!targetPath.trim() && !targetExternalRef.trim()) {
-      setError('Vui lòng nhập target_path nội bộ hoặc trích dẫn target_external_ref.');
+    if (!targetPath.trim()) {
+      setError('Vui lòng nhập target_path nội bộ.');
       return;
     }
 
@@ -54,11 +53,8 @@ export const EdgeEditorModal: React.FC<EdgeEditorModalProps> = ({
     try {
       const payload: CreateEdgePayload = {
         source_path: sourcePath.trim(),
-        target_path: targetPath.trim() || null,
-        target_external_ref: targetExternalRef.trim() || null,
+        target_path: targetPath.trim(),
         relation_type: relationType,
-        citation_text: citationText.trim() || null,
-        metadata: {},
       };
       const ok = await onAddEdge(payload);
       if (ok) {
@@ -129,7 +125,7 @@ export const EdgeEditorModal: React.FC<EdgeEditorModalProps> = ({
 
           <div>
             <label className="block text-xs font-semibold text-slate-300 mb-1">
-              Đường Dẫn Đích Nội Bộ (Target Path)
+              Đường Dẫn Đích Nội Bộ (Target Path) <span className="text-rose-400">*</span>
             </label>
             <input
               type="text"
@@ -137,32 +133,7 @@ export const EdgeEditorModal: React.FC<EdgeEditorModalProps> = ({
               onChange={(e) => setTargetPath(e.target.value)}
               placeholder="ví dụ: 100_2019_nd_cp.c_ii.a_5.c_1.p_a hoặc doc_qcvn_41.p_127"
               className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-xs font-mono text-slate-100 focus:border-blue-500 focus:outline-none"
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-semibold text-slate-300 mb-1">
-              Trích Dẫn Ngoại Bộ (Target External Ref - nếu chưa ingest)
-            </label>
-            <input
-              type="text"
-              value={targetExternalRef}
-              onChange={(e) => setTargetExternalRef(e.target.value)}
-              placeholder="ví dụ: Quy chuẩn QCVN 41:2019/BGTVT"
-              className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-100 focus:border-blue-500 focus:outline-none"
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-semibold text-slate-300 mb-1">
-              Nguyên Văn Cụm Dẫn Chiếu (Citation Text)
-            </label>
-            <input
-              type="text"
-              value={citationText}
-              onChange={(e) => setCitationText(e.target.value)}
-              placeholder="ví dụ: theo quy định tại Điểm a Khoản 1 Điều này"
-              className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-100 focus:border-blue-500 focus:outline-none"
+              required
             />
           </div>
 

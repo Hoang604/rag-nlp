@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import uuid
 from typing import Final
 
@@ -9,6 +10,10 @@ import asyncpg
 from sentence_transformers import SentenceTransformer
 
 from rag_eval.legal.db.repositories import CorpusRepository
+from rag_eval.legal.exceptions import (
+    E_CORPUS_INTEGRITY_VIOLATION,
+    CorpusDomainError,
+)
 from rag_eval.legal.schemas import (
     ChunkEntity,
     DocumentEntity,
@@ -18,6 +23,7 @@ from rag_eval.legal.schemas import (
 logger = logging.getLogger(__name__)
 
 _embedding_model_cache: dict[str, SentenceTransformer] = {}
+_embedding_load_lock: threading.Lock = threading.Lock()
 
 DEFAULT_EMBEDDING_MODEL: Final[str] = "Qwen/Qwen3-Embedding-0.6B"
 DEFAULT_EMBEDDING_DIM: Final[int] = 512
@@ -29,8 +35,9 @@ def get_embedding_model(
 ) -> SentenceTransformer | None:
     """Loads and caches the SentenceTransformer embedding model with GPU acceleration."""
     cache_key = f"{model_name}:{truncate_dim}"
-    if cache_key in _embedding_model_cache:
-        return _embedding_model_cache[cache_key]
+    with _embedding_load_lock:
+        if cache_key in _embedding_model_cache:
+            return _embedding_model_cache[cache_key]
 
     try:
         import torch
@@ -79,14 +86,18 @@ def compute_chunk_embeddings(
     batch_size: int = 128,
     is_query: bool = False,
     truncate_dim: int = DEFAULT_EMBEDDING_DIM,
-) -> list[list[float] | None]:
+) -> list[list[float]]:
     """Generates dense vector embeddings using sentence-transformers with GPU FP16 and inference_mode support."""
     if not texts:
         return []
 
     model = get_embedding_model(model_name, truncate_dim=truncate_dim)
     if model is None:
-        return [None] * len(texts)
+        raise CorpusDomainError(
+            error_code=E_CORPUS_INTEGRITY_VIOLATION,
+            message=f"Neural embedding model '{model_name}' could not be loaded or initialized.",
+            data={"model_name": model_name},
+        )
 
     try:
         if "e5" in model_name.lower():
@@ -118,9 +129,13 @@ def compute_chunk_embeddings(
                 convert_to_numpy=True,
             )
         return [emb.tolist() for emb in embeddings]
-    except (RuntimeError, ValueError, TypeError) as exc:
-        logger.debug("Embedding generation fallback to None: %s", exc)
-        return [None] * len(texts)
+    except Exception as exc:
+        logger.error("Embedding generation failed: %s", exc)
+        raise CorpusDomainError(
+            error_code=E_CORPUS_INTEGRITY_VIOLATION,
+            message=f"Neural embedding generation failed: {exc}",
+            data={"model_name": model_name, "error": str(exc)},
+        ) from exc
 
 
 def _clean_metadata(metadata: object) -> dict[str, object]:
@@ -182,18 +197,21 @@ class PostgresBulkLoader:
         embed_indices: list[int] = []
 
         for idx, chunk in enumerate(chunks):
-            cached = existing_cache.get(chunk.path)
-            if (
-                cached is not None
-                and cached[0] == chunk.contextualized_text
-                and cached[1] is not None
-            ):
-                embeddings[idx] = cached[1]
-            elif self.compute_embeddings:
-                texts_to_embed.append(chunk.contextualized_text)
-                embed_indices.append(idx)
-            else:
+            if chunk.embedding is not None:
                 embeddings[idx] = chunk.embedding
+            else:
+                cached = existing_cache.get(chunk.path)
+                if (
+                    cached is not None
+                    and cached[0] == chunk.contextualized_text
+                    and cached[1] is not None
+                ):
+                    embeddings[idx] = cached[1]
+                elif self.compute_embeddings:
+                    texts_to_embed.append(chunk.contextualized_text)
+                    embed_indices.append(idx)
+                else:
+                    embeddings[idx] = chunk.embedding
 
         if self.compute_embeddings and texts_to_embed:
             computed = compute_chunk_embeddings(
@@ -233,23 +251,18 @@ class PostgresBulkLoader:
 
         return await self.corpus_repo.chunks.upsert_batch(chunk_entities, conn=conn)
 
-    async def resolve_chunk_paths(self, paths: list[str]) -> dict[str, uuid.UUID]:
+    async def resolve_chunk_paths(
+        self, paths: list[str], conn: asyncpg.Connection | None = None
+    ) -> dict[str, uuid.UUID]:
         """Resolves existing chunk UUIDs by ltree paths via ChunkRepository."""
-        if not paths:
-            return {}
-        result: dict[str, uuid.UUID] = {}
-        for p in paths:
-            chunk = await self.corpus_repo.chunks.get_by_path(p)
-            if chunk:
-                result[p] = chunk.id
-        return result
+        return await self.corpus_repo.chunks.resolve_paths_batch(paths, conn=conn)
 
     async def load_graph_edges(
         self, edges: list[GraphEdgeEntity], conn: asyncpg.Connection | None = None
-    ) -> int:
+    ) -> dict[tuple[uuid.UUID, uuid.UUID, str], uuid.UUID]:
         """Upserts graph edges via GraphRepository after validating against DB catalog."""
         if not edges:
-            return 0
+            return {}
 
         valid_edges: list[GraphEdgeEntity] = []
         for e in edges:

@@ -44,65 +44,77 @@ export function getRelationColor(relationType: string): {
   label: string;
 } {
   switch (relationType.toUpperCase()) {
-    case 'MODIFIES_AND_REPLACES':
-      return {
-        bg: 'bg-purple-950/40',
-        text: 'text-purple-300',
-        border: 'border-purple-700',
-        badge: 'bg-purple-900/60 text-purple-200 border-purple-600',
-        label: 'Sửa đổi & Thay thế',
-      };
-    case 'SANCTIONS':
-    case 'DEFINES_SANCTION_FOR':
-      return {
-        bg: 'bg-rose-950/40',
-        text: 'text-rose-300',
-        border: 'border-rose-700',
-        badge: 'bg-rose-900/60 text-rose-200 border-rose-600',
-        label: 'Xử phạt',
-      };
-    case 'HAS_ADDITIONAL_SANCTION':
-      return {
-        bg: 'bg-orange-950/40',
-        text: 'text-orange-300',
-        border: 'border-orange-700',
-        badge: 'bg-orange-900/60 text-orange-200 border-orange-600',
-        label: 'Hình thức phạt bổ sung',
-      };
     case 'REFERENCES':
-    case 'REFERENCES_TECHNICAL_STANDARD':
       return {
         bg: 'bg-blue-950/40',
         text: 'text-blue-300',
         border: 'border-blue-700',
         badge: 'bg-blue-900/60 text-blue-200 border-blue-600',
-        label: 'Dẫn chiếu Quy chuẩn / Văn bản',
+        label: 'Tham chiếu / Dẫn nguồn (REFERENCES)',
       };
-    case 'OVERRIDES':
-    case 'OVERRIDES_PRIORITY':
+    case 'SUPPORTS':
       return {
         bg: 'bg-emerald-950/40',
         text: 'text-emerald-300',
         border: 'border-emerald-700',
         badge: 'bg-emerald-900/60 text-emerald-200 border-emerald-600',
-        label: 'Ghi đè Thứ bậc Ưu tiên',
+        label: 'Bổ trợ / Củng cố luận điểm (SUPPORTS)',
       };
-    case 'EXEMPTS':
-    case 'EXEMPTS_CONDITION':
+    case 'CONTRADICTS':
       return {
-        bg: 'bg-teal-950/40',
-        text: 'text-teal-300',
-        border: 'border-teal-700',
-        badge: 'bg-teal-900/60 text-teal-200 border-teal-600',
-        label: 'Miễn trừ / Đặc cách',
+        bg: 'bg-rose-950/40',
+        text: 'text-rose-300',
+        border: 'border-rose-700',
+        badge: 'bg-rose-900/60 text-rose-200 border-rose-600',
+        label: 'Mâu thuẫn / Phản bác (CONTRADICTS)',
       };
-    case 'GUIDES':
+    case 'DEFINES':
+      return {
+        bg: 'bg-purple-950/40',
+        text: 'text-purple-300',
+        border: 'border-purple-700',
+        badge: 'bg-purple-900/60 text-purple-200 border-purple-600',
+        label: 'Định nghĩa / Khái niệm (DEFINES)',
+      };
+    case 'EXTENDS':
       return {
         bg: 'bg-indigo-950/40',
         text: 'text-indigo-300',
         border: 'border-indigo-700',
         badge: 'bg-indigo-900/60 text-indigo-200 border-indigo-600',
-        label: 'Hướng dẫn thi hành',
+        label: 'Mở rộng / Phát triển thêm (EXTENDS)',
+      };
+    case 'EXEMPLIFIES':
+      return {
+        bg: 'bg-amber-950/40',
+        text: 'text-amber-300',
+        border: 'border-amber-700',
+        badge: 'bg-amber-900/60 text-amber-200 border-amber-600',
+        label: 'Ví dụ minh họa (EXEMPLIFIES)',
+      };
+    case 'DEPENDS_ON':
+      return {
+        bg: 'bg-cyan-950/40',
+        text: 'text-cyan-300',
+        border: 'border-cyan-700',
+        badge: 'bg-cyan-900/60 text-cyan-200 border-cyan-600',
+        label: 'Phụ thuộc điều kiện (DEPENDS_ON)',
+      };
+    case 'SUPERSEDES':
+      return {
+        bg: 'bg-red-950/40',
+        text: 'text-red-300',
+        border: 'border-red-700',
+        badge: 'bg-red-900/60 text-red-200 border-red-600',
+        label: 'Thay thế / Bãi bỏ (SUPERSEDES)',
+      };
+    case 'SEE_ALSO':
+      return {
+        bg: 'bg-slate-900',
+        text: 'text-slate-300',
+        border: 'border-slate-700',
+        badge: 'bg-slate-800 text-slate-300 border-slate-600',
+        label: 'Tham khảo thêm (SEE_ALSO)',
       };
     default:
       return {

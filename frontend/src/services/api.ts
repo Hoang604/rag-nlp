@@ -161,12 +161,18 @@ class ApiClient {
   async deleteEdge(
     docSlug: string,
     payload: DeleteEdgePayload
-  ): Promise<StagingDocumentSession> {
-    return this.request<StagingDocumentSession>(
-      `/staging/${encodeURIComponent(docSlug)}/edges`,
+  ): Promise<GenericSuccessResponse> {
+    const query = new URLSearchParams({
+      source_path: payload.source_path,
+    });
+    if (payload.relation_type) query.set('relation_type', payload.relation_type);
+    if (payload.target_path) query.set('target_path', payload.target_path);
+    if (payload.clear_all_targets) query.set('clear_all_targets', 'true');
+
+    return this.request<GenericSuccessResponse>(
+      `/staging/${encodeURIComponent(docSlug)}/edges?${query.toString()}`,
       {
         method: 'DELETE',
-        body: JSON.stringify(payload),
       }
     );
   }

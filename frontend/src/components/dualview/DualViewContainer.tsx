@@ -2,8 +2,8 @@ import React, { useMemo, useState } from 'react';
 import { Columns, Edit3, FileText, Search, Sparkles } from 'lucide-react';
 import { StagingDocumentSession } from '../../types/staging';
 import { DocumentTreeNode } from '../../types/tree';
-import { StatutoryRawViewer } from './StatutoryRawViewer';
-import { naturalLegalCompare } from '../../utils/sorting';
+import { SourceTextViewer } from './SourceTextViewer';
+import { naturalPathCompare } from '../../utils/sorting';
 
 interface DualViewContainerProps {
   session: StagingDocumentSession;
@@ -19,7 +19,7 @@ export const DualViewContainer: React.FC<DualViewContainerProps> = ({
 
   const chunks = useMemo(() => {
     return [...(session.chunks || [])].sort((a, b) =>
-      naturalLegalCompare(a.path, b.path)
+      naturalPathCompare(a.path, b.path)
     );
   }, [session.chunks]);
 
@@ -64,7 +64,7 @@ export const DualViewContainer: React.FC<DualViewContainerProps> = ({
               Đối Chiếu Song Song Toàn Văn (Dual View Synchronizer)
             </h3>
             <p className="text-[11px] text-slate-400">
-              Bấm vào bất kỳ điều khoản nào bên phải để tự động cuộn và highlight văn bản gốc bên trái
+              Bấm vào bất kỳ chunk nào bên phải để tự động cuộn và highlight văn bản gốc bên trái
             </p>
           </div>
         </div>
@@ -101,7 +101,7 @@ export const DualViewContainer: React.FC<DualViewContainerProps> = ({
             )}
           </div>
           <div className="flex-1 overflow-hidden p-2">
-            <StatutoryRawViewer
+            <SourceTextViewer
               rawText={session.raw_text || 'Chưa có văn bản nguyên văn đính kèm trong phiên staging này.'}
               searchTerm={searchTerm}
               highlightRange={activeRange}
@@ -116,7 +116,7 @@ export const DualViewContainer: React.FC<DualViewContainerProps> = ({
             <div className="flex items-center gap-2">
               <Sparkles className="h-4 w-4 text-brand-400" />
               <span className="text-xs font-bold text-slate-200">
-                Điều Khoản Đã Bóc Tách AST ({chunks.length} chunks)
+                Mục Nội Dung Đã Bóc Tách AST ({chunks.length} chunks)
               </span>
             </div>
             <span className="text-[11px] text-slate-400">
@@ -157,7 +157,7 @@ export const DualViewContainer: React.FC<DualViewContainerProps> = ({
                     <div className="flex items-center gap-2">
                       <button
                         type="button"
-                        title="Chỉnh sửa điều khoản"
+                        title="Chỉnh sửa chunk"
                         onClick={(e) => {
                           e.stopPropagation();
                           onEditChunk({
@@ -166,7 +166,6 @@ export const DualViewContainer: React.FC<DualViewContainerProps> = ({
                             node_type: 'NODE',
                             verbatim_text: chunk.verbatim_text,
                             contextualized_text: chunk.contextualized_text,
-                            lead_sentence: chunk.lead_sentence || '',
                             start_line: chunk.start_line || 1,
                             end_line: chunk.end_line || 1,
                             metadata: chunk.metadata || {},

@@ -76,7 +76,7 @@ export const PreFlightChecklist: React.FC<PreFlightChecklistProps> = ({
             </h3>
             <p className="text-xs text-slate-300 mt-0.5">
               {isPassed
-                ? 'Văn bản đáp ứng đầy đủ tính toàn vẹn cấu trúc AST, quan hệ pháp lý và dữ liệu.'
+                ? 'Văn bản đáp ứng đầy đủ tính toàn vẹn cấu trúc AST, quan hệ đồ thị và dữ liệu.'
                 : 'Vui lòng chỉnh sửa các lỗi chặn bên dưới trước khi phê duyệt vào CSDL PostgreSQL.'}
             </p>
           </div>
@@ -107,7 +107,7 @@ export const PreFlightChecklist: React.FC<PreFlightChecklistProps> = ({
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <div className="rounded-xl border border-slate-800 bg-slate-900/80 p-4 shadow">
           <div className="flex items-center justify-between text-xs text-slate-400 mb-1">
-            <span>Tiến độ rà soát điều khoản</span>
+            <span>Tiến độ rà soát Chunks</span>
             <CheckCircle className="h-4 w-4 text-emerald-400" />
           </div>
           <div className="flex items-baseline gap-2">

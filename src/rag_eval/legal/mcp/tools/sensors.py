@@ -64,16 +64,20 @@ class HybridSearchResult(BaseModel):
         """Reports how much the caller should trust these hits."""
         if not self.hits:
             return "none"
-        if not any((h.sparse_rank is not None and h.sparse_rank < 999) for h in self.hits):
-            return "none"
+        max_dense = max(h.dense_similarity for h in self.hits)
+        has_sparse = any((h.sparse_rank is not None and h.sparse_rank < 999) for h in self.hits)
         scores = [h.rerank_score for h in self.hits if h.rerank_score is not None]
+
         if scores and max(scores) < LOW_RERANK:
             return "low"
-        if not self.dense_is_informative:
+
+        if max_dense >= 0.82:
             return "high"
-        if max(h.dense_similarity for h in self.hits) < LOW_SIMILARITY:
-            return "low"
-        return "high"
+        if max_dense >= 0.70:
+            return "medium" if not has_sparse else "high"
+        if not has_sparse and max_dense < LOW_SIMILARITY:
+            return "none"
+        return "medium" if has_sparse else "low"
 
 
 class VerbatimGrepResult(BaseModel):
@@ -129,7 +133,6 @@ class CorpusRuntimeSensors:
         self._pool = pool
         self._embedder = embedding_engine
         self._reranker = reranker
-        self._staging = staging_manager or StagingManager()
         self._rerank_by_default = rerank_by_default
 
     async def build_dynamic_corpus_manifest(
@@ -241,8 +244,7 @@ class CorpusRuntimeSensors:
         )
 
         try:
-            hits = await repo.chunks.verbatim_grep(query_dto)
-            total = await repo.chunks.verbatim_grep_count(query_dto)
+            hits, total = await repo.chunks.verbatim_grep(query_dto)
 
             return VerbatimGrepResult(
                 pattern=pattern,

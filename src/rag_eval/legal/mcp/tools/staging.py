@@ -88,7 +88,6 @@ class CorpusStagingTools:
         preview_hits = [
             StgPreviewHit(
                 path=c.path,
-                lead_sentence=c.lead_sentence,
                 preview_text=c.verbatim_text[:120] + ("..." if len(c.verbatim_text) > 120 else ""),
                 char_length=c.char_length or len(c.verbatim_text),
                 is_truncated=len(c.verbatim_text) > 120,
@@ -256,6 +255,16 @@ class CorpusStagingTools:
                     message=f"Invalid edge source path '{edge.source_path}': chunk path does not exist in document '{doc_slug}'.",
                     data={"doc_slug": doc_slug, "source_path": edge.source_path},
                 )
+            if (
+                edge.target_path
+                and edge.target_path.startswith(f"{doc_slug}.")
+                and edge.target_path not in chunk_paths
+            ):
+                raise CorpusDomainError(
+                    error_code=E_AST_GROUNDING_VALIDATION,
+                    message=f"Invalid edge target path '{edge.target_path}': internal chunk path does not exist in document '{doc_slug}'.",
+                    data={"doc_slug": doc_slug, "target_path": edge.target_path},
+                )
 
         now = datetime.datetime.now(datetime.UTC)
         session = self._staging.update_session_status(
@@ -363,7 +372,6 @@ class CorpusStagingTools:
         doc_slug: str,
         source_path: str = "",
         target_path: str | None = None,
-        target_external_ref: str | None = None,
         relation_type: RelationTypeFilter | None = None,
         clear_all_targets: bool = False,
         edges: Sequence[StagingEdgeFilter | dict[str, object]] | None = None,
@@ -385,11 +393,11 @@ class CorpusStagingTools:
                     message="Bắt buộc phải cung cấp 'source_path' hoặc danh sách 'edges' khi xóa cạnh quan hệ đồ thị.",
                     data={"doc_slug": doc_slug},
                 )
-            if not target_path and not target_external_ref and not clear_all_targets:
+            if not target_path and not clear_all_targets:
                 raise CorpusDomainError(
                     error_code=E_AST_GROUNDING_VALIDATION,
                     message=(
-                        f"Thao tác xóa cạnh từ '{source_path}' yêu cầu phải chỉ định 'target_path' hoặc 'target_external_ref' "
+                        f"Thao tác xóa cạnh từ '{source_path}' yêu cầu phải chỉ định 'target_path' "
                         "để xác định đúng cạnh cần xóa. Nếu thực sự muốn xóa toàn bộ mọi cạnh xuất phát từ nút này, "
                         "bắt buộc phải đặt 'clear_all_targets=True'."
                     ),
@@ -398,7 +406,6 @@ class CorpusStagingTools:
             flt = StagingEdgeFilter(
                 source_path=source_path,
                 target_path=target_path,
-                target_external_ref=target_external_ref,
                 relation_type=relation_type,
                 clear_all_targets=clear_all_targets,
             )
@@ -407,7 +414,7 @@ class CorpusStagingTools:
                 filters=[flt],
                 actor="AGENT",
             )
-            target_repr = target_path or target_external_ref or ("all targets" if clear_all_targets else "unknown")
+            target_repr = target_path or ("all targets" if clear_all_targets else "unknown")
 
         return StgRemoveEdgeResult(
             doc_slug=doc_slug,

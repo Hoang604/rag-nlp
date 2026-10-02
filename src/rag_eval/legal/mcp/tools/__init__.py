@@ -149,11 +149,13 @@ class CorpusMCPTools:
         source_path: str,
         direction: GraphDirection = "OUTGOING",
         max_depth: int = 2,
+        filter_relations: list[str] | None = None,
     ) -> GraphTraverseResult:
         return await self._sensors.graph_traverse(
             source_path=source_path,
             direction=direction,
             max_depth=max_depth,
+            filter_relations=filter_relations,
         )
 
     async def corpus_backlog_poll(
@@ -288,7 +290,6 @@ class CorpusMCPTools:
         doc_slug: str,
         source_path: str = "",
         target_path: str | None = None,
-        target_external_ref: str | None = None,
         relation_type: RelationTypeFilter | None = None,
         clear_all_targets: bool = False,
         edges: Sequence[StagingEdgeFilter | dict[str, object]] | None = None,
@@ -297,7 +298,6 @@ class CorpusMCPTools:
             doc_slug=doc_slug,
             source_path=source_path,
             target_path=target_path,
-            target_external_ref=target_external_ref,
             relation_type=relation_type,
             clear_all_targets=clear_all_targets,
             edges=edges,

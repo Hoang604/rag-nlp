@@ -5,14 +5,14 @@ export interface LineRange {
   end: number;
 }
 
-interface StatutoryRawViewerProps {
+interface SourceTextViewerProps {
   rawText: string;
   searchTerm?: string;
   highlightRange?: LineRange | null;
   onLineClick?: (lineNumber: number, text: string) => void;
 }
 
-export const StatutoryRawViewer: React.FC<StatutoryRawViewerProps> = ({
+export const SourceTextViewer: React.FC<SourceTextViewerProps> = ({
   rawText,
   searchTerm = '',
   highlightRange = null,

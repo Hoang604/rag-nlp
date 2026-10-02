@@ -87,7 +87,7 @@ export const SurgicalEditorDrawer: React.FC<SurgicalEditorDrawerProps> = ({
           <Edit3 className="h-5 w-5 text-brand-400" />
           <div>
             <h3 className="text-sm font-bold text-slate-100">
-              Hiệu Chỉnh Phẫu Thuật Điều Khoản (Surgical Editor)
+              Hiệu Chỉnh Phẫu Thuật Chunk (Surgical Editor)
             </h3>
             <p className="text-[11px] text-slate-400">
               Chỉnh sửa trực tiếp text nguyên văn, ngữ cảnh CPHC, và siêu dữ liệu

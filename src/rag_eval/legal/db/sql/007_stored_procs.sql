@@ -132,7 +132,8 @@ RETURNS TABLE (
     context_type VARCHAR,
     is_all_refs_resolved BOOLEAN,
     metadata JSONB,
-    similarity_score FLOAT
+    similarity_score FLOAT,
+    full_count BIGINT
 ) AS $$
 DECLARE
     clean_pattern TEXT := trim(query_pattern);
@@ -161,7 +162,8 @@ BEGIN
             GREATEST(
                 word_similarity(clean_pattern, c.verbatim_text),
                 word_similarity(clean_pattern, c.contextualized_text)
-            )::FLOAT AS similarity_score
+            )::FLOAT AS similarity_score,
+            COUNT(*) OVER()::BIGINT AS full_count
         FROM chunks c
         JOIN documents d ON c.document_id = d.id
         WHERE (
@@ -194,7 +196,8 @@ BEGIN
             GREATEST(
                 word_similarity(clean_pattern, c.verbatim_text),
                 word_similarity(clean_pattern, c.contextualized_text)
-            )::FLOAT AS similarity_score
+            )::FLOAT AS similarity_score,
+            COUNT(*) OVER()::BIGINT AS full_count
         FROM chunks c
         JOIN documents d ON c.document_id = d.id
         WHERE (
@@ -373,6 +376,7 @@ BEGIN
           AND (scope_ids IS NULL OR c.document_id = ANY(scope_ids))
           AND (path_prefix IS NULL OR c.path <@ path_prefix)
           AND (only_resolved IS NULL OR NOT only_resolved OR c.is_all_refs_resolved = TRUE)
+        ORDER BY base_score DESC
         LIMIT candidate_limit * 2
     ),
     sparse_search AS (

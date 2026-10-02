@@ -70,7 +70,7 @@ const AppContent: React.FC = () => {
         const ok = await patchChunks(chunksToReopen, []);
         if (ok) {
           success(
-            'Đã mở lại điều khoản',
+            'Đã mở lại chunk',
             `Đã chuyển ${targetPaths.length} mục sang Chờ rà soát.`
           );
         }
@@ -78,7 +78,7 @@ const AppContent: React.FC = () => {
         const ok = await finalizeChunks(targetPaths);
         if (ok) {
           success(
-            'Rà soát điều khoản thành công',
+            'Rà soát chunk thành công',
             `Đã cập nhật trạng thái đã rà soát cho ${targetPaths.length} mục.`
           );
         }
@@ -97,9 +97,9 @@ const AppContent: React.FC = () => {
     if (!deleteTargetChunk) return;
     try {
       await patchChunks([], [deleteTargetChunk]);
-      success('Đã xóa điều khoản', `Đã loại bỏ ${deleteTargetChunk} khỏi Staging.`);
+      success('Đã xóa chunk', `Đã loại bỏ ${deleteTargetChunk} khỏi Staging.`);
     } catch (err) {
-      error('Lỗi xóa điều khoản', err instanceof Error ? err.message : 'Lỗi hệ thống');
+      error('Lỗi xóa chunk', err instanceof Error ? err.message : 'Lỗi hệ thống');
     } finally {
       setDeleteTargetChunk(null);
     }
@@ -113,7 +113,7 @@ const AppContent: React.FC = () => {
   const handleSaveChunk = async (chunk: StagingChunk) => {
     const ok = await patchChunks([chunk], []);
     if (ok) {
-      success('Lưu thành công', `Đã cập nhật điều khoản ${chunk.path}.`);
+      success('Lưu thành công', `Đã cập nhật chunk ${chunk.path}.`);
     }
     return ok;
   };
@@ -121,7 +121,7 @@ const AppContent: React.FC = () => {
   const handleAddChunkDirect = async (chunk: StagingChunk) => {
     const ok = await patchChunks([chunk], []);
     if (ok) {
-      success('Thêm thành công', `Đã tạo điều khoản mới ${chunk.path}.`);
+      success('Thêm thành công', `Đã tạo chunk mới ${chunk.path}.`);
     }
     return ok;
   };

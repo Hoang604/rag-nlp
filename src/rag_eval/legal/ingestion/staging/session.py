@@ -89,8 +89,27 @@ class StagingDocumentSession(BaseModel):
                 data={"doc_slug": self.doc_slug},
             )
 
-        all_lines = self.raw_text.splitlines()
-        total_lines = len(all_lines)
+        lines: list[str] = []
+        cur_line = 1
+        total_lines = 0
+        start_idx = 0
+        text_len = len(self.raw_text)
+
+        while start_idx < text_len:
+            next_newline = self.raw_text.find("\n", start_idx)
+            if next_newline == -1:
+                line = self.raw_text[start_idx:]
+                start_idx = text_len
+            else:
+                line = self.raw_text[start_idx:next_newline]
+                line = line.removesuffix("\r")
+                start_idx = next_newline + 1
+
+            total_lines += 1
+            if start_line <= cur_line <= end_line:
+                lines.append(line)
+            cur_line += 1
+
         if total_lines == 0:
             raise CorpusDomainError(
                 error_code=E_CORPUS_INTEGRITY_VIOLATION,
@@ -100,15 +119,14 @@ class StagingDocumentSession(BaseModel):
 
         clamped_start = max(1, min(start_line, total_lines))
         clamped_end = max(clamped_start, min(end_line, total_lines))
-        selected_lines = all_lines[clamped_start - 1 : clamped_end]
-        content = "\n".join(selected_lines)
+        content = "\n".join(lines)
 
         return RawTextWindow(
             doc_slug=self.doc_slug,
             start_line=clamped_start,
             end_line=clamped_end,
             total_lines=total_lines,
-            lines=selected_lines,
+            lines=lines,
             content=content,
         )
 
@@ -216,6 +234,7 @@ class StagingDocumentSession(BaseModel):
         removed_paths: list[str] | None = None,
         cascade_breadcrumbs: bool = True,
         actor: str = "AGENT",
+        applied_at: datetime.datetime | None = None,
     ) -> StagingDeltaReport:
         return apply_chunk_deltas_to_session(
             session=self,
@@ -223,17 +242,20 @@ class StagingDocumentSession(BaseModel):
             removed_paths=removed_paths,
             cascade_breadcrumbs=cascade_breadcrumbs,
             actor=actor,
+            applied_at=applied_at,
         )
 
     def validate_and_attach_edges(
         self,
         edges: Sequence[StagingEdge],
         actor: str = "AGENT",
+        applied_at: datetime.datetime | None = None,
     ) -> tuple[int, list[StagingEdge]]:
         return validate_and_attach_edges_to_session(
             session=self,
             edges=edges,
             actor=actor,
+            applied_at=applied_at,
         )
 
     def reparent_subtree(
@@ -242,6 +264,7 @@ class StagingDocumentSession(BaseModel):
         new_path_prefix: str,
         dry_run: bool = False,
         actor: str = "AGENT",
+        applied_at: datetime.datetime | None = None,
     ) -> StgReparentResult:
         return reparent_subtree_in_session(
             session=self,
@@ -249,15 +272,18 @@ class StagingDocumentSession(BaseModel):
             new_path_prefix=new_path_prefix,
             dry_run=dry_run,
             actor=actor,
+            applied_at=applied_at,
         )
 
     def finalize_chunks(
         self,
         paths: Sequence[str],
         actor: str = "AGENT",
+        applied_at: datetime.datetime | None = None,
     ) -> tuple[int, list[dict[str, object]]]:
         return finalize_chunks_in_session(
             session=self,
             paths=paths,
             actor=actor,
+            applied_at=applied_at,
         )

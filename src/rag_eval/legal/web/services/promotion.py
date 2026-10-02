@@ -8,12 +8,16 @@ import asyncpg
 
 from rag_eval.legal.db.connection import get_db_pool
 from rag_eval.legal.exceptions import (
+    E_AST_GROUNDING_VALIDATION,
     E_CORPUS_INTEGRITY_VIOLATION,
     CorpusDomainError,
 )
-from rag_eval.legal.ingestion.loader import PostgresBulkLoader
+from rag_eval.legal.ingestion.loader import (
+    PostgresBulkLoader,
+    compute_chunk_embeddings,
+)
 from rag_eval.legal.ingestion.staging.manager import StagingManager
-from rag_eval.legal.ingestion.staging.models import StagingStatus
+from rag_eval.legal.ingestion.staging.models import ChunkReviewStatus, StagingStatus
 from rag_eval.legal.schemas import (
     ChunkContextRefEntity,
     ChunkEntity,
@@ -48,6 +52,22 @@ class HumanPromotionEngine:
         """Validates and atomically promotes a staging session into PostgreSQL."""
         session, _ = self.staging_manager.replay_session(doc_slug)
 
+        # 100% review gate & status preconditions
+        if session.status not in (StagingStatus.AGENT_COMMITTED, StagingStatus.APPROVED):
+            raise CorpusDomainError(
+                error_code=E_AST_GROUNDING_VALIDATION,
+                message=f"Session status '{session.status.value}' is not eligible for promotion. Must be AGENT_COMMITTED or APPROVED.",
+                data={"status": session.status.value},
+            )
+
+        unreviewed = [c.path for c in session.chunks if c.review_status != ChunkReviewStatus.REVIEWED]
+        if unreviewed:
+            raise CorpusDomainError(
+                error_code=E_AST_GROUNDING_VALIDATION,
+                message=f"Cannot promote session with {len(unreviewed)} unreviewed chunk(s). All chunks must be in REVIEWED status.",
+                data={"unreviewed_count": len(unreviewed), "sample_paths": unreviewed[:10]},
+            )
+
         validation = self.validator.validate(session)
         if not validation.passed:
             violation_msgs = [f"[{i.rule}] {i.message}" for i in validation.issues if i.blocking]
@@ -58,8 +78,14 @@ class HumanPromotionEngine:
                 data={"issues": [i.model_dump() for i in validation.issues]},
             )
 
+        # Compute neural embeddings OUTSIDE database transaction to eliminate transaction bloat
+        computed_embeddings: list[list[float]] = []
+        if compute_embeddings and session.chunks:
+            texts_to_embed = [c.contextualized_text for c in session.chunks]
+            computed_embeddings = compute_chunk_embeddings(texts_to_embed)
+
         target_pool = pool if pool is not None else await get_db_pool()
-        loader = PostgresBulkLoader(pool=target_pool, compute_embeddings=compute_embeddings)
+        loader = PostgresBulkLoader(pool=target_pool, compute_embeddings=False)
 
         doc_entity = DocumentEntity(
             doc_slug=session.doc_slug,
@@ -97,11 +123,21 @@ class HumanPromotionEngine:
                         c.finalization_state == FinalizationState.FINALIZED_SELF_CONTAINED
                         and chunk_edges_count.get(c.path, 0) == 0
                     ),
+                    embedding=computed_embeddings[idx] if computed_embeddings else None,
                     metadata=c.metadata,
                 )
-                for c in session.chunks
+                for idx, c in enumerate(session.chunks)
             ]
             path_to_uuid = await loader.load_chunks(canonical_chunks, conn=conn)
+
+            # Prune stale edges and context refs for existing document chunks to prevent duplicate & FK errors
+            doc_chunk_ids = list(path_to_uuid.values())
+            if doc_chunk_ids:
+                await conn.execute(
+                    "DELETE FROM chunk_context_refs WHERE chunk_id = ANY($1::uuid[]);",
+                    doc_chunk_ids,
+                )
+                await loader.corpus_repo.graph.delete_edges_for_chunks(doc_chunk_ids, conn=conn)
 
             unresolved_target_paths: list[str] = [
                 e.target_path
@@ -111,10 +147,11 @@ class HumanPromotionEngine:
 
             external_path_to_uuid: dict[str, uuid.UUID] = {}
             if unresolved_target_paths:
-                external_path_to_uuid = await loader.resolve_chunk_paths(unresolved_target_paths)
+                external_path_to_uuid = await loader.resolve_chunk_paths(
+                    unresolved_target_paths, conn=conn
+                )
 
             graph_edge_entities: list[GraphEdgeEntity] = []
-            chunk_context_refs: list[ChunkContextRefEntity] = []
             for edge in session.edges:
                 src_uuid = path_to_uuid.get(edge.source_path)
                 if src_uuid is None:
@@ -131,38 +168,47 @@ class HumanPromotionEngine:
                     elif edge.target_path in external_path_to_uuid:
                         tgt_uuid = external_path_to_uuid[edge.target_path]
 
-                edge_id = uuid.uuid4()
                 if tgt_uuid is not None:
                     rel_val = edge.relation_type.value
                     graph_edge_entities.append(
                         GraphEdgeEntity(
-                            id=edge_id,
+                            id=uuid.uuid4(),
                             source_chunk_id=src_uuid,
                             target_chunk_id=tgt_uuid,
                             relation_type=rel_val,
                         )
                     )
-                    chunk_context_refs.append(
-                        ChunkContextRefEntity(
-                            id=uuid.uuid4(),
-                            chunk_id=src_uuid,
-                            target_chunk_id=tgt_uuid,
-                            edge_id=edge_id,
-                        )
-                    )
-                elif edge.target_external_ref:
-                    chunk_context_refs.append(
-                        ChunkContextRefEntity(
-                            id=uuid.uuid4(),
-                            chunk_id=src_uuid,
-                            target_chunk_id=None,
-                            edge_id=None,
-                        )
-                    )
 
-            inserted_edges_count = 0
+            edge_map: dict[tuple[uuid.UUID, uuid.UUID, str], uuid.UUID] = {}
             if graph_edge_entities:
-                inserted_edges_count = await loader.load_graph_edges(graph_edge_entities, conn=conn)
+                edge_map = await loader.load_graph_edges(graph_edge_entities, conn=conn)
+
+            # Build chunk_context_refs with authoritative edge IDs from edge_map
+            chunk_context_refs: list[ChunkContextRefEntity] = []
+            for edge in session.edges:
+                src_uuid = path_to_uuid.get(edge.source_path)
+                if src_uuid is None:
+                    continue
+
+                tgt_uuid = None
+                if edge.target_path:
+                    if edge.target_path in path_to_uuid:
+                        tgt_uuid = path_to_uuid[edge.target_path]
+                    elif edge.target_path in external_path_to_uuid:
+                        tgt_uuid = external_path_to_uuid[edge.target_path]
+
+                if tgt_uuid is not None:
+                    rel_val = edge.relation_type.value if hasattr(edge.relation_type, "value") else str(edge.relation_type)
+                    persisted_edge_id = edge_map.get((src_uuid, tgt_uuid, rel_val))
+                    if persisted_edge_id is not None:
+                        chunk_context_refs.append(
+                            ChunkContextRefEntity(
+                                id=uuid.uuid4(),
+                                chunk_id=src_uuid,
+                                target_chunk_id=tgt_uuid,
+                                edge_id=persisted_edge_id,
+                            )
+                        )
 
             if chunk_context_refs:
                 await loader.corpus_repo.context_refs.batch_create_refs(chunk_context_refs, conn=conn)
@@ -188,14 +234,14 @@ class HumanPromotionEngine:
         )
 
         return PromotionResultResponse(
-            status="PROMOTED",
+            status="SUCCESS",
             doc_slug=session.doc_slug,
             document_id=str(doc_id),
             chunks_promoted=len(canonical_chunks),
-            edges_promoted=inserted_edges_count,
+            edges_promoted=len(edge_map),
             promoted_at=now.isoformat(),
             message=(
                 f"Document '{session.doc_slug}' has been approved and committed to PostgreSQL "
-                f"({len(canonical_chunks)} chunks, {inserted_edges_count} graph edges)."
+                f"({len(canonical_chunks)} chunks, {len(edge_map)} graph edges)."
             ),
         )

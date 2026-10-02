@@ -23,7 +23,6 @@ from rag_eval.legal.web.schemas import (
     CorpusDocumentResponse,
     CreateEdgeRequest,
     CreateSessionRequest,
-    DeleteEdgeRequest,
     DocumentTreeResponse,
     FinalizeChunksRequest,
     FinalizeChunksResponse,
@@ -83,20 +82,18 @@ async def _load_session_with_hydration(
 
 
 def _get_search_tools(request: Request) -> CorpusMCPTools:
-    """Builds the retrieval tools once and keeps them on app state.
-
-    The embedding model costs seconds to load; per-request construction would
-    put that on every search.
-    """
+    """Builds the retrieval tools once and keeps them on app state."""
     cached = getattr(request.app.state, "search_tools", None)
     if isinstance(cached, CorpusMCPTools):
         return cached
 
     from rag_eval.legal.mcp.tools import SentenceTransformerQueryEmbedder
+    from rag_eval.legal.retrieval.reranker import CrossEncoderReranker
 
     tools = CorpusMCPTools.build(
         pool=_get_db_pool(request),
         embedding_engine=SentenceTransformerQueryEmbedder(),
+        reranker=CrossEncoderReranker(),
     )
     request.app.state.search_tools = tools
     return tools
@@ -241,271 +238,36 @@ async def create_staging_session_from_raw(
     return StagingSessionDetailResponse.model_validate(session.model_dump())
 
 
-@router.get("/staging/{doc_slug:path}/tree", response_model=DocumentTreeResponse)
-async def get_document_tree_hierarchy(
-    request: Request, doc_slug: str
-) -> DocumentTreeResponse:
-    """Returns nested document hierarchy tree formatted for the interactive canvas visualizer."""
-    session = await _load_session_with_hydration(request, doc_slug)
-    builder = TreeHierarchyBuilder()
-    return builder.build_tree(session)
+# Sub-resource endpoints registered BEFORE root /staging/{doc_slug} to prevent route shadowing
 
 
-@router.post("/staging/{doc_slug:path}/patch", response_model=BatchPatchResponse)
-async def batch_patch_chunks(
-    request: Request, doc_slug: str, payload: BatchPatchRequest
-) -> BatchPatchResponse:
-    """Applies surgical in-place chunk updates and removals to the staging session."""
+@router.get("/staging/{doc_slug}/wal", response_model=list[WALRecordResponse])
+async def get_staging_wal_journal(request: Request, doc_slug: str) -> list[WALRecordResponse]:
+    """Returns complete ordered WAL journal entries for the document session."""
     mgr = _get_staging_manager(request)
-    await _load_session_with_hydration(request, doc_slug)
-    updated_stg_deltas = [
-        StagingChunkDelta(
-            path=c.path,
-            verbatim_text=c.verbatim_text,
-            contextualized_text=c.contextualized_text,
-            lead_sentence=c.lead_sentence,
-            start_line=c.start_line,
-            end_line=c.end_line,
-            metadata=c.metadata,
-            review_status=c.review_status,
-        )
-        for c in payload.updated_chunks
-    ]
-    session = mgr.patch_chunks(
-        doc_slug=doc_slug,
-        updated_chunks=updated_stg_deltas,
-        removed_paths=payload.removed_paths,
-    )
-    return BatchPatchResponse(
+    records = mgr.get_wal_records(doc_slug)
+    return [WALRecordResponse.model_validate(r.model_dump()) for r in records]
+
+
+@router.post("/staging/{doc_slug}/replay", response_model=ReplayVerificationResponse)
+async def replay_staging_session(
+    request: Request, doc_slug: str, up_to_lsn: int | None = Query(None)
+) -> ReplayVerificationResponse:
+    """Deterministically replays the staging session from genesis baseline to specified LSN."""
+    mgr = _get_staging_manager(request)
+    session, applied_lsn = mgr.replay_session(doc_slug, up_to_lsn=up_to_lsn)
+    return ReplayVerificationResponse(
         status="SUCCESS",
         doc_slug=doc_slug,
-        updated_count=len(payload.updated_chunks),
-        removed_count=len(payload.removed_paths),
+        applied_lsn=applied_lsn,
+        is_deterministic=True,
         total_chunks=len(session.chunks),
+        total_edges=len(session.edges),
+        message=f"Successfully replayed {applied_lsn + 1} WAL records from genesis baseline.",
     )
 
 
-@router.post(
-    "/staging/{doc_slug:path}/finalize", response_model=FinalizeChunksResponse
-)
-async def finalize_staging_chunks(
-    request: Request, doc_slug: str, payload: FinalizeChunksRequest
-) -> FinalizeChunksResponse:
-    """Marks specified chunk paths as finalized in the staging session."""
-    mgr = _get_staging_manager(request)
-    await _load_session_with_hydration(request, doc_slug)
-    session, count, _ = mgr.finalize_chunks(
-        doc_slug=doc_slug, paths=payload.paths, actor="HUMAN:reviewer"
-    )
-    pending_rem = sum(
-        1
-        for c in session.chunks
-        if c.review_status == ChunkReviewStatus.PENDING
-    )
-    return FinalizeChunksResponse(
-        status="SUCCESS",
-        doc_slug=doc_slug,
-        finalized_count=count,
-        pending_remaining=pending_rem,
-    )
-
-
-@router.get("/staging/{doc_slug:path}/edges", response_model=list[StagingEdgeResponse])
-async def list_staging_edges(
-    request: Request, doc_slug: str
-) -> list[StagingEdgeResponse]:
-    """Lists all relational graph edges attached to the staging session."""
-    session = await _load_session_with_hydration(request, doc_slug)
-    return [
-        StagingEdgeResponse(
-            source_path=e.source_path,
-            target_path=e.target_path,
-            target_external_ref=e.target_external_ref,
-            relation_type=e.relation_type,
-            citation_text=e.citation_text,
-            metadata=e.metadata,
-        )
-        for e in session.edges
-    ]
-
-
-@router.post(
-    "/staging/{doc_slug:path}/edges", response_model=StagingSessionDetailResponse
-)
-async def add_staging_edges(
-    request: Request,
-    doc_slug: str,
-    payload: list[CreateEdgeRequest] | CreateEdgeRequest,
-) -> StagingSessionDetailResponse:
-    """Adds or updates directed relationship edges in the staging session."""
-    mgr = _get_staging_manager(request)
-    await _load_session_with_hydration(request, doc_slug)
-    items = [payload] if isinstance(payload, CreateEdgeRequest) else payload
-    edges = [
-        StagingEdge(
-            source_path=item.source_path,
-            target_path=item.target_path,
-            target_external_ref=item.target_external_ref,
-            relation_type=item.relation_type,
-            citation_text=item.citation_text,
-            metadata=item.metadata,
-        )
-        for item in items
-    ]
-    session = mgr.add_edges(doc_slug=doc_slug, edges=edges)
-    return StagingSessionDetailResponse.model_validate(session.model_dump())
-
-
-@router.delete(
-    "/staging/{doc_slug:path}/edges", response_model=StagingSessionDetailResponse
-)
-async def delete_staging_edge(
-    request: Request,
-    doc_slug: str,
-    payload: DeleteEdgeRequest | None = None,
-    source_path: str | None = Query(None),
-    target_path: str | None = Query(None),
-    target_external_ref: str | None = Query(None),
-    relation_type: str | None = Query(None),
-) -> StagingSessionDetailResponse:
-    """Removes a relational graph edge matching source, target, and relation type."""
-    mgr = _get_staging_manager(request)
-    await _load_session_with_hydration(request, doc_slug)
-
-    src = payload.source_path if payload else source_path
-    tgt = payload.target_path if payload else target_path
-    ext = payload.target_external_ref if payload else target_external_ref
-    rel = payload.relation_type if payload else relation_type
-
-    clear_all = payload.clear_all_targets if payload else False
-    if not src:
-        raise HTTPException(
-            status_code=400,
-            detail="Must provide at least source_path to delete edge.",
-        )
-    if not tgt and not ext and not clear_all:
-        raise HTTPException(
-            status_code=400,
-            detail="Must provide target_path or target_external_ref to identify the edge, or set clear_all_targets=True.",
-        )
-
-    session = mgr.remove_edge(
-        doc_slug=doc_slug,
-        source_path=src,
-        target_path=tgt,
-        target_external_ref=ext,
-        relation_type=rel,
-        clear_all_targets=clear_all,
-        actor="HUMAN:reviewer",
-    )
-    return StagingSessionDetailResponse.model_validate(session.model_dump())
-
-
-@router.post(
-    "/staging/{doc_slug:path}/status", response_model=StagingSessionDetailResponse
-)
-async def transition_staging_status(
-    request: Request, doc_slug: str, payload: StatusTransitionRequest
-) -> StagingSessionDetailResponse:
-    """Transitions staging session lifecycle status (e.g. DRAFT -> APPROVED)."""
-    mgr = _get_staging_manager(request)
-    session = mgr.update_session_status(
-        doc_slug=doc_slug,
-        status=payload.status,
-        actor=payload.actor,
-        description=payload.description,
-    )
-    return StagingSessionDetailResponse.model_validate(session.model_dump())
-
-
-@router.post(
-    "/staging/{doc_slug:path}/reopen", response_model=StagingSessionDetailResponse
-)
-async def reopen_staging_session(
-    request: Request, doc_slug: str, payload: ReopenSessionRequest | None = None
-) -> StagingSessionDetailResponse:
-    """Reopens a PROMOTED staging session into AMENDMENT status, hydrating from DB if absent."""
-    mgr = _get_staging_manager(request)
-    await _load_session_with_hydration(request, doc_slug)
-
-    actor = payload.actor if payload else "HUMAN:reviewer"
-    reason = payload.reason if payload else "Reopened for amendment"
-    session = mgr.reopen_session_for_amendment(
-        doc_slug=doc_slug, actor=actor, reason=reason
-    )
-    return StagingSessionDetailResponse.model_validate(session.model_dump())
-
-
-@router.get("/staging/{doc_slug:path}/diff", response_model=SessionDiffResponse)
-async def get_session_version_diff(
-    request: Request, doc_slug: str
-) -> SessionDiffResponse:
-    """Returns version mutation differences between initial AST baseline and current state."""
-    session = await _load_session_with_hydration(request, doc_slug)
-    calculator = DiffCalculator()
-    return calculator.compute_diff(session)
-
-
-@router.get("/staging/{doc_slug:path}/raw", response_model=RawTextResponse)
-async def get_raw_document_text(request: Request, doc_slug: str) -> RawTextResponse:
-    """Returns raw source text for dual-view split screen visualizer."""
-    session = await _load_session_with_hydration(request, doc_slug)
-    return RawTextResponse(
-        doc_slug=session.doc_slug,
-        title=session.title,
-        raw_text=session.raw_text or "",
-        chunks_count=len(session.chunks),
-    )
-
-
-@router.get(
-    "/staging/{doc_slug:path}/validate", response_model=PreFlightValidationResponse
-)
-@router.post(
-    "/staging/{doc_slug:path}/validate", response_model=PreFlightValidationResponse
-)
-async def run_preflight_validation(
-    request: Request, doc_slug: str
-) -> PreFlightValidationResponse:
-    """Runs automated pre-flight integrity verification checklist before promotion."""
-    session = await _load_session_with_hydration(request, doc_slug)
-    validator = PreFlightValidator()
-    return validator.validate(session)
-
-
-@router.post("/staging/{doc_slug:path}/promote", response_model=PromotionResultResponse)
-async def execute_human_promotion(
-    request: Request, doc_slug: str, payload: PromoteSessionRequest | None = None
-) -> PromotionResultResponse:
-    """Triggers atomic Human Promotion of approved staging session into PostgreSQL production tables."""
-    mgr = _get_staging_manager(request)
-    pool = _get_db_pool(request)
-    engine = HumanPromotionEngine(staging_manager=mgr)
-
-    reviewer_notes = payload.reviewer_notes if payload else None
-    compute_emb = payload.compute_embeddings if payload else True
-
-    return await engine.promote_session(
-        doc_slug=doc_slug,
-        reviewer_notes=reviewer_notes,
-        compute_embeddings=compute_emb,
-        pool=pool,
-    )
-
-
-@router.get("/staging/{doc_slug:path}", response_model=StagingSessionDetailResponse)
-async def get_staging_session_detail(
-    request: Request, doc_slug: str
-) -> StagingSessionDetailResponse:
-    """Retrieves full detail, chunks, edges, and audit history for a staging document session."""
-    session = await _load_session_with_hydration(request, doc_slug)
-    session.chunks.sort(key=lambda c: natural_path_key(c.path))
-    return StagingSessionDetailResponse.model_validate(session.model_dump())
-
-
-@router.post(
-    "/staging/{doc_slug:path}/reparent", response_model=ReparentSubtreeResponse
-)
+@router.post("/staging/{doc_slug}/reparent", response_model=ReparentSubtreeResponse)
 async def reparent_staging_subtree(
     request: Request, doc_slug: str, payload: ReparentSubtreeRequest
 ) -> ReparentSubtreeResponse:
@@ -531,7 +293,246 @@ async def reparent_staging_subtree(
     )
 
 
-@router.delete("/staging/{doc_slug:path}", response_model=GenericSuccessResponse)
+@router.get("/staging/{doc_slug}/tree", response_model=DocumentTreeResponse)
+async def get_document_tree_hierarchy(
+    request: Request, doc_slug: str
+) -> DocumentTreeResponse:
+    """Returns nested document hierarchy tree formatted for the interactive canvas visualizer."""
+    session = await _load_session_with_hydration(request, doc_slug)
+    builder = TreeHierarchyBuilder()
+    return builder.build_tree(session)
+
+
+@router.post("/staging/{doc_slug}/patch", response_model=BatchPatchResponse)
+async def batch_patch_chunks(
+    request: Request, doc_slug: str, payload: BatchPatchRequest
+) -> BatchPatchResponse:
+    """Applies surgical in-place chunk updates and removals to the staging session."""
+    mgr = _get_staging_manager(request)
+    await _load_session_with_hydration(request, doc_slug)
+    updated_stg_deltas = [
+        StagingChunkDelta(
+            path=c.path,
+            verbatim_text=c.verbatim_text,
+            contextualized_text=c.contextualized_text,
+            start_line=c.start_line,
+            end_line=c.end_line,
+            metadata=c.metadata,
+            review_status=c.review_status,
+        )
+        for c in payload.updated_chunks
+    ]
+    session = mgr.patch_chunks(
+        doc_slug=doc_slug,
+        updated_chunks=updated_stg_deltas,
+        removed_paths=payload.removed_paths,
+    )
+    return BatchPatchResponse(
+        status="SUCCESS",
+        doc_slug=doc_slug,
+        updated_count=len(payload.updated_chunks),
+        removed_count=len(payload.removed_paths),
+        total_chunks=len(session.chunks),
+    )
+
+
+@router.post("/staging/{doc_slug}/finalize", response_model=FinalizeChunksResponse)
+async def finalize_staging_chunks(
+    request: Request, doc_slug: str, payload: FinalizeChunksRequest
+) -> FinalizeChunksResponse:
+    """Marks specified chunk paths as finalized in the staging session."""
+    mgr = _get_staging_manager(request)
+    await _load_session_with_hydration(request, doc_slug)
+    session, count, _ = mgr.finalize_chunks(
+        doc_slug=doc_slug, paths=payload.paths, actor="HUMAN:reviewer"
+    )
+    pending_rem = sum(
+        1
+        for c in session.chunks
+        if c.review_status == ChunkReviewStatus.PENDING
+    )
+    return FinalizeChunksResponse(
+        status="SUCCESS",
+        doc_slug=doc_slug,
+        finalized_count=count,
+        pending_remaining=pending_rem,
+    )
+
+
+@router.get("/staging/{doc_slug}/edges", response_model=list[StagingEdgeResponse])
+async def list_staging_edges(
+    request: Request, doc_slug: str
+) -> list[StagingEdgeResponse]:
+    """Lists all relational graph edges attached to the staging session."""
+    session = await _load_session_with_hydration(request, doc_slug)
+    return [
+        StagingEdgeResponse(
+            source_path=e.source_path,
+            target_path=e.target_path,
+            relation_type=e.relation_type.value if hasattr(e.relation_type, "value") else str(e.relation_type),
+        )
+        for e in session.edges
+    ]
+
+
+@router.post("/staging/{doc_slug}/edges", response_model=StagingSessionDetailResponse)
+async def add_staging_edges(
+    request: Request,
+    doc_slug: str,
+    payload: list[CreateEdgeRequest] | CreateEdgeRequest,
+) -> StagingSessionDetailResponse:
+    """Adds or updates directed relationship edges in the staging session."""
+    mgr = _get_staging_manager(request)
+    await _load_session_with_hydration(request, doc_slug)
+    items = [payload] if isinstance(payload, CreateEdgeRequest) else payload
+    edges = [
+        StagingEdge(
+            source_path=item.source_path,
+            target_path=item.target_path,
+            relation_type=item.relation_type,
+        )
+        for item in items
+    ]
+    session = mgr.add_edges(doc_slug=doc_slug, edges=edges)
+    return StagingSessionDetailResponse.model_validate(session.model_dump())
+
+
+@router.delete("/staging/{doc_slug}/edges", response_model=GenericSuccessResponse)
+async def delete_staging_edge(
+    request: Request,
+    doc_slug: str,
+    source_path: str = Query(..., description="LTree path of source chunk"),
+    relation_type: str | None = Query(None, description="Relation type code"),
+    target_path: str | None = Query(None, description="LTree path of target chunk"),
+    clear_all_targets: bool = Query(False, description="Clear all targets from source_path"),
+) -> GenericSuccessResponse:
+    """Removes a relational graph edge matching source, target, and relation type via query parameters."""
+    mgr = _get_staging_manager(request)
+    await _load_session_with_hydration(request, doc_slug)
+
+    if not source_path:
+        raise HTTPException(
+            status_code=400,
+            detail="Must provide at least source_path to delete edge.",
+        )
+    if not target_path and not clear_all_targets:
+        raise HTTPException(
+            status_code=400,
+            detail="Must provide target_path to identify the edge, or set clear_all_targets=True.",
+        )
+
+    mgr.remove_edge(
+        doc_slug=doc_slug,
+        source_path=source_path,
+        target_path=target_path,
+        relation_type=relation_type,
+        clear_all_targets=clear_all_targets,
+        actor="HUMAN:reviewer",
+    )
+    return GenericSuccessResponse(
+        status="SUCCESS",
+        message=f"Edge '{source_path}' -> '{target_path or 'all'}' removed successfully.",
+        doc_slug=doc_slug,
+    )
+
+
+@router.post("/staging/{doc_slug}/status", response_model=StagingSessionDetailResponse)
+async def transition_staging_status(
+    request: Request, doc_slug: str, payload: StatusTransitionRequest
+) -> StagingSessionDetailResponse:
+    """Transitions staging session lifecycle status (e.g. DRAFT -> APPROVED)."""
+    mgr = _get_staging_manager(request)
+    session = mgr.update_session_status(
+        doc_slug=doc_slug,
+        status=payload.status,
+        actor=payload.actor,
+        description=payload.description,
+    )
+    return StagingSessionDetailResponse.model_validate(session.model_dump())
+
+
+@router.post("/staging/{doc_slug}/reopen", response_model=StagingSessionDetailResponse)
+async def reopen_staging_session(
+    request: Request, doc_slug: str, payload: ReopenSessionRequest | None = None
+) -> StagingSessionDetailResponse:
+    """Reopens a PROMOTED staging session into AMENDMENT status, hydrating from DB if absent."""
+    mgr = _get_staging_manager(request)
+    await _load_session_with_hydration(request, doc_slug)
+
+    actor = payload.actor if payload else "HUMAN:reviewer"
+    reason = payload.reason if payload else "Reopened for amendment"
+    session = mgr.reopen_session_for_amendment(
+        doc_slug=doc_slug, actor=actor, reason=reason
+    )
+    return StagingSessionDetailResponse.model_validate(session.model_dump())
+
+
+@router.get("/staging/{doc_slug}/diff", response_model=SessionDiffResponse)
+async def get_session_version_diff(
+    request: Request, doc_slug: str
+) -> SessionDiffResponse:
+    """Returns version mutation differences between initial AST baseline and current state."""
+    session = await _load_session_with_hydration(request, doc_slug)
+    calculator = DiffCalculator()
+    return calculator.compute_diff(session)
+
+
+@router.get("/staging/{doc_slug}/raw", response_model=RawTextResponse)
+async def get_raw_document_text(request: Request, doc_slug: str) -> RawTextResponse:
+    """Returns raw source text for dual-view split screen visualizer."""
+    session = await _load_session_with_hydration(request, doc_slug)
+    return RawTextResponse(
+        doc_slug=session.doc_slug,
+        title=session.title,
+        raw_text=session.raw_text or "",
+        chunks_count=len(session.chunks),
+    )
+
+
+@router.get("/staging/{doc_slug}/validate", response_model=PreFlightValidationResponse)
+@router.post("/staging/{doc_slug}/validate", response_model=PreFlightValidationResponse)
+async def run_preflight_validation(
+    request: Request, doc_slug: str
+) -> PreFlightValidationResponse:
+    """Runs automated pre-flight integrity verification checklist before promotion."""
+    session = await _load_session_with_hydration(request, doc_slug)
+    validator = PreFlightValidator()
+    return validator.validate(session)
+
+
+@router.post("/staging/{doc_slug}/promote", response_model=PromotionResultResponse)
+async def execute_human_promotion(
+    request: Request, doc_slug: str, payload: PromoteSessionRequest | None = None
+) -> PromotionResultResponse:
+    """Triggers atomic Human Promotion of approved staging session into PostgreSQL production tables."""
+    mgr = _get_staging_manager(request)
+    pool = _get_db_pool(request)
+    engine = HumanPromotionEngine(staging_manager=mgr)
+
+    reviewer_notes = payload.reviewer_notes if payload else None
+    compute_emb = payload.compute_embeddings if payload else True
+
+    return await engine.promote_session(
+        doc_slug=doc_slug,
+        reviewer_notes=reviewer_notes,
+        compute_embeddings=compute_emb,
+        pool=pool,
+    )
+
+
+@router.get("/staging/{doc_slug}", response_model=StagingSessionDetailResponse)
+async def get_staging_session_detail(
+    request: Request, doc_slug: str
+) -> StagingSessionDetailResponse:
+    """Retrieves full detail, chunks, edges, and audit history for a staging document session."""
+    session = await _load_session_with_hydration(request, doc_slug)
+    data = session.model_dump(mode="json")
+    if "chunks" in data and isinstance(data["chunks"], list):
+        data["chunks"].sort(key=lambda c: natural_path_key(c.get("path", "")))
+    return StagingSessionDetailResponse.model_validate(data)
+
+
+@router.delete("/staging/{doc_slug}", response_model=GenericSuccessResponse)
 async def delete_staging_session(
     request: Request, doc_slug: str
 ) -> GenericSuccessResponse:
@@ -546,30 +547,4 @@ async def delete_staging_session(
         status="SUCCESS",
         message=f"Staging session for '{doc_slug}' deleted successfully.",
         doc_slug=doc_slug,
-    )
-
-
-@router.get("/staging/{doc_slug:path}/wal", response_model=list[WALRecordResponse])
-async def get_staging_wal_journal(request: Request, doc_slug: str) -> list[WALRecordResponse]:
-    """Returns complete ordered WAL journal entries for the document session."""
-    mgr = _get_staging_manager(request)
-    records = mgr.get_wal_records(doc_slug)
-    return [WALRecordResponse.model_validate(r.model_dump()) for r in records]
-
-
-@router.post("/staging/{doc_slug:path}/replay", response_model=ReplayVerificationResponse)
-async def replay_staging_session(
-    request: Request, doc_slug: str, up_to_lsn: int | None = Query(None)
-) -> ReplayVerificationResponse:
-    """Deterministically replays the staging session from genesis baseline to specified LSN."""
-    mgr = _get_staging_manager(request)
-    session, applied_lsn = mgr.replay_session(doc_slug, up_to_lsn=up_to_lsn)
-    return ReplayVerificationResponse(
-        status="SUCCESS",
-        doc_slug=doc_slug,
-        applied_lsn=applied_lsn,
-        is_deterministic=True,
-        total_chunks=len(session.chunks),
-        total_edges=len(session.edges),
-        message=f"Successfully replayed {applied_lsn + 1} WAL records from genesis baseline.",
     )

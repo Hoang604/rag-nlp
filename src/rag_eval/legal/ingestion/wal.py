@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import datetime
+import fcntl
 import hashlib
 import json
 import logging
 import os
-from collections.abc import Mapping
+from collections.abc import Generator, Mapping
+from contextlib import contextmanager
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -57,19 +59,23 @@ class GenesisSnapshot(BaseModel):
         cls,
         doc_slug: str,
         title: str,
-        valid_from: datetime.date | None,
-        valid_to: datetime.date | None,
         raw_text: str,
-        metadata: dict[str, object],
-        initial_chunks: list[dict[str, object]],
-        initial_edges: list[dict[str, object]],
+        valid_from: datetime.date | None = None,
+        valid_to: datetime.date | None = None,
+        metadata: dict[str, object] | None = None,
+        initial_chunks: list[dict[str, object]] | None = None,
+        initial_edges: list[dict[str, object]] | None = None,
     ) -> GenesisSnapshot:
         """Factory computing genesis SHA-256 hash across canonical fields."""
+        chunks_list = initial_chunks or []
+        edges_list = initial_edges or []
+        meta_dict = metadata or {}
         hasher = hashlib.sha256()
         hasher.update(doc_slug.encode("utf-8"))
+        hasher.update(title.encode("utf-8"))
         hasher.update(raw_text.encode("utf-8"))
-        hasher.update(str(len(initial_chunks)).encode("utf-8"))
-        hasher.update(str(len(initial_edges)).encode("utf-8"))
+        hasher.update(json.dumps(chunks_list, sort_keys=True, default=str).encode("utf-8"))
+        hasher.update(json.dumps(edges_list, sort_keys=True, default=str).encode("utf-8"))
         digest = hasher.hexdigest()
 
         return cls(
@@ -78,9 +84,9 @@ class GenesisSnapshot(BaseModel):
             valid_from=valid_from,
             valid_to=valid_to,
             raw_text=raw_text,
-            metadata=metadata,
-            initial_chunks=initial_chunks,
-            initial_edges=initial_edges,
+            metadata=meta_dict,
+            initial_chunks=chunks_list,
+            initial_edges=edges_list,
             genesis_hash=digest,
         )
 
@@ -196,17 +202,39 @@ class WALSessionStore:
         self.save_checkpoint(session)
         return rec_0, session
 
+    @contextmanager
+    def _lock_session(self) -> Generator[None]:
+        """Advisory POSIX file locking ensuring strictly monotonic LSN under concurrent appends."""
+        lock_file_path = self.session_dir / ".wal.lock"
+        self.session_dir.mkdir(parents=True, exist_ok=True)
+        with open(lock_file_path, "a+", encoding="utf-8") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
     def get_head_lsn(self) -> int:
-        """Returns the highest LSN written in wal.jsonl, or -1 if empty."""
+        """Returns the highest LSN written in wal.jsonl in O(1) time, or -1 if empty."""
         if not self.wal_file.exists():
             return -1
 
-        last_line: str = ""
-        with open(self.wal_file, "r", encoding="utf-8") as f:
-            for line in f:
-                stripped = line.strip()
-                if stripped:
-                    last_line = stripped
+        file_size = self.wal_file.stat().st_size
+        if file_size == 0:
+            return -1
+
+        read_size = min(4096, file_size)
+        with open(self.wal_file, "rb") as f:
+            f.seek(file_size - read_size)
+            chunk = f.read(read_size)
+
+        lines = chunk.splitlines()
+        last_line = ""
+        for line in reversed(lines):
+            stripped = line.strip().decode("utf-8", errors="replace")
+            if stripped:
+                last_line = stripped
+                break
 
         if not last_line:
             return -1
@@ -236,32 +264,33 @@ class WALSessionStore:
                 data={"session_dir": str(self.session_dir)},
             )
 
-        head_lsn = self.get_head_lsn()
-        next_lsn = head_lsn + 1
-        checksum = compute_payload_checksum(payload)
-        now = datetime.datetime.now(datetime.UTC)
+        with self._lock_session():
+            head_lsn = self.get_head_lsn()
+            next_lsn = head_lsn + 1
+            checksum = compute_payload_checksum(payload)
+            now = datetime.datetime.now(datetime.UTC)
 
-        record = WALRecord(
-            lsn=next_lsn,
-            timestamp=now,
-            actor=actor,
-            op_type=op_type,
-            description=description,
-            payload=dict(payload),
-            checksum=checksum,
-        )
+            record = WALRecord(
+                lsn=next_lsn,
+                timestamp=now,
+                actor=actor,
+                op_type=op_type,
+                description=description,
+                payload=dict(payload),
+                checksum=checksum,
+            )
 
-        session = self.load_materialized_session()
-        self.apply_record_to_session(session, record)
+            session = self.load_materialized_session()
+            self.apply_record_to_session(session, record)
 
-        line = record.model_dump_json() + "\n"
-        with open(self.wal_file, "a", encoding="utf-8") as f:
-            f.write(line)
-            f.flush()
-            os.fsync(f.fileno())
+            line = record.model_dump_json() + "\n"
+            with open(self.wal_file, "a", encoding="utf-8") as f:
+                f.write(line)
+                f.flush()
+                os.fsync(f.fileno())
 
-        self.save_checkpoint(session)
-        return record, session
+            self.save_checkpoint(session)
+            return record, session
 
     def read_wal(self, since_lsn: int = 0) -> list[WALRecord]:
         """Reads and validates sequential WAL records starting from since_lsn."""
@@ -313,7 +342,27 @@ class WALSessionStore:
         try:
             content = self.genesis_file.read_text(encoding="utf-8")
             data = json.loads(content)
-            return GenesisSnapshot.model_validate(data)
+            genesis = GenesisSnapshot.model_validate(data)
+            hasher = hashlib.sha256()
+            hasher.update(genesis.doc_slug.encode("utf-8"))
+            hasher.update(genesis.title.encode("utf-8"))
+            hasher.update(genesis.raw_text.encode("utf-8"))
+            hasher.update(json.dumps(genesis.initial_chunks, sort_keys=True, default=str).encode("utf-8"))
+            hasher.update(json.dumps(genesis.initial_edges, sort_keys=True, default=str).encode("utf-8"))
+            expected_digest = hasher.hexdigest()
+            if genesis.genesis_hash and genesis.genesis_hash != expected_digest:
+                old_hasher = hashlib.sha256()
+                old_hasher.update(genesis.doc_slug.encode("utf-8"))
+                old_hasher.update(genesis.raw_text.encode("utf-8"))
+                old_hasher.update(str(len(genesis.initial_chunks)).encode("utf-8"))
+                old_hasher.update(str(len(genesis.initial_edges)).encode("utf-8"))
+                if genesis.genesis_hash != old_hasher.hexdigest():
+                    raise CorpusDomainError(
+                        error_code=E_CORPUS_INTEGRITY_VIOLATION,
+                        message=f"genesis.json checksum verification failed in {self.session_dir}",
+                        data={"session_dir": str(self.session_dir)},
+                    )
+            return genesis
         except (json.JSONDecodeError, ValueError, TypeError) as exc:
             raise CorpusDomainError(
                 error_code=E_CORPUS_INTEGRITY_VIOLATION,
@@ -398,13 +447,16 @@ class WALSessionStore:
                 removed_paths=removed_paths,
                 cascade_breadcrumbs=cascade,
                 actor=record.actor,
+                applied_at=record.timestamp,
             )
             return
 
         if record.op_type == "EDGES_ATTACHED":
             raw_edges = record.payload.get("edges")
             edges = [StagingEdge.model_validate(e) for e in raw_edges] if isinstance(raw_edges, list) else []
-            session.validate_and_attach_edges(edges=edges, actor=record.actor)
+            session.validate_and_attach_edges(
+                edges=edges, actor=record.actor, applied_at=record.timestamp
+            )
             return
 
         if record.op_type in ("EDGE_REMOVED", "EDGES_REMOVED"):
@@ -423,16 +475,13 @@ class WALSessionStore:
                     clear_all = bool(flt.get("clear_all_targets", False))
                     rel = flt.get("relation_type")
                     if rel is not None:
-                        rel_val = e.relation_type.value
+                        rel_val = e.relation_type.value if hasattr(e.relation_type, "value") else str(e.relation_type)
                         if rel_val != rel:
                             continue
                     tgt = flt.get("target_path")
-                    ext = flt.get("target_external_ref")
-                    if not clear_all and not tgt and not ext:
+                    if not clear_all and not tgt:
                         continue
                     if tgt is not None and e.target_path != tgt:
-                        continue
-                    if ext is not None and e.target_external_ref != ext:
                         continue
                     return True
                 return False
@@ -460,6 +509,7 @@ class WALSessionStore:
                 new_path_prefix=new_p,
                 dry_run=False,
                 actor=record.actor,
+                applied_at=record.timestamp,
             )
             return
 
@@ -493,6 +543,7 @@ class WALSessionStore:
             session.finalize_chunks(
                 paths=paths_list,
                 actor=record.actor,
+                applied_at=record.timestamp,
             )
             return
 
