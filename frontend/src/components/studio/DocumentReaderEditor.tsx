@@ -53,10 +53,7 @@ const RenderSection: React.FC<RenderSectionProps> = memo(
       (e) => e.source_path === node.path || e.target_path === node.path
     );
 
-    const isTopLevel =
-      node.node_type === 'DOCUMENT' ||
-      node.node_type === 'CHAPTER' ||
-      node.node_type === 'SECTION';
+    const isTopLevel = node.node_type === 'DOCUMENT' || depth === 0;
 
     return (
       <div
@@ -91,11 +88,9 @@ const RenderSection: React.FC<RenderSectionProps> = memo(
               className={`font-bold text-slate-100 ${
                 node.node_type === 'DOCUMENT'
                   ? 'text-base sm:text-lg text-brand-300'
-                  : node.node_type === 'CHAPTER'
+                  : depth === 1
                   ? 'text-sm sm:text-base text-purple-300'
-                  : node.node_type === 'ARTICLE'
-                  ? 'text-xs sm:text-sm text-amber-300'
-                  : 'text-xs text-slate-200'
+                  : 'text-xs sm:text-sm text-slate-200'
               }`}
             >
               {node.label}
@@ -145,19 +140,19 @@ const RenderSection: React.FC<RenderSectionProps> = memo(
         </div>
 
 
-        {/* Verbatim statutory legal text */}
+        {/* Verbatim text */}
         {node.verbatim_text && (
           <div className="font-mono text-xs text-slate-200 leading-relaxed whitespace-pre-wrap bg-slate-950/70 p-3 rounded-lg border border-slate-800/80 mb-2.5">
             {node.verbatim_text}
           </div>
         )}
 
-        {/* Contextualized CPHC preview */}
+        {/* Contextualized text preview */}
         {node.contextualized_text && node.contextualized_text !== node.verbatim_text && (
           <details className="text-[11px] text-slate-400 mb-2">
             <summary className="cursor-pointer hover:text-slate-200 select-none flex items-center gap-1 font-medium text-brand-400/90">
               <FileText className="h-3 w-3" />
-              <span>Xem văn cảnh CPHC tổng hợp</span>
+              <span>Xem văn cảnh ngữ nghĩa tổng hợp</span>
             </summary>
             <div className="mt-1.5 rounded bg-slate-900/90 p-2.5 border border-slate-800 text-slate-300 font-mono whitespace-pre-wrap leading-relaxed">
               {node.contextualized_text}

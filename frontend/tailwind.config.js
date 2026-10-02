@@ -21,15 +21,7 @@ export default {
           900: '#14532d',
           950: '#052e16',
         },
-        legal: {
-          document: '#0f172a',
-          chapter: '#4338ca',
-          section: '#0891b2',
-          article: '#059669',
-          clause: '#d97706',
-          point: '#0284c7',
-          appendix: '#7c3aed',
-        },
+
       },
       fontFamily: {
         sans: ['Inter', 'system-ui', '-apple-system', 'sans-serif'],

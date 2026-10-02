@@ -244,7 +244,7 @@ export const TreeOutlineExplorer: React.FC<TreeOutlineExplorerProps> = ({
             type="text"
             value={searchFilter}
             onChange={(e) => setSearchFilter(e.target.value)}
-            placeholder="Tìm theo Điều, Khoản, Điểm..."
+            placeholder="Tìm kiếm nút theo đường dẫn, nhãn..."
             className="w-full rounded-md border border-slate-700 bg-slate-950 py-1.5 pl-7 pr-2.5 text-xs text-slate-100 placeholder-slate-500 focus:border-brand-500 focus:outline-none"
           />
         </div>
@@ -257,10 +257,8 @@ export const TreeOutlineExplorer: React.FC<TreeOutlineExplorerProps> = ({
             className="flex-1 rounded border border-slate-700 bg-slate-950 px-2 py-1 text-[11px] text-slate-300 focus:border-brand-500 focus:outline-none"
           >
             <option value="">Tất cả phân cấp</option>
-            <option value="CHAPTER">Chương (CHAPTER)</option>
-            <option value="ARTICLE">Điều (ARTICLE)</option>
-            <option value="CLAUSE">Khoản (CLAUSE)</option>
-            <option value="POINT">Điểm (POINT)</option>
+            <option value="DOCUMENT">Tài liệu gốc (DOCUMENT)</option>
+            <option value="NODE">Nút phân cấp (NODE)</option>
           </select>
           <select
             value={statusFilter}

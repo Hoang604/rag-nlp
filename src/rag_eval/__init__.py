@@ -1,7 +1,7 @@
-from rag_eval.legal.exceptions import CorpusDomainError
-from rag_eval.legal.mcp.server import CorpusMCPServer
-from rag_eval.legal.mcp.tools import CorpusMCPTools
-from rag_eval.legal.schemas import (
+from rag_eval.exceptions import CorpusDomainError
+from rag_eval.mcp.server import CorpusMCPServer
+from rag_eval.mcp.tools import CorpusMCPTools
+from rag_eval.schemas import (
     ChunkEntity,
     DocumentEntity,
     GraphEdgeEntity,

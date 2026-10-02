@@ -195,17 +195,17 @@ export const NodeInspectorPanel: React.FC<NodeInspectorPanelProps> = ({
           </div>
         )}
 
-        {/* CPHC Contextualized Text */}
+        {/* Contextualized Text */}
         {selectedNode.contextualized_text && (
           <div>
             <div className="flex items-center justify-between mb-1.5">
               <span className="text-[11px] font-semibold text-brand-400 uppercase tracking-wider flex items-center gap-1">
                 <FileText className="h-3.5 w-3.5" />
-                <span>Văn Cảnh CPHC Tổng Hợp</span>
+                <span>Văn Cảnh Ngữ Cảnh Tổng Hợp</span>
               </span>
               <button
                 onClick={() =>
-                  copyToClipboard(selectedNode.contextualized_text, 'Văn cảnh CPHC')
+                  copyToClipboard(selectedNode.contextualized_text, 'Văn cảnh ngữ cảnh')
                 }
                 className="text-[10px] text-brand-400 hover:underline flex items-center gap-1"
               >

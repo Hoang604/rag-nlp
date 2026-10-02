@@ -2,9 +2,9 @@ from pathlib import Path
 
 import pytest
 
-from rag_eval.legal.ingestion.staging.manager import StagingManager
-from rag_eval.legal.ingestion.staging.models import StagingChunk
-from rag_eval.legal.ingestion.staging.session import StagingDocumentSession
+from rag_eval.ingestion.staging.manager import StagingManager
+from rag_eval.ingestion.staging.models import StagingChunk
+from rag_eval.ingestion.staging.session import StagingDocumentSession
 
 
 @pytest.fixture

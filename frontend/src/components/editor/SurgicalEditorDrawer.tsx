@@ -90,7 +90,7 @@ export const SurgicalEditorDrawer: React.FC<SurgicalEditorDrawerProps> = ({
               Hiệu Chỉnh Phẫu Thuật Chunk (Surgical Editor)
             </h3>
             <p className="text-[11px] text-slate-400">
-              Chỉnh sửa trực tiếp text nguyên văn, ngữ cảnh CPHC, và siêu dữ liệu
+              Chỉnh sửa trực tiếp text nguyên văn, ngữ cảnh đầy đủ, và siêu dữ liệu
             </p>
           </div>
         </div>
@@ -149,7 +149,7 @@ export const SurgicalEditorDrawer: React.FC<SurgicalEditorDrawerProps> = ({
         <div>
           <div className="flex items-center justify-between mb-1">
             <label className="text-xs font-semibold text-slate-300">
-              Văn Cảnh CPHC Tổng Hợp (Contextualized Text)
+              Văn Cảnh Ngữ Cảnh Tổng Hợp (Contextualized Text)
             </label>
             <button
               type="button"

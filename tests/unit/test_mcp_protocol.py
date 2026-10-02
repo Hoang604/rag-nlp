@@ -1,13 +1,13 @@
 import pytest
 
-from rag_eval.legal.exceptions import (
+from rag_eval.exceptions import (
     E_AST_GROUNDING_VALIDATION,
     E_CORPUS_INTEGRITY_VIOLATION,
     E_INVALID_DOCUMENT_HIERARCHY,
     E_STORAGE_CONNECTION,
     CorpusDomainError,
 )
-from rag_eval.legal.mcp.server import (
+from rag_eval.mcp.server import (
     CorpusMCPServer,
     map_domain_error_to_jsonrpc,
     render_server_instructions,

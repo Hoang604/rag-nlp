@@ -62,14 +62,14 @@ export const VisualGraphInspector: React.FC<VisualGraphInspectorProps> = ({
           <div>
             <div className="flex items-center gap-2">
               <h3 className="text-sm font-bold text-slate-100">
-                Đồ Thị Tri Thức Pháp Lý (Knowledge Graph)
+                Đồ Thị Tri Thức (Knowledge Graph)
               </h3>
               <span className="rounded-full bg-blue-950 px-2 py-0.5 font-mono text-[10px] font-bold text-blue-400 border border-blue-800">
                 {session.edges.length} quan hệ
               </span>
             </div>
             <p className="text-[11px] text-slate-400">
-              Trực quan hóa mạng lưới liên kết xử phạt, dẫn chiếu, sửa đổi và ghi đè
+              Trực quan hóa mạng lưới liên kết quan hệ và cấu trúc đồ thị
             </p>
           </div>
         </div>

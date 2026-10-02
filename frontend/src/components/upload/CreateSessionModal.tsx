@@ -115,8 +115,8 @@ export const CreateSessionModal: React.FC<CreateSessionModalProps> = ({
       });
 
       success(
-        'Bóc tách AST & CPHC thành công!',
-        `Đã tạo phiên Staging cho văn bản '${docSlug.trim()}'. Đang mở giao diện kiểm duyệt...`
+        'Bóc tách cấu trúc AST thành công!',
+        `Đã tạo phiên Staging cho tài liệu '${docSlug.trim()}'. Đang mở giao diện kiểm duyệt...`
       );
       await onSuccess(docSlug.trim());
       onClose();
@@ -347,7 +347,7 @@ export const CreateSessionModal: React.FC<CreateSessionModalProps> = ({
               {loading ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin text-white" />
-                  <span>Đang bóc tách AST &amp; CPHC...</span>
+                  <span>Đang bóc tách AST &amp; văn cảnh...</span>
                 </>
               ) : (
                 <>

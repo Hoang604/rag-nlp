@@ -1,5 +1,5 @@
 /**
- * Formatting utilities for Vietnamese currency, legal citations, and timestamps.
+ * Formatting utilities for dates, numbers, timestamps, and relation badges.
  */
 
 

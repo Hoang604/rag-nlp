@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Header } from './components/layout/Header';
 import { NavigationTabs, TabId } from './components/layout/NavigationTabs';
-import { LegalStudioContainer } from './components/studio/LegalStudioContainer';
+import { DocumentStudioContainer } from './components/studio/DocumentStudioContainer';
 import { AuditHistoryDiff } from './components/diff/AuditHistoryDiff';
 import { SurgicalEditorDrawer } from './components/editor/SurgicalEditorDrawer';
 import { AddChunkModal } from './components/editor/AddChunkModal';
@@ -178,7 +178,7 @@ const AppContent: React.FC = () => {
         ) : (
           <>
             {activeTab === 'studio' && (
-              <LegalStudioContainer
+              <DocumentStudioContainer
                 session={session}
                 treeData={treeData}
                 onEditChunk={handleEditChunk}

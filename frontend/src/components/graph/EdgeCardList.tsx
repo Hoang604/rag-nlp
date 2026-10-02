@@ -15,7 +15,7 @@ export const EdgeCardList: React.FC<EdgeCardListProps> = ({
   if (!edges || edges.length === 0) {
     return (
       <div className="rounded-lg border border-slate-800 bg-slate-900/40 p-8 text-center text-xs text-slate-400">
-        Chưa có quan hệ pháp lý (Graph Edge) nào được gắn vào văn bản này.
+        Chưa có quan hệ (Graph Edge) nào được gắn vào tài liệu này.
       </div>
     );
   }

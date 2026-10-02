@@ -4,8 +4,8 @@ from unittest.mock import AsyncMock, MagicMock
 import asyncpg
 import pytest
 
-from rag_eval.legal.db.repositories.chunks import ChunkRepository
-from rag_eval.legal.ingestion.loader import PostgresBulkLoader
+from rag_eval.db.repositories.chunks import ChunkRepository
+from rag_eval.ingestion.loader import PostgresBulkLoader
 
 
 @pytest.mark.asyncio

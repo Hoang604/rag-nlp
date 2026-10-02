@@ -3,9 +3,9 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from rag_eval.legal.mcp.tools.sensors import HybridSearchResult
-from rag_eval.legal.retrieval.reranker import CrossEncoderReranker, ThreadSafeScoreCache
-from rag_eval.legal.schemas import SearchHitDTO
+from rag_eval.mcp.tools.sensors import HybridSearchResult
+from rag_eval.retrieval.reranker import CrossEncoderReranker, ThreadSafeScoreCache
+from rag_eval.schemas import SearchHitDTO
 
 
 def test_thread_safe_score_cache_concurrency() -> None:

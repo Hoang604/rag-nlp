@@ -48,13 +48,13 @@ export const AuditHistoryDiff: React.FC<AuditHistoryDiffProps> = ({ session }) =
     },
     {
       num: 2,
-      name: 'Stage 2: CPHC Context',
-      desc: 'Tổng hợp tiền tố phả hệ CPHC',
+      name: 'Stage 2: Context Synthesis',
+      desc: 'Tổng hợp tiền tố ngữ cảnh phả hệ',
       icon: Code,
     },
     {
       num: 3,
-      name: 'Stage 3: Legal Graph',
+      name: 'Stage 3: Knowledge Graph',
       desc: 'Khai thác quan hệ tham chiếu',
       icon: GitBranch,
     },

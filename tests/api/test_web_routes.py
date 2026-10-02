@@ -4,14 +4,14 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
-from rag_eval.legal.ingestion.staging.manager import StagingManager
-from rag_eval.legal.ingestion.staging.models import (
+from rag_eval.ingestion.staging.manager import StagingManager
+from rag_eval.ingestion.staging.models import (
     ChunkReviewStatus,
     RelationType,
     StagingChunk,
     StagingEdge,
 )
-from rag_eval.legal.web.app import create_app
+from rag_eval.web.app import create_app
 
 
 @pytest.fixture

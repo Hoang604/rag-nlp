@@ -61,7 +61,7 @@ export const EdgeEditorModal: React.FC<EdgeEditorModalProps> = ({
         onClose();
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Lỗi khi tạo quan hệ pháp lý');
+      setError(err instanceof Error ? err.message : 'Lỗi khi tạo cạnh quan hệ');
     } finally {
       setLoading(false);
     }
@@ -74,7 +74,7 @@ export const EdgeEditorModal: React.FC<EdgeEditorModalProps> = ({
           <div className="flex items-center gap-2">
             <Plus className="h-5 w-5 text-blue-400" />
             <h3 className="text-base font-bold text-slate-100">
-              Tạo Cạnh Quan Hệ Pháp Lý (Graph Edge)
+              Tạo Cạnh Quan Hệ (Graph Edge)
             </h3>
           </div>
           <button
@@ -100,7 +100,7 @@ export const EdgeEditorModal: React.FC<EdgeEditorModalProps> = ({
               type="text"
               value={sourcePath}
               onChange={(e) => setSourcePath(e.target.value)}
-              placeholder="ví dụ: 100_2019_nd_cp.c_ii.a_5.c_3.p_a"
+              placeholder="ví dụ: doc_sample.sec_1.para_2"
               className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-xs font-mono text-slate-100 focus:border-blue-500 focus:outline-none"
               required
             />
@@ -108,7 +108,7 @@ export const EdgeEditorModal: React.FC<EdgeEditorModalProps> = ({
 
           <div>
             <label className="block text-xs font-semibold text-slate-300 mb-1">
-              Loại Quan Hệ Pháp Lý (Relation Type)
+              Loại Quan Hệ (Relation Type)
             </label>
             <select
               value={relationType}
@@ -131,7 +131,7 @@ export const EdgeEditorModal: React.FC<EdgeEditorModalProps> = ({
               type="text"
               value={targetPath}
               onChange={(e) => setTargetPath(e.target.value)}
-              placeholder="ví dụ: 100_2019_nd_cp.c_ii.a_5.c_1.p_a hoặc doc_qcvn_41.p_127"
+              placeholder="ví dụ: doc_sample.sec_1.para_1 hoặc doc_ref.item_5"
               className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-xs font-mono text-slate-100 focus:border-blue-500 focus:outline-none"
               required
             />

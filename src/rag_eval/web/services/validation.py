@@ -1,0 +1,265 @@
+from __future__ import annotations
+
+from rag_eval.ingestion.staging.models import ChunkReviewStatus
+from rag_eval.ingestion.staging.session import StagingDocumentSession
+from rag_eval.schemas import (
+    LTREE_PATH_REGEX,
+    sanitize_ltree_label,
+)
+from rag_eval.web.schemas import (
+    PreFlightValidationResponse,
+    ValidationIssue,
+)
+
+
+class PreFlightValidator:
+    """Runs automated integrity checks against a StagingDocumentSession before promotion."""
+
+    TOTAL_CHECKS = 8
+
+    def validate(self, session: StagingDocumentSession) -> PreFlightValidationResponse:
+        """Executes all 8 integrity validation rules against the session."""
+        issues: list[ValidationIssue] = []
+        summary: dict[str, object] = {}
+
+        # Rule 1: LTREE_PATH_SYNTAX
+        invalid_path_count = 0
+        for chunk in session.chunks:
+            if not chunk.path or not LTREE_PATH_REGEX.match(chunk.path.strip()):
+                invalid_path_count += 1
+                issues.append(
+                    ValidationIssue(
+                        rule="LTREE_PATH_SYNTAX",
+                        severity="ERROR",
+                        path=chunk.path,
+                        message=f"Chunk path '{chunk.path}' violates LTREE dot-syntax regex.",
+                        blocking=True,
+                    )
+                )
+        summary["ltree_path_syntax"] = {
+            "passed": invalid_path_count == 0,
+            "violations": invalid_path_count,
+        }
+
+        # Rule 2: ROOT_CODE_ALIGNMENT
+        sanitized_doc_slug = sanitize_ltree_label(session.doc_slug)
+        mismatched_root_count = 0
+        for chunk in session.chunks:
+            prefix = chunk.path.split(".")[0] if "." in chunk.path else chunk.path
+            if prefix != sanitized_doc_slug:
+                mismatched_root_count += 1
+                issues.append(
+                    ValidationIssue(
+                        rule="ROOT_CODE_ALIGNMENT",
+                        severity="ERROR",
+                        path=chunk.path,
+                        message=(
+                            f"Chunk root prefix '{prefix}' does not align with sanitized "
+                            f"document code '{sanitized_doc_slug}'."
+                        ),
+                        blocking=True,
+                    )
+                )
+        summary["root_code_alignment"] = {
+            "passed": mismatched_root_count == 0,
+            "violations": mismatched_root_count,
+        }
+
+        # Rule 3: PARENT_CHILD_CONTINUITY
+        continuity_violations = 0
+        staged_paths = {c.path for c in session.chunks}
+        if not session.chunks:
+            continuity_violations += 1
+            issues.append(
+                ValidationIssue(
+                    rule="PARENT_CHILD_CONTINUITY",
+                    severity="ERROR",
+                    path=None,
+                    message="Staging session contains zero chunks.",
+                    blocking=True,
+                )
+            )
+        else:
+            for chunk in session.chunks:
+                parts = chunk.path.split(".")
+                if len(parts) > 1:
+                    for level in range(1, len(parts)):
+                        ancestor_path = ".".join(parts[:level])
+                        if ancestor_path == sanitized_doc_slug:
+                            continue
+                        if ancestor_path not in staged_paths:
+                            continuity_violations += 1
+                            issues.append(
+                                ValidationIssue(
+                                    rule="PARENT_CHILD_CONTINUITY",
+                                    severity="ERROR",
+                                    path=chunk.path,
+                                    message=f"Chunk '{chunk.path}' is missing ancestor segment '{ancestor_path}'.",
+                                    blocking=True,
+                                )
+                            )
+                            break
+
+        summary["parent_child_continuity"] = {
+            "passed": continuity_violations == 0,
+            "violations": continuity_violations,
+        }
+
+        # Rule 4: VALIDITY_DATES
+        date_violations = 0
+        if (
+            session.valid_from is not None
+            and session.valid_to is not None
+            and session.valid_to < session.valid_from
+        ):
+            date_violations += 1
+            issues.append(
+                ValidationIssue(
+                    rule="VALIDITY_DATES",
+                    severity="ERROR",
+                    path=None,
+                    message=(
+                        f"Document valid_to ({session.valid_to}) cannot be earlier "
+                        f"than valid_from ({session.valid_from})."
+                    ),
+                    blocking=True,
+                )
+            )
+
+        summary["validity_dates"] = {
+            "passed": date_violations == 0,
+            "violations": date_violations,
+        }
+
+        # Rule 5: CONTENT_GROUNDING
+        empty_text_violations = 0
+        for chunk in session.chunks:
+            if not chunk.verbatim_text or not chunk.verbatim_text.strip():
+                empty_text_violations += 1
+                issues.append(
+                    ValidationIssue(
+                        rule="CONTENT_GROUNDING",
+                        severity="ERROR",
+                        path=chunk.path,
+                        message=f"Chunk '{chunk.path}' has empty verbatim_text.",
+                        blocking=True,
+                    )
+                )
+            if not chunk.contextualized_text or not chunk.contextualized_text.strip():
+                empty_text_violations += 1
+                issues.append(
+                    ValidationIssue(
+                        rule="CONTENT_GROUNDING",
+                        severity="ERROR",
+                        path=chunk.path,
+                        message=f"Chunk '{chunk.path}' has empty contextualized_text.",
+                        blocking=True,
+                    )
+                )
+
+        summary["content_grounding"] = {
+            "passed": empty_text_violations == 0,
+            "violations": empty_text_violations,
+        }
+
+        # Rule 6: GRAPH_EDGE_INTEGRITY
+        edge_violations = 0
+        for edge in session.edges:
+            if edge.source_path not in staged_paths:
+                edge_violations += 1
+                issues.append(
+                    ValidationIssue(
+                        rule="GRAPH_EDGE_INTEGRITY",
+                        severity="ERROR",
+                        path=edge.source_path,
+                        message=(
+                            f"Graph edge source_path '{edge.source_path}' does not exist "
+                            f"in staged chunks for this document."
+                        ),
+                        blocking=True,
+                    )
+                )
+            if not edge.target_path:
+                edge_violations += 1
+                issues.append(
+                    ValidationIssue(
+                        rule="GRAPH_EDGE_INTEGRITY",
+                        severity="ERROR",
+                        path=edge.source_path,
+                        message=f"Graph edge from source '{edge.source_path}' must specify a target_path.",
+                        blocking=True,
+                    )
+                )
+            if (
+                edge.target_path
+                and edge.target_path.startswith(f"{sanitized_doc_slug}.")
+                and edge.target_path not in staged_paths
+            ):
+                edge_violations += 1
+                issues.append(
+                    ValidationIssue(
+                        rule="GRAPH_EDGE_INTEGRITY",
+                        severity="ERROR",
+                        path=edge.source_path,
+                        message=f"Graph edge target_path '{edge.target_path}' does not exist in staged chunks for this document.",
+                        blocking=True,
+                    )
+                )
+
+        summary["graph_edge_integrity"] = {
+            "passed": edge_violations == 0,
+            "violations": edge_violations,
+        }
+
+        # Rule 7: DUPLICATE_PATH_COLLISION
+        seen_paths: set[str] = set()
+        duplicate_paths: set[str] = set()
+        for chunk in session.chunks:
+            if chunk.path in seen_paths:
+                duplicate_paths.add(chunk.path)
+            seen_paths.add(chunk.path)
+
+        if duplicate_paths:
+            for dp in duplicate_paths:
+                issues.append(
+                    ValidationIssue(
+                        rule="DUPLICATE_PATH_COLLISION",
+                        severity="ERROR",
+                        path=dp,
+                        message=f"Duplicate chunk path collision detected: '{dp}'.",
+                        blocking=True,
+                    )
+                )
+        summary["duplicate_path_collision"] = {
+            "passed": len(duplicate_paths) == 0,
+            "violations": len(duplicate_paths),
+        }
+
+        # Rule 8: CHUNK_REVIEW_COMPLETION
+        unreviewed_chunks = [c.path for c in session.chunks if c.review_status != ChunkReviewStatus.REVIEWED]
+        summary["chunk_review_completion"] = {
+            "passed": len(unreviewed_chunks) == 0,
+            "violations": len(unreviewed_chunks),
+        }
+        if unreviewed_chunks:
+            issues.append(
+                ValidationIssue(
+                    rule="CHUNK_REVIEW_COMPLETION",
+                    severity="WARNING",
+                    path=None,
+                    message=f"There are {len(unreviewed_chunks)} unreviewed chunk(s). Promotion requires 100% reviewed chunks.",
+                    blocking=False,
+                )
+            )
+
+        blocking_issues = [i for i in issues if i.blocking]
+        passed = len(blocking_issues) == 0
+        status = "PASSED" if passed else "FAILED"
+
+        return PreFlightValidationResponse(
+            status=status,
+            passed=passed,
+            total_checks=8,
+            issues=issues,
+            summary=summary,
+        )

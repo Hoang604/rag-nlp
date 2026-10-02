@@ -384,7 +384,7 @@ export const DryRunSearchSimulator: React.FC<DryRunSearchSimulatorProps> = ({
                   {hit.contextualized_text && hit.contextualized_text !== hit.verbatim_text && (
                     <details className="text-[11px] text-slate-400">
                       <summary className="cursor-pointer select-none font-medium text-brand-400/90 hover:text-slate-200">
-                        Xem văn cảnh CPHC tổng hợp
+                        Xem văn cảnh ngữ cảnh tổng hợp
                       </summary>
                       <div className="mt-1.5 whitespace-pre-wrap rounded border border-slate-800 bg-slate-900/90 p-2.5 font-mono leading-relaxed text-slate-300">
                         {hit.contextualized_text}

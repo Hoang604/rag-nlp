@@ -7,8 +7,8 @@ from typing import Annotated, cast
 import typer
 from rich.console import Console
 
-from rag_eval.legal.console import use_utf8_stdout
-from rag_eval.legal.ingestion.staging import StagingManager
+from rag_eval.console import use_utf8_stdout
+from rag_eval.ingestion.staging import StagingManager
 
 app = typer.Typer(name="rag-eval", help="Agentic RAG CLI")
 console = Console()
@@ -19,8 +19,8 @@ def migrate() -> None:
     """Run PostgreSQL database DDL migrations."""
     import asyncio
 
-    from rag_eval.legal.db.connection import close_db_pool, get_db_pool
-    from rag_eval.legal.db.migrations import run_migrations
+    from rag_eval.db.connection import close_db_pool, get_db_pool
+    from rag_eval.db.migrations import run_migrations
 
     async def _migrate() -> list[str]:
         try:
@@ -38,10 +38,10 @@ def migrate() -> None:
 
 async def _prune_stale_chunks(manager: StagingManager) -> int:
     """Deletes chunks of each staged document that the current staging no longer has."""
-    from rag_eval.legal.db.connection import get_db_pool
+    from rag_eval.db.connection import get_db_pool
 
     pool = await get_db_pool()
-    from rag_eval.legal.db.repositories import CorpusRepository
+    from rag_eval.db.repositories import CorpusRepository
 
     corpus_repo = CorpusRepository(pool)
     removed = 0
@@ -61,8 +61,8 @@ async def _prune_stale_chunks(manager: StagingManager) -> int:
 
 
 async def _rebuild_indexes() -> None:
-    from rag_eval.legal.db.connection import get_db_pool
-    from rag_eval.legal.db.repositories import CorpusRepository
+    from rag_eval.db.connection import get_db_pool
+    from rag_eval.db.repositories import CorpusRepository
 
     pool = await get_db_pool()
     corpus_repo = CorpusRepository(pool)
@@ -79,8 +79,8 @@ def promote(
     """Promote every staged document into PostgreSQL, bypassing human review."""
     import asyncio
 
-    from rag_eval.legal.ingestion.staging import StagingManager
-    from rag_eval.legal.web.services import HumanPromotionEngine
+    from rag_eval.ingestion.staging import StagingManager
+    from rag_eval.web.services import HumanPromotionEngine
 
     async def run() -> None:
         manager = StagingManager()
@@ -124,7 +124,7 @@ def server(
     ] = "logs/mcp_server.log",
 ) -> None:
     """Launch the MCP JSON-RPC 2.0 Server over Stdio."""
-    from rag_eval.legal.mcp.server import run_mcp_server
+    from rag_eval.mcp.server import run_mcp_server
 
     run_mcp_server(log_file=log_file)
 
@@ -165,8 +165,8 @@ def tool(
     """Direct headless runner for all MCP tools."""
     import asyncio
 
-    from rag_eval.legal.db.connection import close_db_pool
-    from rag_eval.legal.mcp.server import CorpusMCPServer
+    from rag_eval.db.connection import close_db_pool
+    from rag_eval.mcp.server import CorpusMCPServer
 
     try:
         raw_parsed = json.loads(args.strip() if args else "{}")
@@ -237,7 +237,7 @@ def api(
     )
     if reload:
         uvicorn.run(
-            "rag_eval.legal.web.app:create_app",
+            "rag_eval.web.app:create_app",
             factory=True,
             host=host,
             port=port,
@@ -246,7 +246,7 @@ def api(
             log_level="info",
         )
     else:
-        from rag_eval.legal.web.app import create_app
+        from rag_eval.web.app import create_app
 
         uvicorn_app = create_app()
         uvicorn.run(uvicorn_app, host=host, port=port, log_level="info")
@@ -317,7 +317,7 @@ def ui(
 
     import uvicorn
 
-    from rag_eval.legal.web.app import create_app
+    from rag_eval.web.app import create_app
 
     uvicorn_app = create_app(static_dir=dist_dir)
     uvicorn.run(uvicorn_app, host=host, port=port, log_level="info")

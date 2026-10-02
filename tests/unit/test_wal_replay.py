@@ -1,14 +1,14 @@
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from rag_eval.legal.ingestion.staging.manager import StagingManager
-from rag_eval.legal.ingestion.staging.models import (
+from rag_eval.ingestion.staging.manager import StagingManager
+from rag_eval.ingestion.staging.models import (
     ChunkReviewStatus,
     RelationType,
     StagingChunk,
     StagingEdge,
 )
-from rag_eval.legal.ingestion.wal import GenesisSnapshot, WALSessionStore
+from rag_eval.ingestion.wal import GenesisSnapshot, WALSessionStore
 
 
 def test_wal_concurrent_monotonic_lsn(tmp_path: Path) -> None:
