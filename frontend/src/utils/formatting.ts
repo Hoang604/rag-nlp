@@ -50,7 +50,7 @@ export function getRelationColor(relationType: string): {
         text: 'text-blue-300',
         border: 'border-blue-700',
         badge: 'bg-blue-900/60 text-blue-200 border-blue-600',
-        label: 'Tham chiếu / Dẫn nguồn (REFERENCES)',
+        label: 'Tham chiếu thông tin (REFERENCES)',
       };
     case 'SUPPORTS':
       return {
@@ -58,7 +58,7 @@ export function getRelationColor(relationType: string): {
         text: 'text-emerald-300',
         border: 'border-emerald-700',
         badge: 'bg-emerald-900/60 text-emerald-200 border-emerald-600',
-        label: 'Bổ trợ / Củng cố luận điểm (SUPPORTS)',
+        label: 'Bổ trợ / Củng cố ngữ cảnh (SUPPORTS)',
       };
     case 'CONTRADICTS':
       return {
@@ -66,7 +66,7 @@ export function getRelationColor(relationType: string): {
         text: 'text-rose-300',
         border: 'border-rose-700',
         badge: 'bg-rose-900/60 text-rose-200 border-rose-600',
-        label: 'Mâu thuẫn / Phản bác (CONTRADICTS)',
+        label: 'Mâu thuẫn / Xung đột thông tin (CONTRADICTS)',
       };
     case 'DEFINES':
       return {
@@ -98,7 +98,7 @@ export function getRelationColor(relationType: string): {
         text: 'text-cyan-300',
         border: 'border-cyan-700',
         badge: 'bg-cyan-900/60 text-cyan-200 border-cyan-600',
-        label: 'Phụ thuộc điều kiện (DEPENDS_ON)',
+        label: 'Phụ thuộc tiên quyết (DEPENDS_ON)',
       };
     case 'SUPERSEDES':
       return {
@@ -106,7 +106,7 @@ export function getRelationColor(relationType: string): {
         text: 'text-red-300',
         border: 'border-red-700',
         badge: 'bg-red-900/60 text-red-200 border-red-600',
-        label: 'Thay thế / Bãi bỏ (SUPERSEDES)',
+        label: 'Thay thế / Làm lỗi thời (SUPERSEDES)',
       };
     case 'SEE_ALSO':
       return {

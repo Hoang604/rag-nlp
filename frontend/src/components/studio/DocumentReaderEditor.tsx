@@ -85,12 +85,14 @@ const RenderSection: React.FC<RenderSectionProps> = memo(
             </span>
 
             <span
-              className={`font-bold text-slate-100 ${
+              className={`font-bold ${
                 node.node_type === 'DOCUMENT'
-                  ? 'text-base sm:text-lg text-brand-300'
-                  : depth === 1
-                  ? 'text-sm sm:text-base text-purple-300'
-                  : 'text-xs sm:text-sm text-slate-200'
+                  ? 'text-lg sm:text-xl text-brand-200 tracking-tight'
+                  : node.node_type === 'SECTION' && depth === 1
+                  ? 'text-base sm:text-lg text-indigo-200 font-semibold border-l-2 border-indigo-500 pl-2.5'
+                  : node.node_type === 'SECTION'
+                  ? 'text-sm sm:text-base text-slate-200 font-medium'
+                  : 'text-xs sm:text-sm text-slate-300'
               }`}
             >
               {node.label}
@@ -142,7 +144,13 @@ const RenderSection: React.FC<RenderSectionProps> = memo(
 
         {/* Verbatim text */}
         {node.verbatim_text && (
-          <div className="font-mono text-xs text-slate-200 leading-relaxed whitespace-pre-wrap bg-slate-950/70 p-3 rounded-lg border border-slate-800/80 mb-2.5">
+          <div
+            className={`${
+              node.node_type === 'CODE' || node.node_type === 'TABLE'
+                ? 'font-mono text-xs'
+                : 'font-sans text-sm tracking-normal'
+            } text-slate-200 leading-relaxed whitespace-pre-wrap bg-slate-950/70 p-3.5 rounded-lg border border-slate-800/80 mb-2.5`}
+          >
             {node.verbatim_text}
           </div>
         )}
@@ -154,7 +162,13 @@ const RenderSection: React.FC<RenderSectionProps> = memo(
               <FileText className="h-3 w-3" />
               <span>Xem văn cảnh ngữ nghĩa tổng hợp</span>
             </summary>
-            <div className="mt-1.5 rounded bg-slate-900/90 p-2.5 border border-slate-800 text-slate-300 font-mono whitespace-pre-wrap leading-relaxed">
+            <div
+              className={`mt-1.5 rounded bg-slate-900/90 p-2.5 border border-slate-800 text-slate-300 ${
+                node.node_type === 'CODE' || node.node_type === 'TABLE'
+                  ? 'font-mono text-xs'
+                  : 'font-sans text-sm'
+              } whitespace-pre-wrap leading-relaxed`}
+            >
               {node.contextualized_text}
             </div>
           </details>

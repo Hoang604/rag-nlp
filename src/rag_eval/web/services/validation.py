@@ -105,30 +105,27 @@ class PreFlightValidator:
             "violations": continuity_violations,
         }
 
-        # Rule 4: VALIDITY_DATES
-        date_violations = 0
-        if (
-            session.valid_from is not None
-            and session.valid_to is not None
-            and session.valid_to < session.valid_from
-        ):
-            date_violations += 1
-            issues.append(
-                ValidationIssue(
-                    rule="VALIDITY_DATES",
-                    severity="ERROR",
-                    path=None,
-                    message=(
-                        f"Document valid_to ({session.valid_to}) cannot be earlier "
-                        f"than valid_from ({session.valid_from})."
-                    ),
-                    blocking=True,
+        # Rule 4: COORDINATE_CONTINUITY
+        coordinate_violations = 0
+        for chunk in session.chunks:
+            if chunk.start_line < 1 or chunk.end_line < chunk.start_line:
+                coordinate_violations += 1
+                issues.append(
+                    ValidationIssue(
+                        rule="COORDINATE_CONTINUITY",
+                        severity="ERROR",
+                        path=chunk.path,
+                        message=(
+                            f"Chunk '{chunk.path}' has invalid line coordinates: "
+                            f"start_line={chunk.start_line}, end_line={chunk.end_line}. "
+                            f"Must satisfy start_line >= 1 and end_line >= start_line."
+                        ),
+                        blocking=True,
+                    )
                 )
-            )
-
-        summary["validity_dates"] = {
-            "passed": date_violations == 0,
-            "violations": date_violations,
+        summary["coordinate_continuity"] = {
+            "passed": coordinate_violations == 0,
+            "violations": coordinate_violations,
         }
 
         # Rule 5: CONTENT_GROUNDING
@@ -245,10 +242,10 @@ class PreFlightValidator:
             issues.append(
                 ValidationIssue(
                     rule="CHUNK_REVIEW_COMPLETION",
-                    severity="WARNING",
+                    severity="ERROR",
                     path=None,
                     message=f"There are {len(unreviewed_chunks)} unreviewed chunk(s). Promotion requires 100% reviewed chunks.",
-                    blocking=False,
+                    blocking=True,
                 )
             )
 

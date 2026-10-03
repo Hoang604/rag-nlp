@@ -19,10 +19,10 @@ interface DryRunSearchSimulatorProps {
 }
 
 const EXAMPLE_QUERIES = [
-  'Quy định về thời hạn thẩm định văn bản',
-  'Nguyên tắc xử lý và chế tài áp dụng',
-  'Thẩm quyền ban hành và ký quyết định',
-  'Trách nhiệm thi hành và hiệu lực thi hành',
+  'Cấu trúc và nguyên lý hoạt động của hệ thống',
+  'Tham số cấu hình và yêu cầu tiên quyết',
+  'Quy trình xử lý ngoại lệ và khôi phục lỗi',
+  'Định dạng dữ liệu và giao thức tích hợp',
 ];
 
 export const DryRunSearchSimulator: React.FC<DryRunSearchSimulatorProps> = ({
@@ -32,6 +32,8 @@ export const DryRunSearchSimulator: React.FC<DryRunSearchSimulatorProps> = ({
   const [query, setQuery] = useState('');
   const [matchLimit, setMatchLimit] = useState(5);
   const [rerank, setRerank] = useState(true);
+  const [pathPrefix, setPathPrefix] = useState('');
+  const [onlyResolved, setOnlyResolved] = useState(false);
   const [result, setResult] = useState<SearchResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -63,6 +65,8 @@ export const DryRunSearchSimulator: React.FC<DryRunSearchSimulatorProps> = ({
           limit: matchLimit,
           rerank,
           doc_slugs: scope.length > 0 ? scope : undefined,
+          path_prefix: pathPrefix.trim() || undefined,
+          only_resolved: onlyResolved ? true : undefined,
         });
         setResult(response);
       } catch (err) {
@@ -72,7 +76,7 @@ export const DryRunSearchSimulator: React.FC<DryRunSearchSimulatorProps> = ({
         setLoading(false);
       }
     },
-    [matchLimit, rerank, scope]
+    [matchLimit, rerank, scope, pathPrefix, onlyResolved]
   );
 
   const handleSubmit = (event: React.FormEvent) => {
@@ -109,7 +113,7 @@ export const DryRunSearchSimulator: React.FC<DryRunSearchSimulatorProps> = ({
             <Zap className="h-5 w-5" />
           </div>
           <div>
-            <h3 className="text-sm font-bold text-slate-100">Truy hồi trên corpus đã ban hành</h3>
+            <h3 className="text-sm font-bold text-slate-100">Truy hồi trên kho tài liệu đã lưu trữ</h3>
             <p className="text-xs text-slate-400">
               Gọi thẳng <span className="font-mono text-brand-400">hybrid_search</span> — đường truy hồi MCP:
               dense vector + sparse tsvector, hợp nhất Reciprocal Rank Fusion (RRF) và Cross-Encoder Reranker.
@@ -130,6 +134,32 @@ export const DryRunSearchSimulator: React.FC<DryRunSearchSimulatorProps> = ({
           </div>
 
           <div className="flex items-center gap-2">
+            <input
+              type="text"
+              value={pathPrefix}
+              onChange={(e) => setPathPrefix(e.target.value)}
+              placeholder="Tiền tố path..."
+              title="Lọc theo tiền tố LTree path (ví dụ: sec_1)"
+              className="w-28 rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs font-mono text-slate-200 placeholder-slate-500 focus:border-brand-500 focus:outline-none"
+            />
+
+            <label
+              title="Chỉ lấy các chunk đã giải quyết 100% tham chiếu"
+              className={`flex cursor-pointer items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-semibold transition ${
+                onlyResolved
+                  ? 'border-brand-500/50 bg-brand-600/20 text-brand-300'
+                  : 'border-slate-700 bg-slate-950 text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <input
+                type="checkbox"
+                checked={onlyResolved}
+                onChange={(e) => setOnlyResolved(e.target.checked)}
+                className="h-3 w-3 accent-brand-500"
+              />
+              <span>Đã liên kết</span>
+            </label>
+
             <label
               title="Xếp hạng lại top kết quả bằng Cross-Encoder"
               className={`flex cursor-pointer items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-semibold transition ${
@@ -178,8 +208,8 @@ export const DryRunSearchSimulator: React.FC<DryRunSearchSimulatorProps> = ({
               <Filter className="h-3.5 w-3.5" />
               <span>
                 {scope.length === 0
-                  ? `Phạm vi: toàn bộ ${docs.length || ''} văn bản`.trim()
-                  : `Phạm vi: ${scope.length} văn bản đã chọn`}
+                  ? `Phạm vi: toàn bộ ${docs.length || ''} tài liệu`.trim()
+                  : `Phạm vi: ${scope.length} tài liệu đã chọn`}
               </span>
             </button>
             {scope.length > 0 && (
@@ -219,11 +249,6 @@ export const DryRunSearchSimulator: React.FC<DryRunSearchSimulatorProps> = ({
                     <span className="ml-1 text-slate-500">
                       {doc.chunk_count} mục
                     </span>
-                    {!doc.in_force && (
-                      <span className="ml-1 text-amber-500/80">
-                        (hết hiệu lực)
-                      </span>
-                    )}
                     <span className="block truncate text-slate-500">{doc.title}</span>
                   </span>
                 </label>
@@ -352,19 +377,23 @@ export const DryRunSearchSimulator: React.FC<DryRunSearchSimulatorProps> = ({
                       <button
                         type="button"
                         title="Chỉnh sửa mục này"
-                        onClick={() =>
+                        onClick={() => {
+                          const existing = session?.chunks.find((c) => c.path === hit.path);
+                          if (!existing) return;
                           onEditChunk({
-                            path: hit.path,
-                            label: hit.path,
-                            node_type: 'NODE',
-                            verbatim_text: hit.verbatim_text,
-                            contextualized_text: hit.contextualized_text,
-                            start_line: 1,
-                            end_line: 1,
-                            metadata: {},
+                            path: existing.path,
+                            label: existing.path.split('.').slice(-2).join('.'),
+                            node_type: (existing.metadata?.node_type as string) || 'PARAGRAPH',
+                            verbatim_text: existing.verbatim_text,
+                            contextualized_text: existing.contextualized_text,
+                            start_line: existing.start_line || 1,
+                            end_line: existing.end_line || 1,
+                            review_status: existing.review_status,
+                            finalization_state: existing.finalization_state,
+                            metadata: existing.metadata || {},
                             children: [],
-                          })
-                        }
+                          });
+                        }}
                         className="flex items-center gap-1 rounded px-2 py-1 text-xs text-slate-400 transition hover:bg-slate-800 hover:text-white"
                       >
                         <Edit3 className="h-3.5 w-3.5" />

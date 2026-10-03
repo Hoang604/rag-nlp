@@ -41,6 +41,7 @@ from rag_eval.ingestion.staging.models import (
 )
 from rag_eval.ingestion.staging.session import StagingDocumentSession
 from rag_eval.schemas import (
+    sanitize_ltree_label,
     validate_ltree_path,
 )
 
@@ -115,7 +116,7 @@ class CorpusStagingTools:
         if chunk is None:
             raise CorpusDomainError(
                 error_code=E_INVALID_DOCUMENT_HIERARCHY,
-                message=f"Chunk '{clean_path}' không tồn tại trong phiên làm việc cho văn bản '{doc_slug}'.",
+                message=f"Chunk '{clean_path}' không tồn tại trong phiên làm việc cho tài liệu '{doc_slug}'.",
                 data={"doc_slug": doc_slug, "path": clean_path},
             )
         return StgGetChunkResult(doc_slug=doc_slug, chunk=chunk)
@@ -235,8 +236,8 @@ class CorpusStagingTools:
             raise CorpusDomainError(
                 error_code=E_AST_GROUNDING_VALIDATION,
                 message=(
-                    f"Không thể commit văn bản '{doc_slug}': còn {len(unreviewed)}/{len(session.chunks)} "
-                    "chunk ở trạng thái PENDING. Thẩm định viên/Agent bắt buộc phải rà soát "
+                    f"Không thể commit tài liệu '{doc_slug}': còn {len(unreviewed)}/{len(session.chunks)} "
+                    "chunk ở trạng thái PENDING. Reviewer/Agent bắt buộc phải rà soát "
                     "100% các chunk trước khi phiên làm việc được phép cam kết."
                 ),
                 data={
@@ -248,6 +249,7 @@ class CorpusStagingTools:
             )
 
         chunk_paths = {c.path for c in session.chunks}
+        sanitized_slug = sanitize_ltree_label(doc_slug)
         for edge in session.edges:
             if edge.source_path not in chunk_paths:
                 raise CorpusDomainError(
@@ -257,7 +259,10 @@ class CorpusStagingTools:
                 )
             if (
                 edge.target_path
-                and edge.target_path.startswith(f"{doc_slug}.")
+                and (
+                    edge.target_path.startswith(f"{sanitized_slug}.")
+                    or edge.target_path.startswith(f"{doc_slug}.")
+                )
                 and edge.target_path not in chunk_paths
             ):
                 raise CorpusDomainError(
@@ -280,7 +285,7 @@ class CorpusStagingTools:
             total_chunks=len(session.chunks),
             total_edges=len(session.edges),
             committed_at=now.isoformat(),
-            message=f"Phiên làm việc cho văn bản '{doc_slug}' đã được chuyển sang trạng thái AGENT_COMMITTED. Dữ liệu được ghi vào WAL và sẵn sàng cho thẩm định, phê duyệt.",
+            message=f"Phiên làm việc cho tài liệu '{doc_slug}' đã được chuyển sang trạng thái AGENT_COMMITTED. Dữ liệu được ghi vào WAL và sẵn sàng cho rà soát, lưu trữ.",
         )
 
     async def stg_poll_pending_chunks(
@@ -364,7 +369,7 @@ class CorpusStagingTools:
             status=session.status.value,
             total_chunks=len(session.chunks),
             reopened_at=now.isoformat(),
-            message=f"Phiên làm việc cho văn bản '{doc_slug}' đã được mở lại ở trạng thái AMENDMENT. Các công cụ stg_patch, stg_add_edges, stg_finalize_chunks đã sẵn sàng.",
+            message=f"Phiên làm việc cho tài liệu '{doc_slug}' đã được mở lại ở trạng thái AMENDMENT. Các công cụ stg_patch, stg_add_edges, stg_finalize_chunks đã sẵn sàng.",
         )
 
     async def stg_remove_edge(
@@ -423,3 +428,12 @@ class CorpusStagingTools:
             total_edges=len(session.edges),
             message=f"Removed {removed_count} edge(s) from '{source_path or 'batch'}' to '{target_repr}' ({relation_type or 'ANY'}).",
         )
+
+    async def stg_validate(self, doc_slug: str) -> dict[str, object]:
+        """Runs pre-flight validation rules on the staging session and returns evaluation report."""
+        session = await self._ensure_session(doc_slug)
+        from rag_eval.web.services.validation import PreFlightValidator
+
+        validator = PreFlightValidator()
+        result = validator.validate(session)
+        return result.model_dump(mode="json")

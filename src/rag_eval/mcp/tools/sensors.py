@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import datetime
 import logging
 import uuid
 from typing import Final, Literal
@@ -34,13 +33,13 @@ logger = logging.getLogger("rag_eval.mcp.tools.sensors")
 GraphDirection = Literal["OUTGOING", "INCOMING", "BOTH"]
 
 HIERARCHICAL_DIRECTION_DOCS: Final[dict[HierarchicalDirection, str]] = {
-    HierarchicalDirection.CHILDREN: "Lấy các phân vị con trực tiếp (cấp nlevel + 1).",
-    HierarchicalDirection.PARENT_CHAIN: "Lấy chuỗi phả hệ tổ tiên từ văn bản gốc xuống đến nút cha trực tiếp.",
+    HierarchicalDirection.CHILDREN: "Lấy các nút con trực tiếp (cấp nlevel + 1).",
+    HierarchicalDirection.PARENT_CHAIN: "Lấy chuỗi tổ tiên từ tài liệu gốc xuống đến nút cha trực tiếp.",
     HierarchicalDirection.SIBLINGS: "Lấy các nút anh em cùng cấp dưới cùng một nút cha.",
 }
 
 HIERARCHICAL_DIRECTION_DESCRIPTION: Final = (
-    "Hướng điều hướng trên cây phân cấp: "
+    "Hướng duyệt trên cây phân cấp: "
     + "; ".join(f"'{k.value}': {v}" for k, v in HIERARCHICAL_DIRECTION_DOCS.items())
 )
 
@@ -54,7 +53,6 @@ class HybridSearchResult(BaseModel):
 
     total_hits: int
     hits: list[SearchHitDTO]
-    temporal_as_of: str | None = None
     dense_is_informative: bool = True
     expanded_query: str = ""
 
@@ -94,12 +92,12 @@ class VerbatimGrepResult(BaseModel):
 class HierarchicalNavigateResult(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    anchor_path: str = Field(..., description="Đường dẫn ltree của nút gốc làm mốc điều hướng")
-    direction: str = Field(..., description="Hướng điều hướng đã thực hiện")
+    anchor_path: str = Field(..., description="Đường dẫn ltree của nút gốc làm mốc duyệt")
+    direction: str = Field(..., description="Hướng duyệt đã thực hiện")
     total_nodes: int = Field(..., description="Tổng số nút trả về")
     nodes: list[HierarchyNodeDTO] = Field(
         default_factory=list,
-        description="Danh sách phẳng các nút được sắp xếp theo đúng thứ tự đọc của văn bản",
+        description="Danh sách phẳng các nút được sắp xếp theo đúng thứ tự đọc của tài liệu",
     )
 
 
@@ -135,27 +133,23 @@ class CorpusRuntimeSensors:
         self._reranker = reranker
         self._rerank_by_default = rerank_by_default
 
-    async def build_dynamic_corpus_manifest(
-        self, as_of_date: datetime.date | None = None
-    ) -> str:
+    async def build_dynamic_corpus_manifest(self) -> str:
         """Constructs a markdown table of active documents in the corpus."""
         try:
             repo = await self._get_repo()
-            docs = await repo.documents.list_active(as_of=as_of_date)
+            docs = await repo.documents.list_active()
             if not docs:
-                return "## DANH MỤC VĂN BẢN HIỆN CÓ: (Trống)"
+                return "## DANH MỤC TÀI LIỆU HIỆN CÓ: (Trống)"
             lines = [
                 "## DANH MỤC TÀI LIỆU TRONG HỆ THỐNG",
-                "| Mã hiệu (doc_slug) | Tiêu đề văn bản | Hiệu lực từ | Hiệu lực đến |",
-                "| :--- | :--- | :--- | :--- |",
+                "| Mã hiệu (doc_slug) | Tiêu đề tài liệu |",
+                "| :--- | :--- |",
             ]
             for doc in docs:
-                v_from = doc.valid_from.isoformat() if doc.valid_from else "N/A"
-                v_to = doc.valid_to.isoformat() if doc.valid_to else "Hiện thời"
-                lines.append(f"| `{doc.doc_slug}` | {doc.title} | {v_from} | {v_to} |")
+                lines.append(f"| `{doc.doc_slug}` | {doc.title} |")
             return "\n".join(lines)
         except (asyncpg.PostgresError, OSError, RuntimeError, CorpusDomainError) as exc:
-            logger.warning("Không thể lấy danh mục văn bản động: %s", exc)
+            logger.warning("Không thể lấy danh mục tài liệu động: %s", exc)
             return ""
 
     async def _get_repo(self) -> CorpusRepository:
@@ -180,7 +174,6 @@ class CorpusRuntimeSensors:
     ) -> HybridSearchResult:
         """Executes generalized dense+sparse hybrid retrieval via ChunkRepository."""
         repo = await self._get_repo()
-        t_date = datetime.datetime.now(datetime.UTC).date()
         vector_param = await self._embed_query(query)
 
         want_rerank = self._rerank_by_default if rerank is None else rerank
@@ -209,7 +202,6 @@ class CorpusRuntimeSensors:
             return HybridSearchResult(
                 total_hits=len(hits),
                 hits=hits,
-                temporal_as_of=t_date.isoformat(),
                 dense_is_informative=True,
                 expanded_query=query,
             )
@@ -285,7 +277,7 @@ class CorpusRuntimeSensors:
         else:
             raise CorpusDomainError(
                 error_code=E_INVALID_DOCUMENT_HIERARCHY,
-                message="Bắt buộc phải cung cấp 'path' (chuỗi ltree) hoặc 'chunk_id' (UUID) để điều hướng.",
+                message="Bắt buộc phải cung cấp 'path' (chuỗi ltree) hoặc 'chunk_id' (UUID) để duyệt cây phân cấp.",
             )
 
         if not origin_chunk:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import datetime
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 from rag_eval.ingestion.staging import (
     ChunkReviewStatus,
@@ -11,9 +11,7 @@ from rag_eval.ingestion.staging import (
     StagingMutationRecord,
     StagingStatus,
 )
-from rag_eval.schemas import (
-    parse_flexible_date,
-)
+from rag_eval.schemas import FinalizationState
 
 
 class StagingSessionSummaryResponse(BaseModel):
@@ -26,8 +24,6 @@ class StagingSessionSummaryResponse(BaseModel):
     status: StagingStatus = Field(..., description="Current staging lifecycle status")
     total_chunks: int = Field(..., description="Total count of candidate chunks")
     total_edges: int = Field(..., description="Total count of relational graph edges")
-    valid_from: datetime.date | None = Field(None, description="Valid from date")
-    valid_to: datetime.date | None = Field(None, description="Valid to date")
     created_at: datetime.datetime = Field(..., description="Session creation timestamp")
     updated_at: datetime.datetime = Field(
         ..., description="Session last updated timestamp"
@@ -48,8 +44,6 @@ class StagingSessionDetailResponse(BaseModel):
     doc_slug: str = Field(..., description="Document slug identifier")
     title: str = Field(..., description="Document title")
     status: StagingStatus = Field(..., description="Current staging status")
-    valid_from: datetime.date | None = Field(None, description="Valid from date")
-    valid_to: datetime.date | None = Field(None, description="Valid to date")
     created_at: datetime.datetime = Field(..., description="Session creation timestamp")
     updated_at: datetime.datetime = Field(
         ..., description="Session last updated timestamp"
@@ -73,6 +67,9 @@ class StagingSessionDetailResponse(BaseModel):
     raw_ast_snapshot: list[dict[str, object]] | None = Field(
         None, description="Initial AST baseline snapshot"
     )
+    raw_edge_snapshot: list[dict[str, object]] | None = Field(
+        None, description="Initial graph edges baseline snapshot"
+    )
     mutation_history: list[StagingMutationRecord] = Field(
         default_factory=list, description="Audit log of mutations"
     )
@@ -86,18 +83,9 @@ class CreateSessionRequest(BaseModel):
     doc_slug: str = Field(..., description="Unique document slug identifier")
     title: str = Field(..., description="Full document title")
     raw_text: str = Field(..., description="Raw text of document")
-    valid_from: datetime.date | None = Field(None, description="Valid from date")
-    valid_to: datetime.date | None = Field(None, description="Valid to date")
     metadata: dict[str, object] = Field(
         default_factory=dict, description="Dynamic document metadata"
     )
-
-    @field_validator("valid_from", "valid_to", mode="before")
-    @classmethod
-    def parse_dates(cls, v: object) -> datetime.date | None:
-        if v is None:
-            return None
-        return parse_flexible_date(v)
 
 
 class DocumentTreeNodeResponse(BaseModel):
@@ -119,7 +107,10 @@ class DocumentTreeNodeResponse(BaseModel):
         default_factory=dict, description="Node semantic metadata"
     )
     review_status: str = Field(
-        default="PENDING", description="Review status of node ('PENDING' | 'FINALIZED')"
+        default="PENDING", description="Review status of node ('PENDING' | 'REVIEWED')"
+    )
+    finalization_state: str | None = Field(
+        default=None, description="Semantic finalization state of node"
     )
     children: list[DocumentTreeNodeResponse] = Field(
         default_factory=list, description="Child nodes in hierarchy"
@@ -181,7 +172,10 @@ class ChunkPatchItem(BaseModel):
         None, description="Dynamic chunk metadata to deep-merge (optional)"
     )
     review_status: ChunkReviewStatus | None = Field(
-        None, description="Optional updated review status ('PENDING' | 'FINALIZED')"
+        None, description="Optional updated review status ('PENDING' | 'REVIEWED')"
+    )
+    finalization_state: FinalizationState | None = Field(
+        None, description="Optional updated semantic finalization state"
     )
 
 
@@ -429,6 +423,8 @@ class SearchRequest(BaseModel):
     limit: int = Field(default=5, ge=1, le=20)
     rerank: bool | None = None
     doc_slugs: list[str] = Field(default_factory=list, max_length=32)
+    path_prefix: str | None = Field(default=None, description="Optional ltree path prefix filter")
+    only_resolved: bool = Field(default=False, description="Filter for chunks with all references resolved")
 
 
 class SearchHitResponse(BaseModel):
@@ -464,9 +460,6 @@ class CorpusDocumentResponse(BaseModel):
 
     doc_slug: str
     title: str
-    valid_from: str | None = None
-    valid_to: str | None = None
-    in_force: bool
     chunk_count: int
 
 
@@ -496,3 +489,143 @@ class ReplayVerificationResponse(BaseModel):
     total_chunks: int = Field(..., description="Total chunks reconstructed")
     total_edges: int = Field(..., description="Total edges reconstructed")
     message: str = Field("", description="Verification message")
+
+
+class StagingGrepRequest(BaseModel):
+    """Request payload for in-memory regex grep across staging chunks."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    pattern: str = Field(..., description="Query substring or regex pattern")
+    is_regex: bool = Field(False, description="Whether pattern is a regular expression")
+    case_sensitive: bool = Field(False, description="Case-sensitive matching")
+    search_in: str = Field("ALL", description="Target field: ALL, VERBATIM, CONTEXT, PATH, METADATA")
+    limit: int = Field(50, description="Max matches to return")
+
+
+class StagingGrepHitResponse(BaseModel):
+    """A matched hit from in-memory grep."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    path: str
+    field_matched: str
+    match_snippet: str
+    verbatim_text: str
+    contextualized_text: str
+    char_length: int
+    metadata: dict[str, object] = Field(default_factory=dict)
+
+
+class StagingGrepResponse(BaseModel):
+    """Response containing grep results across staging session chunks."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    doc_slug: str
+    pattern: str
+    total_hits: int
+    hits: list[StagingGrepHitResponse]
+
+
+class UnresolvedBacklogItemResponse(BaseModel):
+    """An unresolved external reference in production or staging."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    chunk_id: str
+    source_path: str
+    doc_slug: str
+    doc_title: str
+    target_path: str
+    context_type: str
+
+
+class UnresolvedBacklogResponse(BaseModel):
+    """List of unresolved external references."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    doc_slug: str | None
+    total_unresolved: int
+    items: list[UnresolvedBacklogItemResponse]
+
+
+class GraphTraverseRequest(BaseModel):
+    """Request payload to traverse the relational graph starting from a node."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    source_path: str = Field(..., description="LTree path of source chunk")
+    nav_direction: str = Field(
+        default="OUTGOING", description="Direction: OUTGOING | INCOMING | BOTH"
+    )
+    depth_limit: int = Field(default=2, ge=1, le=5, description="Max traversal depth")
+    filter_relations: list[str] | None = Field(
+        default=None, description="Optional relation type filters"
+    )
+
+
+class GraphTraversalStepResponse(BaseModel):
+    """A single traversed edge step in knowledge graph navigation."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    edge_id: str
+    source_chunk_id: str
+    target_chunk_id: str
+    relation_type: str
+    depth: int
+    target_path: str
+    target_text: str
+
+
+class VerbatimGrepRequest(BaseModel):
+    """Request payload for exact / trigram grep across production corpus."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    pattern: str = Field(..., min_length=1, description="Text pattern to match")
+    is_regex: bool = Field(default=False, description="Regex match enabled")
+    case_sensitive: bool = Field(default=False, description="Case-sensitive matching")
+    limit: int = Field(default=20, ge=1, le=100, description="Max matches")
+
+
+class VerbatimGrepHitResponse(BaseModel):
+    """A match hit from verbatim_grep stored procedure."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    chunk_id: str
+    doc_slug: str
+    path: str
+    start_line: int
+    end_line: int
+    char_offset: int
+    match_snippet: str
+    verbatim_text: str
+    metadata: dict[str, object] = Field(default_factory=dict)
+
+
+class VerbatimGrepResponse(BaseModel):
+    """Response returned from verbatim grep search."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    pattern: str
+    is_regex: bool
+    total_matches: int
+    returned: int
+    truncated: bool
+    matches: list[VerbatimGrepHitResponse]
+
+
+class RelationTypeCatalogResponse(BaseModel):
+    """A catalog item of valid relation types from database."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    code: str
+    description: str
+    is_symmetric: bool
+

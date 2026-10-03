@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   ArrowRight,
   CheckCircle,
+  ExternalLink,
   ShieldCheck,
 } from 'lucide-react';
 import { PreFlightValidationResponse } from '../../types/preflight';
@@ -15,6 +16,7 @@ interface PreFlightChecklistProps {
   validating: boolean;
   onReValidate: () => void;
   onOpenPromotionModal: () => void;
+  onNavigateToNode?: (path: string) => void;
 }
 
 export const PreFlightChecklist: React.FC<PreFlightChecklistProps> = ({
@@ -23,6 +25,7 @@ export const PreFlightChecklist: React.FC<PreFlightChecklistProps> = ({
   validating,
   onReValidate,
   onOpenPromotionModal,
+  onNavigateToNode,
 }) => {
   const issues = validationResult?.issues || [];
   const blockingIssues = issues.filter((i) => i.blocking);
@@ -71,13 +74,13 @@ export const PreFlightChecklist: React.FC<PreFlightChecklistProps> = ({
             </div>
             <h3 className="text-base font-bold text-slate-100 mt-1">
               {isPassed
-                ? 'Đạt Toàn Bộ Tiêu Chuẩn Thẩm Định Tính Toàn Vẹn!'
-                : `Phát Hiện ${blockingIssues.length} Lỗi Chặn Phê Duyệt`}
+                ? 'Đạt Toàn Bộ Tiêu Chuẩn Kiểm Tra Tính Toàn Vẹn!'
+                : `Phát Hiện ${blockingIssues.length} Lỗi Chặn Lưu Trữ`}
             </h3>
             <p className="text-xs text-slate-300 mt-0.5">
               {isPassed
-                ? 'Văn bản đáp ứng đầy đủ tính toàn vẹn cấu trúc AST, quan hệ đồ thị và dữ liệu.'
-                : 'Vui lòng chỉnh sửa các lỗi chặn bên dưới trước khi phê duyệt vào CSDL PostgreSQL.'}
+                ? 'Tài liệu đáp ứng đầy đủ tính toàn vẹn cấu trúc AST, quan hệ đồ thị và dữ liệu.'
+                : 'Vui lòng chỉnh sửa các lỗi chặn bên dưới trước khi lưu trữ vào CSDL PostgreSQL.'}
             </p>
           </div>
         </div>
@@ -97,7 +100,7 @@ export const PreFlightChecklist: React.FC<PreFlightChecklistProps> = ({
             disabled={!isPassed}
             className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-5 py-2 text-xs font-semibold text-white shadow-lg shadow-emerald-950 transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-40"
           >
-            <span>Tiến Hành Phê Duyệt</span>
+            <span>Tiến Hành Lưu Trữ</span>
             <ArrowRight className="h-4 w-4" />
           </button>
         </div>
@@ -125,7 +128,7 @@ export const PreFlightChecklist: React.FC<PreFlightChecklistProps> = ({
 
         <div className="rounded-xl border border-slate-800 bg-slate-900/80 p-4 shadow">
           <div className="flex items-center justify-between text-xs text-slate-400 mb-1">
-            <span>Lỗi chặn phê duyệt (Blocking)</span>
+            <span>Lỗi chặn lưu trữ (Blocking)</span>
             <AlertCircle className="h-4 w-4 text-rose-400" />
           </div>
           <span className="font-mono text-2xl font-bold text-rose-400">
@@ -145,7 +148,7 @@ export const PreFlightChecklist: React.FC<PreFlightChecklistProps> = ({
             {warningIssues.length}
           </span>
           <p className="mt-1 text-[11px] text-slate-500">
-            Không chặn phê duyệt nhưng nên lưu ý
+            Không chặn lưu trữ nhưng nên lưu ý
           </p>
         </div>
       </div>
@@ -153,7 +156,7 @@ export const PreFlightChecklist: React.FC<PreFlightChecklistProps> = ({
       {/* Issues Breakdown List */}
       <div className="rounded-xl border border-slate-800 bg-slate-900/80 p-5 shadow space-y-4">
         <h4 className="text-sm font-bold text-slate-100">
-          Danh Sách Vấn Đề Thẩm Định Chi Tiết ({issues.length})
+          Danh Sách Vấn Đề Kiểm Tra Chi Tiết ({issues.length})
         </h4>
 
         {issues.length === 0 ? (
@@ -161,7 +164,7 @@ export const PreFlightChecklist: React.FC<PreFlightChecklistProps> = ({
             <ShieldCheck className="mx-auto mb-2 h-8 w-8 text-emerald-400" />
             <p className="font-semibold text-slate-200">Không có vi phạm toàn vẹn nào</p>
             <p className="mt-0.5 text-slate-500">
-              Văn bản đạt chuẩn toàn bộ quy tắc thẩm định tính toàn vẹn.
+              Tài liệu đạt chuẩn toàn bộ quy tắc kiểm tra tính toàn vẹn.
             </p>
           </div>
         ) : (
@@ -190,9 +193,21 @@ export const PreFlightChecklist: React.FC<PreFlightChecklistProps> = ({
                         {issue.rule}
                       </span>
                       {issue.path && (
-                        <span className="font-mono text-[10px] text-slate-400">
-                          {issue.path}
-                        </span>
+                        onNavigateToNode ? (
+                          <button
+                            type="button"
+                            onClick={() => onNavigateToNode(issue.path!)}
+                            className="font-mono text-[10px] text-brand-400 hover:text-brand-300 hover:underline flex items-center gap-1 cursor-pointer"
+                            title="Nhảy tới chunk này trong Document Studio"
+                          >
+                            <span>{issue.path}</span>
+                            <ExternalLink className="h-3 w-3" />
+                          </button>
+                        ) : (
+                          <span className="font-mono text-[10px] text-slate-400">
+                            {issue.path}
+                          </span>
+                        )
                       )}
                       <span
                         className={`text-[10px] font-semibold px-1.5 py-0.2 rounded ${
@@ -201,7 +216,7 @@ export const PreFlightChecklist: React.FC<PreFlightChecklistProps> = ({
                             : 'bg-amber-900/60 text-amber-300'
                         }`}
                       >
-                        {isBlocking ? 'Chặn Phê Duyệt' : 'Cảnh Báo'}
+                        {isBlocking ? 'Chặn Lưu Trữ' : 'Cảnh Báo'}
                       </span>
                     </div>
                     <p className="text-slate-200 leading-relaxed">{issue.message}</p>

@@ -1,11 +1,4 @@
-export type NodeType =
-  | 'DOCUMENT'
-  | 'CHAPTER'
-  | 'SECTION'
-  | 'ARTICLE'
-  | 'CLAUSE'
-  | 'POINT'
-  | 'APPENDIX';
+export type NodeType = 'DOCUMENT' | 'SECTION' | 'PARAGRAPH' | 'TABLE' | 'LIST' | 'CODE' | 'NODE' | string;
 
 export interface DocumentTreeNode {
   path: string;
@@ -16,7 +9,8 @@ export interface DocumentTreeNode {
   start_line: number;
   end_line: number;
   metadata: Record<string, unknown>;
-  review_status?: 'PENDING' | 'FINALIZED' | string;
+  review_status?: 'PENDING' | 'REVIEWED' | string;
+  finalization_state?: string;
   children: DocumentTreeNode[];
 }
 

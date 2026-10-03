@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import datetime
 from collections.abc import Sequence
 
 import asyncpg
@@ -99,10 +98,8 @@ class CorpusMCPTools:
     def staging(self) -> CorpusStagingTools:
         return self._staging
 
-    async def build_dynamic_corpus_manifest(
-        self, as_of_date: datetime.date | None = None
-    ) -> str:
-        return await self._sensors.build_dynamic_corpus_manifest(as_of_date=as_of_date)
+    async def build_dynamic_corpus_manifest(self) -> str:
+        return await self._sensors.build_dynamic_corpus_manifest()
 
     async def hybrid_search(
         self,
@@ -111,6 +108,8 @@ class CorpusMCPTools:
         rerank: bool | None = None,
         rerank_pool: int = RERANK_POOL,
         doc_slugs: list[str] | None = None,
+        path_prefix: str | None = None,
+        only_resolved: bool | None = None,
     ) -> HybridSearchResult:
         return await self._sensors.hybrid_search(
             query=query,
@@ -118,6 +117,8 @@ class CorpusMCPTools:
             rerank=rerank,
             rerank_pool=rerank_pool,
             doc_slugs=doc_slugs,
+            path_prefix=path_prefix,
+            only_resolved=only_resolved,
         )
 
     async def verbatim_grep(
@@ -302,6 +303,9 @@ class CorpusMCPTools:
             clear_all_targets=clear_all_targets,
             edges=edges,
         )
+
+    async def stg_validate(self, doc_slug: str) -> dict[str, object]:
+        return await self._staging.stg_validate(doc_slug=doc_slug)
 
 
 __all__ = [

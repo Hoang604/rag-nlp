@@ -12,6 +12,8 @@ import { PreFlightChecklist } from './components/checklist/PreFlightChecklist';
 import { PromotionModal } from './components/checklist/PromotionModal';
 import { CreateSessionModal } from './components/upload/CreateSessionModal';
 import { DryRunSearchSimulator } from './components/search/DryRunSearchSimulator';
+import { UnresolvedBacklogModal } from './components/studio/UnresolvedBacklogModal';
+import { GlobalGrepModal } from './components/search/GlobalGrepModal';
 import { ToastProvider, useToast } from './components/toast/ToastContext';
 import { useStagingSession } from './hooks/useStagingSession';
 import { usePreFlightCheck } from './hooks/usePreFlightCheck';
@@ -31,6 +33,7 @@ const AppContent: React.FC = () => {
     session,
     treeData,
     refreshSessions,
+    loadActiveSession,
     patchChunks,
     finalizeChunks,
     addEdge,
@@ -45,6 +48,7 @@ const AppContent: React.FC = () => {
   } = usePreFlightCheck(activeDocSlug);
 
   // Modal / Drawer state
+  const [selectedStudioPath, setSelectedStudioPath] = useState<string>('');
   const [selectedNode, setSelectedNode] = useState<DocumentTreeNode | null>(null);
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -52,14 +56,32 @@ const AppContent: React.FC = () => {
   const [deleteTargetChunk, setDeleteTargetChunk] = useState<string | null>(null);
   const [isPromotionOpen, setIsPromotionOpen] = useState(false);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [isBacklogOpen, setIsBacklogOpen] = useState(false);
+  const [isGrepOpen, setIsGrepOpen] = useState(false);
+
+  // Global shortcut for Ctrl+K
+  React.useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setIsGrepOpen((prev) => !prev);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   // Chunk handlers
   const handleToggleFinalizeChunk = async (node: DocumentTreeNode) => {
-    const collectLeafPaths = (n: DocumentTreeNode): string[] => {
-      if (!n.children || n.children.length === 0) return [n.path];
-      return n.children.flatMap(collectLeafPaths);
+    // DEF-INGEST-002: Include both the section node itself and all its descendant nodes
+    const collectAllPaths = (n: DocumentTreeNode): string[] => {
+      const paths = [n.path];
+      if (n.children && n.children.length > 0) {
+        n.children.forEach((c) => paths.push(...collectAllPaths(c)));
+      }
+      return paths;
     };
-    const targetPaths = collectLeafPaths(node);
+    const targetPaths = collectAllPaths(node);
     const isCurrentlyReviewed = node.review_status === 'REVIEWED';
     try {
       if (isCurrentlyReviewed) {
@@ -126,6 +148,73 @@ const AppContent: React.FC = () => {
     return ok;
   };
 
+  const handleReopenSession = async () => {
+    if (!activeDocSlug) return;
+    try {
+      await api.reopenSession(activeDocSlug);
+      await refreshSessions();
+      success(
+        'Đã mở lại phiên làm việc',
+        `Tài liệu ${activeDocSlug} đã chuyển sang trạng thái AMENDMENT để sửa đổi.`
+      );
+    } catch (err: unknown) {
+      error('Không thể mở lại phiên', err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const handleDeleteSession = async () => {
+    if (!session) return;
+    const confirmed = window.confirm(
+      `Bạn có chắc chắn muốn hủy và xóa vĩnh viễn phiên làm việc '${session.doc_slug}' khỏi Vùng đệm Staging?`
+    );
+    if (!confirmed) return;
+    try {
+      await api.deleteSession(session.doc_slug);
+      success('Đã xóa phiên', `Phiên làm việc '${session.doc_slug}' đã được loại bỏ.`);
+      await refreshSessions();
+      setActiveDocSlug('');
+    } catch (err) {
+      error('Lỗi khi xóa phiên', err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const handleBatchFinalize = async (paths: string[]) => {
+    try {
+      const ok = await finalizeChunks(paths);
+      if (ok) {
+        success('Rà soát hoàn tất', `Đã cập nhật đã rà soát cho ${paths.length} mục.`);
+      }
+    } catch (err) {
+      error('Lỗi rà soát hàng loạt', err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const handleBatchReopen = async (paths: string[]) => {
+    try {
+      const chunksToReopen =
+        session?.chunks
+          ?.filter((c) => paths.includes(c.path))
+          ?.map((c) => ({ ...c, review_status: 'PENDING' as const })) || [];
+      const ok = await patchChunks(chunksToReopen, []);
+      if (ok) {
+        success('Đã mở lại', `Đã chuyển ${paths.length} mục sang Chờ rà soát.`);
+      }
+    } catch (err) {
+      error('Lỗi mở lại', err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const handleBatchDelete = async (paths: string[]) => {
+    const confirmed = window.confirm(`Bạn có chắc chắn muốn xóa ${paths.length} mục đã chọn khỏi Staging?`);
+    if (!confirmed) return;
+    try {
+      await patchChunks([], paths);
+      success('Đã xóa', `Đã loại bỏ ${paths.length} mục khỏi Staging.`);
+    } catch (err) {
+      error('Lỗi xóa hàng loạt', err instanceof Error ? err.message : String(err));
+    }
+  };
+
   const blockingCount =
     validationResult?.issues?.filter((i) => i.blocking)?.length || 0;
 
@@ -142,6 +231,10 @@ const AppContent: React.FC = () => {
         onOpenPromotionModal={() => setIsPromotionOpen(true)}
         onOpenCreateSessionModal={() => setIsCreateOpen(true)}
         onQuickValidate={runValidation}
+        onReopenSession={handleReopenSession}
+        onDeleteSession={handleDeleteSession}
+        onOpenBacklogModal={() => setIsBacklogOpen(true)}
+        onOpenGlobalGrep={() => setIsGrepOpen(true)}
         validating={validating}
         blockingIssuesCount={blockingCount}
       />
@@ -164,14 +257,14 @@ const AppContent: React.FC = () => {
           <div className="flex h-full items-center justify-center">
             <div className="text-center max-w-sm p-6">
               <p className="text-sm text-slate-400 mb-4">
-                Chưa có văn bản nào được chọn hoặc Vùng đệm Staging đang trống.
+                Chưa có tài liệu nào được chọn hoặc Vùng đệm Staging đang trống.
               </p>
               <button
                 type="button"
                 onClick={() => setIsCreateOpen(true)}
                 className="rounded-xl bg-gradient-to-r from-brand-600 to-brand-700 px-5 py-2.5 text-xs font-semibold text-white shadow-lg shadow-brand-950 hover:from-brand-500 hover:to-brand-600 transition"
               >
-                + Tải Lên &amp; Bóc Tách Văn Bản Mới
+                + Tải Lên &amp; Bóc Tách Tài Liệu Mới
               </button>
             </div>
           </div>
@@ -181,11 +274,20 @@ const AppContent: React.FC = () => {
               <DocumentStudioContainer
                 session={session}
                 treeData={treeData}
+                selectedPathProp={selectedStudioPath}
+                onSelectPathProp={setSelectedStudioPath}
                 onEditChunk={handleEditChunk}
                 onDeleteChunk={(path) => setDeleteTargetChunk(path)}
                 onAddChildChunk={handleAddChildChunk}
                 onAddEdge={addEdge}
                 onToggleFinalizeChunk={handleToggleFinalizeChunk}
+                onRefreshSession={async () => {
+                  await refreshSessions();
+                  if (activeDocSlug) await loadActiveSession(activeDocSlug);
+                }}
+                onBatchFinalizeChunks={handleBatchFinalize}
+                onBatchReopenChunks={handleBatchReopen}
+                onBatchDeleteChunks={handleBatchDelete}
               />
             )}
 
@@ -193,6 +295,9 @@ const AppContent: React.FC = () => {
               <DualViewContainer
                 session={session}
                 onEditChunk={handleEditChunk}
+                onToggleFinalizeChunk={handleToggleFinalizeChunk}
+                selectedPath={selectedStudioPath}
+                onSelectPath={setSelectedStudioPath}
               />
             )}
 
@@ -201,13 +306,22 @@ const AppContent: React.FC = () => {
                 session={session}
                 onAddEdge={addEdge}
                 onDeleteEdge={deleteEdge}
-                onSelectNode={(_path) => {
+                onSelectNode={(path) => {
+                  setSelectedStudioPath(path);
                   setActiveTab('studio');
                 }}
               />
             )}
 
-            {activeTab === 'diff' && <AuditHistoryDiff session={session} />}
+            {activeTab === 'diff' && (
+              <AuditHistoryDiff
+                session={session}
+                onRefreshSession={async () => {
+                  await refreshSessions();
+                  if (activeDocSlug) await loadActiveSession(activeDocSlug);
+                }}
+              />
+            )}
 
             {activeTab === 'checklist' && (
               <PreFlightChecklist
@@ -216,6 +330,10 @@ const AppContent: React.FC = () => {
                 validating={validating}
                 onReValidate={runValidation}
                 onOpenPromotionModal={() => setIsPromotionOpen(true)}
+                onNavigateToNode={(path) => {
+                  setSelectedStudioPath(path);
+                  setActiveTab('studio');
+                }}
               />
             )}
           </>
@@ -252,6 +370,9 @@ const AppContent: React.FC = () => {
           onPromote={async (payload) => {
             const res = await api.promoteSession(session.doc_slug, payload);
             await refreshSessions();
+            if (session.doc_slug) {
+              await loadActiveSession(session.doc_slug);
+            }
             return res;
           }}
         />
@@ -266,6 +387,33 @@ const AppContent: React.FC = () => {
           setActiveDocSlug(newSlug);
         }}
       />
+
+      {/* Unresolved Backlog Drawer / Modal */}
+      <UnresolvedBacklogModal
+        isOpen={isBacklogOpen}
+        onClose={() => setIsBacklogOpen(false)}
+        session={session}
+        onAddEdge={addEdge}
+        onDeleteEdge={deleteEdge}
+        onSelectChunk={(path) => {
+          setSelectedStudioPath(path);
+          setActiveTab('studio');
+          setIsBacklogOpen(false);
+        }}
+      />
+
+      {/* Global In-Memory Grep Search Modal */}
+      {session && (
+        <GlobalGrepModal
+          isOpen={isGrepOpen}
+          onClose={() => setIsGrepOpen(false)}
+          docSlug={session.doc_slug}
+          onSelectHit={(path) => {
+            setSelectedStudioPath(path);
+            setActiveTab('studio');
+          }}
+        />
+      )}
     </div>
   );
 };

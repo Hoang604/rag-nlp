@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from rag_eval.ingestion.staging.models import StagingChunk, StagingStatus
+from rag_eval.ingestion.staging.models import (
+    StagingChunk,
+    StagingEdge,
+    StagingStatus,
+)
 from rag_eval.ingestion.staging.session import StagingDocumentSession
 from rag_eval.web.schemas import (
     AuditDiffEntry,
@@ -14,9 +18,15 @@ class DiffCalculator:
     def compute_diff(self, session: StagingDocumentSession) -> SessionDiffResponse:
         """Computes added, modified, deleted chunks and detailed diff entries."""
         initial_map: dict[str, dict[str, object]] = {}
+        has_amendment_baseline = bool(session.metadata.get("amendment_baseline_snapshot"))
+        is_amendment_lifecycle = session.status in (
+            StagingStatus.AMENDMENT,
+            StagingStatus.APPROVED,
+            StagingStatus.AGENT_COMMITTED,
+        )
         baseline_snapshot = (
             session.metadata.get("amendment_baseline_snapshot")
-            if session.status == StagingStatus.AMENDMENT and session.metadata.get("amendment_baseline_snapshot")
+            if is_amendment_lifecycle and has_amendment_baseline
             else session.raw_ast_snapshot
         )
         if isinstance(baseline_snapshot, list):
@@ -145,6 +155,55 @@ class DiffCalculator:
                         "baseline": init_item,
                         "baseline_chunk": init_item,
                     })
+
+        # B-4: Compute edge baseline diffs for Stage 3 Knowledge Graph
+        initial_edges_map: dict[tuple[str, str, str], dict[str, object]] = {}
+        has_amendment_edges_baseline = bool(session.metadata.get("amendment_baseline_edges_snapshot"))
+        baseline_edges_snapshot = (
+            session.metadata.get("amendment_baseline_edges_snapshot")
+            if is_amendment_lifecycle and has_amendment_edges_baseline
+            else session.raw_edge_snapshot
+        )
+        if isinstance(baseline_edges_snapshot, list):
+            for edge_item in baseline_edges_snapshot:
+                if isinstance(edge_item, dict):
+                    src = str(edge_item.get("source_path", ""))
+                    tgt = str(edge_item.get("target_path", ""))
+                    rel = str(edge_item.get("relation_type", ""))
+                    if src and tgt:
+                        initial_edges_map[(src, tgt, rel)] = edge_item
+
+        current_edges_map: dict[tuple[str, str, str], StagingEdge] = {}
+        for e in session.edges:
+            rel_str = e.relation_type.value if hasattr(e.relation_type, "value") else str(e.relation_type)
+            tgt_str = e.target_path or ""
+            current_edges_map[(e.source_path, tgt_str, rel_str)] = e
+
+        for key, edge in current_edges_map.items():
+            if key not in initial_edges_map:
+                diff_entries.append(
+                    AuditDiffEntry(
+                        path=f"{edge.source_path}->{edge.target_path}",
+                        change_type="ADDED",
+                        field_name="edge",
+                        old_value=None,
+                        new_value=edge.model_dump(mode="json"),
+                        description=f"Quan hệ cạnh '{edge.source_path}' -> '{edge.target_path}' ({key[2]}) được thêm mới.",
+                    )
+                )
+
+        for key, raw_edge in initial_edges_map.items():
+            if key not in current_edges_map:
+                diff_entries.append(
+                    AuditDiffEntry(
+                        path=f"{key[0]}->{key[1]}",
+                        change_type="DELETED",
+                        field_name="edge",
+                        old_value=raw_edge,
+                        new_value=None,
+                        description=f"Quan hệ cạnh '{key[0]}' -> '{key[1]}' ({key[2]}) đã bị xóa.",
+                    )
+                )
 
         edge_diffs: list[dict[str, object]] = [e.model_dump(mode="json") for e in session.edges]
 

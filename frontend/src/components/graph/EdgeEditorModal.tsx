@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Plus, X } from 'lucide-react';
 import { CreateEdgePayload } from '../../types/api';
+import { api } from '../../services/api';
 
 interface EdgeEditorModalProps {
   isOpen: boolean;
@@ -9,6 +10,18 @@ interface EdgeEditorModalProps {
   defaultSourcePath?: string;
   initialSourcePath?: string;
 }
+
+const DEFAULT_RELATION_TYPES = [
+  { key: 'REFERENCES', label: 'Tham chiếu thông tin (REFERENCES)' },
+  { key: 'SUPPORTS', label: 'Bổ trợ / Củng cố ngữ cảnh (SUPPORTS)' },
+  { key: 'CONTRADICTS', label: 'Mâu thuẫn / Xung đột thông tin (CONTRADICTS)' },
+  { key: 'DEFINES', label: 'Định nghĩa / Khái niệm (DEFINES)' },
+  { key: 'EXTENDS', label: 'Mở rộng / Phát triển thêm (EXTENDS)' },
+  { key: 'EXEMPLIFIES', label: 'Ví dụ minh họa (EXEMPLIFIES)' },
+  { key: 'DEPENDS_ON', label: 'Phụ thuộc tiên quyết (DEPENDS_ON)' },
+  { key: 'SUPERSEDES', label: 'Thay thế / Làm lỗi thời (SUPERSEDES)' },
+  { key: 'SEE_ALSO', label: 'Tham khảo thêm (SEE_ALSO)' },
+];
 
 export const EdgeEditorModal: React.FC<EdgeEditorModalProps> = ({
   isOpen,
@@ -20,22 +33,31 @@ export const EdgeEditorModal: React.FC<EdgeEditorModalProps> = ({
   const [sourcePath, setSourcePath] = useState(initialSourcePath || defaultSourcePath);
   const [targetPath, setTargetPath] = useState('');
   const [relationType, setRelationType] = useState('REFERENCES');
+  const [availableRelations, setAvailableRelations] = useState(DEFAULT_RELATION_TYPES);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  if (!isOpen) return null;
+  useEffect(() => {
+    let isMounted = true;
+    api
+      .getRelations()
+      .then((items) => {
+        if (isMounted && items && items.length > 0) {
+          setAvailableRelations(
+            items.map((r) => ({
+              key: r.code,
+              label: `${r.description || r.code} (${r.code})${r.is_symmetric ? ' [2 chiều]' : ''}`,
+            }))
+          );
+        }
+      })
+      .catch(() => {});
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
-  const relationTypes = [
-    { key: 'REFERENCES', label: 'Tham chiếu / Dẫn nguồn (REFERENCES)' },
-    { key: 'SUPPORTS', label: 'Bổ trợ / Củng cố luận điểm (SUPPORTS)' },
-    { key: 'CONTRADICTS', label: 'Mâu thuẫn / Phản bác (CONTRADICTS)' },
-    { key: 'DEFINES', label: 'Định nghĩa / Khái niệm (DEFINES)' },
-    { key: 'EXTENDS', label: 'Mở rộng / Phát triển thêm (EXTENDS)' },
-    { key: 'EXEMPLIFIES', label: 'Ví dụ minh họa (EXEMPLIFIES)' },
-    { key: 'DEPENDS_ON', label: 'Phụ thuộc điều kiện (DEPENDS_ON)' },
-    { key: 'SUPERSEDES', label: 'Thay thế / Bãi bỏ (SUPERSEDES)' },
-    { key: 'SEE_ALSO', label: 'Tham khảo thêm (SEE_ALSO)' },
-  ];
+  if (!isOpen) return null;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -94,7 +116,7 @@ export const EdgeEditorModal: React.FC<EdgeEditorModalProps> = ({
         <form onSubmit={handleSubmit} className="mt-4 space-y-4">
           <div>
             <label className="block text-xs font-semibold text-slate-300 mb-1">
-              Đường Dẫn Nguồn (Source Path) <span className="text-rose-400">*</span>
+              Đường Dẫn Chunk Nguồn (Source Path) <span className="text-rose-400">*</span>
             </label>
             <input
               type="text"
@@ -115,7 +137,7 @@ export const EdgeEditorModal: React.FC<EdgeEditorModalProps> = ({
               onChange={(e) => setRelationType(e.target.value)}
               className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-100 focus:border-blue-500 focus:outline-none"
             >
-              {relationTypes.map((t) => (
+              {availableRelations.map((t) => (
                 <option key={t.key} value={t.key}>
                   {t.label}
                 </option>

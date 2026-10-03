@@ -17,6 +17,7 @@ ContextRefInsertTuple = tuple[
     int | None,
     uuid.UUID | None,
     uuid.UUID | None,
+    str | None,
 ]
 
 
@@ -34,9 +35,9 @@ class ChunkContextRefRepository(BaseRepository):
 
         query = """
         INSERT INTO chunk_context_refs (
-            id, chunk_id, char_start, char_end, target_chunk_id, edge_id
+            id, chunk_id, char_start, char_end, target_chunk_id, edge_id, target_path
         ) VALUES (
-            $1, $2, $3, $4, $5, $6
+            $1, $2, $3, $4, $5, $6, $7
         );
         """
         records: list[ContextRefInsertTuple] = [
@@ -47,6 +48,7 @@ class ChunkContextRefRepository(BaseRepository):
                 r.char_end,
                 r.target_chunk_id,
                 r.edge_id,
+                r.target_path,
             )
             for r in refs
         ]
@@ -78,6 +80,7 @@ class ChunkContextRefRepository(BaseRepository):
             cr.char_end,
             cr.target_chunk_id,
             cr.edge_id,
+            cr.target_path,
             c.metadata
         FROM chunks c
         JOIN documents d ON d.id = c.document_id
@@ -105,6 +108,7 @@ class ChunkContextRefRepository(BaseRepository):
                         char_end=r["char_end"],
                         target_chunk_id=r["target_chunk_id"],
                         edge_id=r["edge_id"],
+                        target_path=r["target_path"],
                         metadata=self._parse_metadata(r["metadata"]),
                     )
                     for r in rows

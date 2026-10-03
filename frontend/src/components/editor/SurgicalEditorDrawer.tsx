@@ -17,6 +17,9 @@ export const SurgicalEditorDrawer: React.FC<SurgicalEditorDrawerProps> = ({
   onSaveChunk,
 }) => {
   const [path, setPath] = useState('');
+  const [nodeType, setNodeType] = useState('PARAGRAPH');
+  const [startLine, setStartLine] = useState<number>(1);
+  const [endLine, setEndLine] = useState<number>(1);
   const [verbatimText, setVerbatimText] = useState('');
   const [contextualizedText, setContextualizedText] = useState('');
   const [metadataJson, setMetadataJson] = useState('{}');
@@ -27,6 +30,13 @@ export const SurgicalEditorDrawer: React.FC<SurgicalEditorDrawerProps> = ({
   useEffect(() => {
     if (selectedNode) {
       setPath(selectedNode.path || '');
+      setNodeType(
+        selectedNode.node_type ||
+        (selectedNode.metadata?.node_type as string) ||
+        'PARAGRAPH'
+      );
+      setStartLine(selectedNode.start_line || 1);
+      setEndLine(selectedNode.end_line || 1);
       setVerbatimText(selectedNode.verbatim_text || '');
       setContextualizedText(selectedNode.contextualized_text || '');
       setMetadataJson(
@@ -44,6 +54,11 @@ export const SurgicalEditorDrawer: React.FC<SurgicalEditorDrawerProps> = ({
     setError(null);
     setSuccess(false);
 
+    if (startLine < 1 || endLine < startLine) {
+      setError('Tọa độ dòng không hợp lệ: start_line phải >= 1 và end_line phải >= start_line.');
+      return;
+    }
+
     let parsedMeta: Record<string, unknown> = {};
     try {
       if (metadataJson.trim()) {
@@ -56,13 +71,19 @@ export const SurgicalEditorDrawer: React.FC<SurgicalEditorDrawerProps> = ({
 
     setLoading(true);
     try {
+      const isVerbatimChanged = verbatimText.trim() !== (selectedNode.verbatim_text || '').trim();
       const updatedChunk: StagingChunk = {
         path: path.trim(),
+        node_type: nodeType,
         verbatim_text: verbatimText.trim(),
         contextualized_text: contextualizedText.trim(),
-        start_line: selectedNode.start_line,
-        end_line: selectedNode.end_line,
-        metadata: parsedMeta,
+        start_line: startLine,
+        end_line: endLine,
+        review_status: isVerbatimChanged ? 'PENDING' : selectedNode.review_status,
+        metadata: {
+          ...parsedMeta,
+          node_type: nodeType,
+        },
       };
 
       const ok = await onSaveChunk(updatedChunk);
@@ -90,7 +111,7 @@ export const SurgicalEditorDrawer: React.FC<SurgicalEditorDrawerProps> = ({
               Hiệu Chỉnh Phẫu Thuật Chunk (Surgical Editor)
             </h3>
             <p className="text-[11px] text-slate-400">
-              Chỉnh sửa trực tiếp text nguyên văn, ngữ cảnh đầy đủ, và siêu dữ liệu
+              Chỉnh sửa trực tiếp text nguyên văn, ngữ cảnh đầy đủ, tọa độ dòng và siêu dữ liệu
             </p>
           </div>
         </div>
@@ -117,24 +138,75 @@ export const SurgicalEditorDrawer: React.FC<SurgicalEditorDrawerProps> = ({
 
       {/* Form Content */}
       <form onSubmit={handleSave} className="flex-1 overflow-y-auto p-6 space-y-5">
-        {/* LTree Path */}
-        <div>
-          <label className="block text-xs font-semibold text-slate-300 mb-1">
-            Đường Dẫn LTree (Path)
-          </label>
-          <input
-            type="text"
-            value={path}
-            onChange={(e) => setPath(e.target.value)}
-            className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-xs font-mono text-slate-100 focus:border-brand-500 focus:outline-none"
-            required
-          />
+        {/* LTree Path and Node Type */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs font-semibold text-slate-300 mb-1">
+              Đường Dẫn LTree (Path)
+            </label>
+            <input
+              type="text"
+              value={path}
+              readOnly
+              disabled
+              className="w-full rounded-md border border-slate-800 bg-slate-900/60 px-3 py-2 text-xs font-mono text-slate-400 cursor-not-allowed focus:outline-none"
+              required
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-300 mb-1">
+              Loại Mục AST (Node Type)
+            </label>
+            <select
+              value={nodeType}
+              onChange={(e) => setNodeType(e.target.value)}
+              className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-xs font-semibold text-slate-100 focus:border-brand-500 focus:outline-none"
+            >
+              <option value="SECTION">SECTION (Tiêu đề mục)</option>
+              <option value="PARAGRAPH">PARAGRAPH (Đoạn văn)</option>
+              <option value="TABLE">TABLE (Bảng biểu)</option>
+              <option value="CODE">CODE (Khối mã lệnh)</option>
+              <option value="LIST">LIST (Danh sách)</option>
+            </select>
+          </div>
+        </div>
+
+        {/* Start Line and End Line */}
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs font-semibold text-slate-300 mb-1">
+              Dòng Bắt Đầu (Start Line)
+            </label>
+            <input
+              type="number"
+              min={1}
+              value={startLine}
+              onChange={(e) => setStartLine(parseInt(e.target.value, 10) || 1)}
+              className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-xs font-mono text-slate-100 focus:border-brand-500 focus:outline-none"
+              required
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-300 mb-1">
+              Dòng Kết Thúc (End Line)
+            </label>
+            <input
+              type="number"
+              min={1}
+              value={endLine}
+              onChange={(e) => setEndLine(parseInt(e.target.value, 10) || 1)}
+              className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-xs font-mono text-slate-100 focus:border-brand-500 focus:outline-none"
+              required
+            />
+          </div>
         </div>
 
         {/* Verbatim Text */}
         <div>
           <label className="block text-xs font-semibold text-slate-300 mb-1">
-            Văn Bản Nguyên Văn (Verbatim Text)
+            Nội Dung Nguyên Văn (Verbatim Text)
           </label>
           <textarea
             rows={6}
@@ -153,7 +225,11 @@ export const SurgicalEditorDrawer: React.FC<SurgicalEditorDrawerProps> = ({
             </label>
             <button
               type="button"
-              onClick={() => setContextualizedText(verbatimText)}
+              onClick={() => {
+                const match = contextualizedText.match(/^(\[[^\]]+\]\n?)/);
+                const prefix = match ? (match[1].endsWith('\n') ? match[1] : `${match[1]}\n`) : '';
+                setContextualizedText(`${prefix}${verbatimText}`);
+              }}
               className="text-[11px] text-brand-400 hover:underline flex items-center gap-1"
             >
               <Sparkles className="h-3 w-3" />

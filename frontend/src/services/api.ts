@@ -11,9 +11,18 @@ import {
   PromotionResultResponse,
   RawTextResponse,
   CorpusDocument,
+  ReparentSubtreePayload,
+  ReparentSubtreeResponse,
+  ReplayVerificationResponse,
   SearchPayload,
   SearchResponse,
   StatusTransitionPayload,
+  WALRecord,
+  RelationTypeCatalogItem,
+  GraphTraversePayload,
+  GraphTraversalStep,
+  CorpusGrepPayload,
+  CorpusGrepResponse,
 } from '../types/api';
 import { SessionDiffResponse } from '../types/diff';
 import { PreFlightValidationResponse } from '../types/preflight';
@@ -93,6 +102,44 @@ class ApiClient {
       method: 'POST',
       body: JSON.stringify(payload),
     });
+  }
+
+  async uploadDocumentFile(
+    formData: FormData
+  ): Promise<StagingDocumentSession> {
+    const url = `${API_BASE}/staging/upload`;
+    const response = await fetch(url, {
+      method: 'POST',
+      body: formData,
+      headers: {
+        Accept: 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      let errorMessage = `API Error ${response.status}: ${response.statusText}`;
+      try {
+        const errorJson = (await response.json()) as {
+          error?: { message?: string; code?: number };
+          detail?: string | { message?: string };
+        };
+        if (errorJson.error?.message) {
+          errorMessage = errorJson.error.message;
+        } else if (typeof errorJson.detail === 'string') {
+          errorMessage = errorJson.detail;
+        } else if (
+          typeof errorJson.detail === 'object' &&
+          errorJson.detail?.message
+        ) {
+          errorMessage = errorJson.detail.message;
+        }
+      } catch {
+        // Fallback to response.statusText
+      }
+      throw new Error(errorMessage);
+    }
+
+    return response.json() as Promise<StagingDocumentSession>;
   }
 
   async deleteSession(docSlug: string): Promise<GenericSuccessResponse> {
@@ -230,6 +277,57 @@ class ApiClient {
     );
   }
 
+  async reopenSession(
+    docSlug: string,
+    reason = 'User reopened session for amendment'
+  ): Promise<StagingDocumentSession> {
+    return this.request<StagingDocumentSession>(
+      `/staging/${encodeURIComponent(docSlug)}/reopen`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ actor: 'HUMAN:reviewer', reason }),
+      }
+    );
+  }
+
+  // 7b. Subtree Reparenting
+  async reparentSubtree(
+    docSlug: string,
+    payload: ReparentSubtreePayload
+  ): Promise<ReparentSubtreeResponse> {
+    return this.request<ReparentSubtreeResponse>(
+      `/staging/${encodeURIComponent(docSlug)}/reparent`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          dry_run: false,
+          actor: 'HUMAN:reviewer',
+          ...payload,
+        }),
+      }
+    );
+  }
+
+  // 7c. Write-Ahead Log Journal & Replay
+  async getWalJournal(docSlug: string): Promise<WALRecord[]> {
+    return this.request<WALRecord[]>(
+      `/staging/${encodeURIComponent(docSlug)}/wal`
+    );
+  }
+
+  async replaySession(
+    docSlug: string,
+    upToLsn?: number
+  ): Promise<ReplayVerificationResponse> {
+    const query = upToLsn !== undefined ? `?up_to_lsn=${upToLsn}` : '';
+    return this.request<ReplayVerificationResponse>(
+      `/staging/${encodeURIComponent(docSlug)}/replay${query}`,
+      {
+        method: 'POST',
+      }
+    );
+  }
+
   // 8. Retrieval against the promoted corpus
   async search(payload: SearchPayload): Promise<SearchResponse> {
     return this.request<SearchResponse>('/search', {
@@ -242,6 +340,88 @@ class ApiClient {
   async documents(): Promise<CorpusDocument[]> {
     return this.request<CorpusDocument[]>('/documents');
   }
+
+  // 10. In-Memory Grep
+  async grepSession(
+    docSlug: string,
+    payload: {
+      pattern: string;
+      is_regex?: boolean;
+      case_sensitive?: boolean;
+      search_in?: string;
+      limit?: number;
+    }
+  ): Promise<{
+    doc_slug: string;
+    pattern: string;
+    total_hits: number;
+    hits: Array<{
+      path: string;
+      field_matched: string;
+      match_snippet: string;
+      verbatim_text: string;
+      contextualized_text: string;
+      char_length: number;
+      metadata?: Record<string, unknown>;
+    }>;
+  }> {
+    return this.request(
+      `/staging/${encodeURIComponent(docSlug)}/grep`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }
+    );
+  }
+
+  // 11. Cross-Document Unresolved References Backlog
+  async getUnresolvedBacklog(
+    docSlug: string,
+    limit = 50
+  ): Promise<{
+    doc_slug: string | null;
+    total_unresolved: number;
+    items: Array<{
+      chunk_id: string;
+      source_path: string;
+      doc_slug: string;
+      doc_title: string;
+      target_path: string;
+      context_type: string;
+    }>;
+  }> {
+    return this.request(
+      `/staging/${encodeURIComponent(docSlug)}/backlog?limit=${limit}`
+    );
+  }
+
+  // 12. Relation Types Catalog
+  async getRelations(): Promise<RelationTypeCatalogItem[]> {
+    return this.request<RelationTypeCatalogItem[]>('/relations');
+  }
+
+  // 13. Knowledge Graph Traversal
+  async traverseGraph(
+    docSlug: string,
+    payload: GraphTraversePayload
+  ): Promise<GraphTraversalStep[]> {
+    return this.request<GraphTraversalStep[]>(
+      `/staging/${encodeURIComponent(docSlug)}/graph/traverse`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }
+    );
+  }
+
+  // 14. Corpus-wide Exact / Trigram Verbatim Grep
+  async grepCorpus(payload: CorpusGrepPayload): Promise<CorpusGrepResponse> {
+    return this.request<CorpusGrepResponse>('/corpus/grep', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
 }
 
 export const api = new ApiClient();
+

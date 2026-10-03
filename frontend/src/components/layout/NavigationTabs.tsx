@@ -60,7 +60,7 @@ export const NavigationTabs: React.FC<NavigationTabsProps> = ({
     },
     {
       id: 'checklist' as TabId,
-      label: 'Thẩm Định Toàn Vẹn',
+      label: 'Kiểm Tra Toàn Vẹn',
       icon: CheckSquare,
       badge: issuesCount > 0 ? `${issuesCount} lỗi` : 'Đạt ✔',
       badgeColor:

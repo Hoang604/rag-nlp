@@ -38,8 +38,6 @@ class GenesisSnapshot(BaseModel):
 
     doc_slug: str = Field(..., description="Unique document slug identifier")
     title: str = Field(..., description="Document title")
-    valid_from: datetime.date | None = Field(None, description="Valid from date")
-    valid_to: datetime.date | None = Field(None, description="Valid to date")
     raw_text: str = Field(..., description="Full raw source text")
     metadata: dict[str, object] = Field(default_factory=dict, description="Document metadata")
     initial_chunks: list[dict[str, object]] = Field(
@@ -60,8 +58,6 @@ class GenesisSnapshot(BaseModel):
         doc_slug: str,
         title: str,
         raw_text: str,
-        valid_from: datetime.date | None = None,
-        valid_to: datetime.date | None = None,
         metadata: dict[str, object] | None = None,
         initial_chunks: list[dict[str, object]] | None = None,
         initial_edges: list[dict[str, object]] | None = None,
@@ -81,8 +77,6 @@ class GenesisSnapshot(BaseModel):
         return cls(
             doc_slug=doc_slug,
             title=title,
-            valid_from=valid_from,
-            valid_to=valid_to,
             raw_text=raw_text,
             metadata=meta_dict,
             initial_chunks=chunks_list,
@@ -130,8 +124,8 @@ class WALSessionStore:
         self.state_file = self.session_dir / "state.json"
 
     def exists(self) -> bool:
-        """Returns True if both genesis.json and wal.jsonl exist."""
-        return self.genesis_file.exists() and self.wal_file.exists()
+        """Returns True if session directory already contains initialized genesis or wal."""
+        return self.genesis_file.exists() or self.wal_file.exists()
 
     def init_genesis(
         self,
@@ -140,67 +134,74 @@ class WALSessionStore:
         """Initializes session directory, writes immutable genesis.json, LSN 0 in wal.jsonl, and initial state.json."""
         self.session_dir.mkdir(parents=True, exist_ok=True)
 
-        genesis_json = genesis.model_dump_json(indent=2)
-        tmp_genesis = self.session_dir / f"genesis.json.tmp.{os.getpid()}"
-        with open(tmp_genesis, "w", encoding="utf-8") as f:
-            f.write(genesis_json)
-            f.flush()
-            os.fsync(f.fileno())
-        tmp_genesis.replace(self.genesis_file)
+        with self._lock_session():
+            if self.exists():
+                raise CorpusDomainError(
+                    error_code=E_CORPUS_INTEGRITY_VIOLATION,
+                    message=f"Staging session already exists for '{genesis.doc_slug}' at {self.session_dir}.",
+                    data={"doc_slug": genesis.doc_slug, "session_dir": str(self.session_dir)},
+                )
 
-        rec_0_payload = {
-            "doc_slug": genesis.doc_slug,
-            "chunks_count": len(genesis.initial_chunks),
-            "edges_count": len(genesis.initial_edges),
-            "genesis_hash": genesis.genesis_hash,
-        }
-        rec_0 = WALRecord(
-            lsn=0,
-            timestamp=genesis.created_at,
-            actor="SYSTEM",
-            op_type="GENESIS",
-            description=f"Initialized genesis baseline for '{genesis.doc_slug}' with {len(genesis.initial_chunks)} chunks.",
-            payload=rec_0_payload,
-            checksum=compute_payload_checksum(rec_0_payload),
-        )
+            genesis_json = genesis.model_dump_json(indent=2)
+            tmp_genesis = self.session_dir / f"genesis.json.tmp.{os.getpid()}"
+            with open(tmp_genesis, "w", encoding="utf-8") as f:
+                f.write(genesis_json)
+                f.flush()
+                os.fsync(f.fileno())
+            tmp_genesis.replace(self.genesis_file)
 
-        tmp_wal = self.session_dir / f"wal.jsonl.tmp.{os.getpid()}"
-        with open(tmp_wal, "w", encoding="utf-8") as f:
-            f.write(rec_0.model_dump_json() + "\n")
-            f.flush()
-            os.fsync(f.fileno())
-        tmp_wal.replace(self.wal_file)
+            rec_0_payload = {
+                "doc_slug": genesis.doc_slug,
+                "chunks_count": len(genesis.initial_chunks),
+                "edges_count": len(genesis.initial_edges),
+                "genesis_hash": genesis.genesis_hash,
+            }
+            rec_0 = WALRecord(
+                lsn=0,
+                timestamp=genesis.created_at,
+                actor="SYSTEM",
+                op_type="GENESIS",
+                description=f"Initialized genesis baseline for '{genesis.doc_slug}' with {len(genesis.initial_chunks)} chunks.",
+                payload=rec_0_payload,
+                checksum=compute_payload_checksum(rec_0_payload),
+            )
 
-        chunks = [StagingChunk.model_validate(c) for c in genesis.initial_chunks]
-        edges = [StagingEdge.model_validate(e) for e in genesis.initial_edges]
-        mutation_0 = StagingMutationRecord(
-            actor=rec_0.actor,
-            action_type=rec_0.op_type,
-            description=rec_0.description,
-            timestamp=rec_0.timestamp,
-            diff_payload={"lsn": 0, **rec_0_payload},
-        )
+            tmp_wal = self.session_dir / f"wal.jsonl.tmp.{os.getpid()}"
+            with open(tmp_wal, "w", encoding="utf-8") as f:
+                f.write(rec_0.model_dump_json() + "\n")
+                f.flush()
+                os.fsync(f.fileno())
+            tmp_wal.replace(self.wal_file)
 
-        session = StagingDocumentSession(
-            doc_slug=genesis.doc_slug,
-            title=genesis.title,
-            status=StagingStatus.DRAFT,
-            valid_from=genesis.valid_from,
-            valid_to=genesis.valid_to,
-            created_at=genesis.created_at,
-            updated_at=genesis.created_at,
-            committed_at=None,
-            promoted_at=None,
-            raw_text=genesis.raw_text,
-            metadata=genesis.metadata,
-            chunks=chunks,
-            edges=edges,
-            raw_ast_snapshot=genesis.initial_chunks,
-            mutation_history=[mutation_0],
-        )
+            chunks = [StagingChunk.model_validate(c) for c in genesis.initial_chunks]
+            edges = [StagingEdge.model_validate(e) for e in genesis.initial_edges]
+            mutation_0 = StagingMutationRecord(
+                actor=rec_0.actor,
+                action_type=rec_0.op_type,
+                description=rec_0.description,
+                timestamp=rec_0.timestamp,
+                diff_payload={"lsn": 0, **rec_0_payload},
+            )
 
-        self.save_checkpoint(session)
-        return rec_0, session
+            session = StagingDocumentSession(
+                doc_slug=genesis.doc_slug,
+                title=genesis.title,
+                status=StagingStatus.DRAFT,
+                created_at=genesis.created_at,
+                updated_at=genesis.created_at,
+                committed_at=None,
+                promoted_at=None,
+                raw_text=genesis.raw_text,
+                metadata=genesis.metadata,
+                chunks=chunks,
+                edges=edges,
+                raw_ast_snapshot=genesis.initial_chunks,
+                raw_edge_snapshot=genesis.initial_edges,
+                mutation_history=[mutation_0],
+            )
+
+            self.save_checkpoint(session)
+            return rec_0, session
 
     @contextmanager
     def _lock_session(self) -> Generator[None]:
@@ -215,7 +216,7 @@ class WALSessionStore:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
     def get_head_lsn(self) -> int:
-        """Returns the highest LSN written in wal.jsonl in O(1) time, or -1 if empty."""
+        """Returns the highest LSN written in wal.jsonl in O(1) amortized time, or -1 if empty."""
         if not self.wal_file.exists():
             return -1
 
@@ -223,31 +224,42 @@ class WALSessionStore:
         if file_size == 0:
             return -1
 
-        read_size = min(4096, file_size)
+        buffer = b""
+        block_size = 4096
+        read_pos = file_size
+
         with open(self.wal_file, "rb") as f:
-            f.seek(file_size - read_size)
-            chunk = f.read(read_size)
+            while read_pos > 0:
+                to_read = min(block_size, read_pos)
+                read_pos -= to_read
+                f.seek(read_pos)
+                chunk = f.read(to_read)
+                buffer = chunk + buffer
 
-        lines = chunk.splitlines()
-        last_line = ""
-        for line in reversed(lines):
-            stripped = line.strip().decode("utf-8", errors="replace")
-            if stripped:
-                last_line = stripped
-                break
+                trimmed = buffer.rstrip(b"\r\n")
+                if not trimmed:
+                    continue
 
-        if not last_line:
-            return -1
+                newline_idx = trimmed.rfind(b"\n")
+                if newline_idx != -1:
+                    last_line_bytes = trimmed[newline_idx + 1 :]
+                    try:
+                        data = json.loads(last_line_bytes.decode("utf-8"))
+                        return int(data.get("lsn", -1))
+                    except (json.JSONDecodeError, ValueError, TypeError):
+                        pass
+                elif read_pos == 0:
+                    try:
+                        data = json.loads(trimmed.decode("utf-8"))
+                        return int(data.get("lsn", -1))
+                    except (json.JSONDecodeError, ValueError, TypeError) as exc:
+                        raise CorpusDomainError(
+                            error_code=E_CORPUS_INTEGRITY_VIOLATION,
+                            message=f"Corrupted trailing WAL line in {self.wal_file}",
+                            data={"session_dir": str(self.session_dir)},
+                        ) from exc
 
-        try:
-            data = json.loads(last_line)
-            return int(data.get("lsn", -1))
-        except (json.JSONDecodeError, ValueError, TypeError):
-            raise CorpusDomainError(
-                error_code=E_CORPUS_INTEGRITY_VIOLATION,
-                message=f"Corrupted trailing WAL line in {self.wal_file}",
-                data={"session_dir": str(self.session_dir)},
-            )
+        return -1
 
     def append_record(
         self,
@@ -382,8 +394,6 @@ class WALSessionStore:
             doc_slug=genesis.doc_slug,
             title=genesis.title,
             status=StagingStatus.DRAFT,
-            valid_from=genesis.valid_from,
-            valid_to=genesis.valid_to,
             created_at=genesis.created_at,
             updated_at=genesis.created_at,
             committed_at=None,
@@ -525,6 +535,10 @@ class WALSessionStore:
             if "amendment_baseline_snapshot" in record.payload:
                 session.metadata["amendment_baseline_snapshot"] = record.payload[
                     "amendment_baseline_snapshot"
+                ]
+            if "amendment_baseline_edges_snapshot" in record.payload:
+                session.metadata["amendment_baseline_edges_snapshot"] = record.payload[
+                    "amendment_baseline_edges_snapshot"
                 ]
             session.mutation_history.append(
                 StagingMutationRecord(

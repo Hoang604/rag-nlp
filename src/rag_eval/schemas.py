@@ -30,10 +30,17 @@ _LTREE_LABEL_REGEX: Final = re.compile(r"^[A-Za-z0-9_]{1,255}$")
 LTREE_PATH_REGEX: Final = re.compile(r"^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)*$")
 
 
+import unicodedata
+
+
 def sanitize_ltree_label(raw: str) -> str:
-    """Chuẩn hóa chuỗi nhãn phân cấp cho ltree (chỉ chữ, số, dấu gạch dưới)."""
-    cleaned = re.sub(r"[^A-Za-z0-9_]+", "_", raw).strip("_").lower()
-    return cleaned or "node"
+    """Chuẩn hóa chuỗi nhãn phân cấp cho ltree (chỉ chữ, số, dấu gạch dưới, tối đa 250 ký tự)."""
+    text = raw.replace("đ", "d").replace("Đ", "D")
+    decomposed = unicodedata.normalize("NFKD", text)
+    stripped = "".join(c for c in decomposed if not unicodedata.combining(c))
+    cleaned = re.sub(r"[^A-Za-z0-9_]+", "_", stripped).strip("_").lower()
+    bounded = cleaned[:250].strip("_")
+    return bounded or "node"
 
 
 def validate_ltree_path(path: str) -> str:
@@ -84,30 +91,21 @@ def parse_flexible_date(value: object) -> datetime.date:
 
 
 class DocumentEntity(BaseModel):
-    """Thực thể văn bản - Bảng `documents` (002_documents.sql)."""
+    """Thực thể tài liệu - Bảng `documents` (002_documents.sql)."""
 
     model_config = ConfigDict(extra="forbid")
 
-    id: UUID = Field(default_factory=uuid.uuid4, description="Khóa chính định danh văn bản")
-    doc_slug: str = Field(..., description="Mã định danh duy nhất (slug) của văn bản")
-    title: str = Field(..., description="Tiêu đề chính thức của văn bản")
+    id: UUID = Field(default_factory=uuid.uuid4, description="Khóa chính định danh tài liệu")
+    doc_slug: str = Field(..., description="Mã định danh duy nhất (slug) của tài liệu")
+    title: str = Field(..., description="Tiêu đề chính thức của tài liệu")
     raw_text: str | None = Field(default=None, description="Toàn văn thô của tài liệu gốc")
-    valid_from: datetime.date | None = Field(default=None, description="Ngày bắt đầu có hiệu lực")
-    valid_to: datetime.date | None = Field(default=None, description="Ngày hết hiệu lực (nếu có)")
     metadata: dict[str, object] = Field(default_factory=dict, description="Siêu dữ liệu mở rộng dạng JSONB")
     created_at: datetime.datetime | None = Field(default=None, description="Thời điểm khởi tạo")
     updated_at: datetime.datetime | None = Field(default=None, description="Thời điểm cập nhật gần nhất")
 
-    @field_validator("valid_from", "valid_to", mode="before")
-    @classmethod
-    def _validate_dates(cls, v: object) -> datetime.date | None:
-        if v is None:
-            return None
-        return parse_flexible_date(v)
-
 
 class ChunkEntity(BaseModel):
-    """Thực thể chunk văn bản - Bảng `chunks` (003_chunks.sql)."""
+    """Thực thể chunk tài liệu - Bảng `chunks` (003_chunks.sql)."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -116,8 +114,8 @@ class ChunkEntity(BaseModel):
     path: str = Field(..., description="Đường dẫn phân cấp ltree")
     verbatim_text: str = Field(..., description="Nội dung nguyên văn của chunk")
     contextualized_text: str = Field(..., description="Nội dung ngữ cảnh đầy đủ")
-    start_line: int = Field(default=1, ge=1, description="Dòng bắt đầu 1-indexed trong văn bản thô")
-    end_line: int = Field(default=1, ge=1, description="Dòng kết thúc 1-indexed trong văn bản thô")
+    start_line: int = Field(default=1, ge=1, description="Dòng bắt đầu 1-indexed trong tài liệu gốc")
+    end_line: int = Field(default=1, ge=1, description="Dòng kết thúc 1-indexed trong tài liệu gốc")
     context_type: str = Field(
         default="SELF_CONTAINED",
         description="Độ tự thân ngữ cảnh ('SELF_CONTAINED' | 'REQUIRES_EXTERNAL_CONTEXT')",
@@ -160,6 +158,7 @@ class ChunkContextRefEntity(BaseModel):
     char_end: int | None = Field(default=None, description="Vị trí ký tự kết thúc của tham chiếu")
     target_chunk_id: UUID | None = Field(default=None, description="UUID chunk đích cung cấp ngữ cảnh")
     edge_id: UUID | None = Field(default=None, description="UUID cạnh quan hệ graph_edges(id)")
+    target_path: str | None = Field(default=None, description="Đường dẫn đích chưa giải quyết (nếu là liên kết ngoại)")
     is_attached: bool = Field(default=False, description="Cờ trạng thái đã gắn kết đích thành công")
     created_at: datetime.datetime | None = Field(default=None, description="Thời điểm khởi tạo")
 
@@ -170,15 +169,13 @@ class ChunkContextRefEntity(BaseModel):
 
 
 class DocumentStatsDTO(BaseModel):
-    """Thống kê văn bản kèm số lượng chunk - Query `list_with_stats`."""
+    """Thống kê tài liệu kèm số lượng chunk - Query `list_with_stats`."""
 
     model_config = ConfigDict(extra="ignore")
 
     id: UUID
     doc_slug: str
     title: str
-    valid_from: datetime.date | None = None
-    valid_to: datetime.date | None = None
     metadata: dict[str, object] = Field(default_factory=dict)
     chunk_count: int = 0
 
@@ -264,7 +261,7 @@ class SearchHitDTO(BaseModel):
 
 
 class HierarchyNodeDTO(BaseModel):
-    """Nút điều hướng cây phân cấp từ truy vấn `navigate_hierarchy`."""
+    """Nút duyệt cây phân cấp từ truy vấn `navigate_hierarchy`."""
 
     model_config = ConfigDict(extra="ignore")
 
@@ -320,6 +317,7 @@ class UnresolvedRefBacklogDTO(BaseModel):
     char_end: int | None = None
     target_chunk_id: UUID | None = None
     edge_id: UUID | None = None
+    target_path: str | None = None
 
     metadata: dict[str, object] = Field(default_factory=dict)
 

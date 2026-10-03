@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import {
+  Compass,
   Filter,
   Grid,
   Layers,
@@ -12,6 +13,7 @@ import { StagingDocumentSession, StagingEdge } from '../../types/staging';
 import { EdgeCardList } from './EdgeCardList';
 import { EdgeEditorModal } from './EdgeEditorModal';
 import { GraphCanvas } from './GraphCanvas';
+import { GraphTraversalModal } from './GraphTraversalModal';
 
 interface VisualGraphInspectorProps {
   session: StagingDocumentSession;
@@ -30,6 +32,7 @@ export const VisualGraphInspector: React.FC<VisualGraphInspectorProps> = ({
   const [filterRelation, setFilterRelation] = useState<string>('');
   const [searchPath, setSearchPath] = useState<string>('');
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
+  const [isTraversalOpen, setIsTraversalOpen] = useState<boolean>(false);
 
   const filteredEdges = useMemo(() => {
     return session.edges.filter((e) => {
@@ -104,6 +107,17 @@ export const VisualGraphInspector: React.FC<VisualGraphInspectorProps> = ({
             </button>
           </div>
 
+          {/* Multi-Hop Traversal Button */}
+          <button
+            type="button"
+            onClick={() => setIsTraversalOpen(true)}
+            className="flex items-center gap-1.5 rounded-lg border border-indigo-700 bg-indigo-950 px-3 py-1.5 text-xs font-semibold text-indigo-300 shadow hover:bg-indigo-900 transition"
+            title="Duyệt đồ thị đa tầng (Stored Proc)"
+          >
+            <Compass className="h-4 w-4" />
+            <span>Duyệt Đa Tầng</span>
+          </button>
+
           {/* Add Edge Button */}
           <button
             type="button"
@@ -138,14 +152,14 @@ export const VisualGraphInspector: React.FC<VisualGraphInspectorProps> = ({
               className="rounded-md border border-slate-700 bg-slate-950 px-3 py-1.5 text-xs text-slate-100 focus:border-blue-500 focus:outline-none"
             >
               <option value="">Tất cả loại quan hệ</option>
-              <option value="REFERENCES">Tham chiếu / Dẫn nguồn (REFERENCES)</option>
-              <option value="SUPPORTS">Bổ trợ / Củng cố luận điểm (SUPPORTS)</option>
-              <option value="CONTRADICTS">Mâu thuẫn / Phản bác (CONTRADICTS)</option>
+              <option value="REFERENCES">Tham chiếu thông tin (REFERENCES)</option>
+              <option value="SUPPORTS">Bổ trợ / Củng cố ngữ cảnh (SUPPORTS)</option>
+              <option value="CONTRADICTS">Mâu thuẫn / Xung đột thông tin (CONTRADICTS)</option>
               <option value="DEFINES">Định nghĩa / Khái niệm (DEFINES)</option>
               <option value="EXTENDS">Mở rộng / Phát triển thêm (EXTENDS)</option>
               <option value="EXEMPLIFIES">Ví dụ minh họa (EXEMPLIFIES)</option>
-              <option value="DEPENDS_ON">Phụ thuộc điều kiện (DEPENDS_ON)</option>
-              <option value="SUPERSEDES">Thay thế / Bãi bỏ (SUPERSEDES)</option>
+              <option value="DEPENDS_ON">Phụ thuộc tiên quyết (DEPENDS_ON)</option>
+              <option value="SUPERSEDES">Thay thế / Làm lỗi thời (SUPERSEDES)</option>
               <option value="SEE_ALSO">Tham khảo thêm (SEE_ALSO)</option>
             </select>
           </div>
@@ -172,6 +186,15 @@ export const VisualGraphInspector: React.FC<VisualGraphInspectorProps> = ({
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
         onAddEdge={onAddEdge}
+      />
+
+      {/* Multi-Hop Traversal Modal */}
+      <GraphTraversalModal
+        isOpen={isTraversalOpen}
+        onClose={() => setIsTraversalOpen(false)}
+        docSlug={session.doc_slug}
+        initialSourcePath={session.chunks[0]?.path || ''}
+        onSelectNode={onSelectNode}
       />
     </div>
   );

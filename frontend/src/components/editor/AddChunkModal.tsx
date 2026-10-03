@@ -16,6 +16,9 @@ export const AddChunkModal: React.FC<AddChunkModalProps> = ({
   parentPath = '',
 }) => {
   const [path, setPath] = useState(parentPath ? `${parentPath}.` : '');
+  const [nodeType, setNodeType] = useState('PARAGRAPH');
+  const [startLine, setStartLine] = useState<number>(1);
+  const [endLine, setEndLine] = useState<number>(1);
   const [verbatimText, setVerbatimText] = useState('');
   const [contextualizedText, setContextualizedText] = useState('');
   const [loading, setLoading] = useState(false);
@@ -23,23 +26,46 @@ export const AddChunkModal: React.FC<AddChunkModalProps> = ({
 
   if (!isOpen) return null;
 
+  // Helper to synthesize hierarchical lineage breadcrumb chain
+  const getBreadcrumbPrefix = (p: string) => {
+    if (!p) return '';
+    const parts = p.split('.').filter(Boolean);
+    if (parts.length <= 1) return '';
+    const ancestors = parts.slice(0, -1);
+    return `[${ancestors.join(' > ')}]`;
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!path.trim() || !verbatimText.trim()) {
       setError('Vui lòng nhập đường dẫn path và nội dung nguyên văn.');
       return;
     }
+    if (startLine < 1 || endLine < startLine) {
+      setError('Tọa độ dòng không hợp lệ: start_line phải >= 1 và end_line phải >= start_line.');
+      return;
+    }
 
     setLoading(true);
     setError(null);
     try {
+      const prefix = getBreadcrumbPrefix(path.trim());
+      const synthesizedContext =
+        contextualizedText.trim() ||
+        (prefix ? `${prefix}\n${verbatimText.trim()}` : verbatimText.trim());
+
       const newChunk: StagingChunk = {
         path: path.trim(),
+        node_type: nodeType,
         verbatim_text: verbatimText.trim(),
-        contextualized_text: contextualizedText.trim() || verbatimText.trim(),
-        start_line: 1,
-        end_line: 1,
-        metadata: {},
+        contextualized_text: synthesizedContext,
+        start_line: startLine,
+        end_line: endLine,
+        review_status: 'PENDING',
+        finalization_state: 'UNFINALIZED',
+        metadata: {
+          node_type: nodeType,
+        },
       };
       const ok = await onAdd(newChunk);
       if (ok) {
@@ -77,23 +103,72 @@ export const AddChunkModal: React.FC<AddChunkModalProps> = ({
         )}
 
         <form onSubmit={handleSubmit} className="mt-4 space-y-4">
-          <div>
-            <label className="block text-xs font-semibold text-slate-300 mb-1">
-              Đường Dẫn LTree (Path) <span className="text-rose-400">*</span>
-            </label>
-            <input
-              type="text"
-              value={path}
-              onChange={(e) => setPath(e.target.value)}
-              placeholder="ví dụ: doc_slug.c_1.s_1.a_1"
-              className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-xs font-mono text-slate-100 focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
-              required
-            />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-slate-300 mb-1">
+                Đường Dẫn LTree (Path) <span className="text-rose-400">*</span>
+              </label>
+              <input
+                type="text"
+                value={path}
+                onChange={(e) => setPath(e.target.value)}
+                placeholder="ví dụ: doc_slug.section_1.sub_1.node_1"
+                className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-xs font-mono text-slate-100 focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-300 mb-1">
+                Loại Mục AST (Node Type)
+              </label>
+              <select
+                value={nodeType}
+                onChange={(e) => setNodeType(e.target.value)}
+                className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-xs font-semibold text-slate-100 focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+              >
+                <option value="SECTION">SECTION (Tiêu đề mục)</option>
+                <option value="PARAGRAPH">PARAGRAPH (Đoạn văn)</option>
+                <option value="TABLE">TABLE (Bảng biểu)</option>
+                <option value="CODE">CODE (Khối mã lệnh)</option>
+                <option value="LIST">LIST (Danh sách)</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-slate-300 mb-1">
+                Dòng Bắt Đầu (Start Line) <span className="text-rose-400">*</span>
+              </label>
+              <input
+                type="number"
+                min={1}
+                value={startLine}
+                onChange={(e) => setStartLine(parseInt(e.target.value, 10) || 1)}
+                className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-xs font-mono text-slate-100 focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-300 mb-1">
+                Dòng Kết Thúc (End Line) <span className="text-rose-400">*</span>
+              </label>
+              <input
+                type="number"
+                min={1}
+                value={endLine}
+                onChange={(e) => setEndLine(parseInt(e.target.value, 10) || 1)}
+                className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-xs font-mono text-slate-100 focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+                required
+              />
+            </div>
           </div>
 
           <div>
             <label className="block text-xs font-semibold text-slate-300 mb-1">
-              Văn Bản Nguyên Văn (Verbatim Text) <span className="text-rose-400">*</span>
+              Nội Dung Nguyên Văn (Verbatim Text) <span className="text-rose-400">*</span>
             </label>
             <textarea
               rows={4}

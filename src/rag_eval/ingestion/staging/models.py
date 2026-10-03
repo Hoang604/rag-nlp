@@ -85,7 +85,7 @@ class StagingChunkDelta(BaseModel):
     )
     verbatim_text: str | None = Field(
         None,
-        description="Nội dung văn bản nguyên văn mới của chunk.",
+        description="Nội dung nguyên văn mới của chunk.",
     )
     contextualized_text: str | None = Field(
         None,
@@ -94,12 +94,12 @@ class StagingChunkDelta(BaseModel):
     start_line: int | None = Field(
         None,
         ge=1,
-        description="Số dòng bắt đầu trong văn bản nguồn tính từ 1.",
+        description="Số dòng bắt đầu trong tài liệu nguồn tính từ 1.",
     )
     end_line: int | None = Field(
         None,
         ge=1,
-        description="Số dòng kết thúc trong văn bản nguồn tính từ 1.",
+        description="Số dòng kết thúc trong tài liệu nguồn tính từ 1.",
     )
     metadata: dict[str, object] | None = Field(
         None,
@@ -180,8 +180,6 @@ class StagingSessionSummary(BaseModel):
     status: StagingStatus = Field(..., description="Current staging status")
     total_chunks: int = Field(..., description="Total count of staged chunks")
     total_edges: int = Field(..., description="Total count of staged edges")
-    valid_from: datetime.date | None = Field(None, description="Valid from date")
-    valid_to: datetime.date | None = Field(None, description="Valid to date")
     created_at: datetime.datetime = Field(..., description="Session creation timestamp")
     updated_at: datetime.datetime = Field(..., description="Session last updated timestamp")
     committed_at: datetime.datetime | None = Field(None, description="Session commit timestamp")
@@ -221,6 +219,10 @@ class StagingChunk(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     path: str = Field(..., description="Hierarchical dot-separated ltree path")
+    node_type: str = Field(
+        default="PARAGRAPH",
+        description="AST node type ('SECTION' | 'PARAGRAPH' | 'TABLE' | 'LIST' | 'CODE')",
+    )
     verbatim_text: str = Field(..., description="Verbatim chunk text")
     contextualized_text: str = Field(..., description="Synthesized context text")
     start_line: int = Field(default=1, ge=1, description="1-indexed starting line number in source text")
@@ -250,7 +252,7 @@ class StagingEdgeFilter(BaseModel):
 
     source_path: str = Field(
         ...,
-        description="Đường dẫn ltree của đoạn văn bản nguồn, ví dụ: 'doc_slug.sec_1.art_2.p_a'.",
+        description="Đường dẫn ltree của chunk nguồn, ví dụ: 'doc_slug.sec_1.part_2.sub_a'.",
     )
     target_path: str | None = Field(
         None,
@@ -300,7 +302,7 @@ class StagingEdge(BaseModel):
     )
     target_path: str = Field(
         ...,
-        description="Đường dẫn phân cấp ltree của chunk đích trong cùng văn bản hoặc văn bản đã nạp.",
+        description="Đường dẫn phân cấp ltree của chunk đích trong cùng tài liệu hoặc tài liệu đã nạp.",
     )
     relation_type: RelationType = Field(
         default=RelationType.REFERENCES,
@@ -434,7 +436,7 @@ class StgCommitResult(BaseModel):
 class ChunkProgressStats(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    total_chunks: int = Field(..., description="Tổng số chunk trong văn bản")
+    total_chunks: int = Field(..., description="Tổng số chunk trong tài liệu")
     finalized_count: int = Field(..., description="Số chunk đã chốt hoàn tất")
     pending_count: int = Field(..., description="Số chunk còn chờ rà soát")
     progress_percent: float = Field(..., description="Tỷ lệ tiến độ (%)")
@@ -443,7 +445,7 @@ class ChunkProgressStats(BaseModel):
 class StgPollPendingResult(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    doc_slug: str = Field(..., description="Mã định danh slug của văn bản")
+    doc_slug: str = Field(..., description="Mã định danh slug của tài liệu")
     progress: ChunkProgressStats = Field(..., description="Thống kê tiến độ rà soát")
     limit: int = Field(..., description="Giới hạn số chunk trả về trong đợt này")
     has_more: bool = Field(..., description="Còn chunk chưa chốt hay không")
@@ -463,7 +465,7 @@ class ChunkFinalizeStatus(BaseModel):
 class StgFinalizeResult(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    doc_slug: str = Field(..., description="Mã định danh slug của văn bản")
+    doc_slug: str = Field(..., description="Mã định danh slug của tài liệu")
     status: str = Field("SUCCESS", description="Trạng thái thực thi")
     finalized_count: int = Field(..., description="Số lượng chunk vừa được chốt")
     pending_remaining: int = Field(..., description="Số lượng chunk còn lại chưa chốt")
@@ -477,7 +479,7 @@ class StgFinalizeResult(BaseModel):
 class StgReopenResult(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    doc_slug: str = Field(..., description="Mã định danh slug của văn bản")
+    doc_slug: str = Field(..., description="Mã định danh slug của tài liệu")
     status: str = Field("AMENDMENT", description="Trạng thái phiên làm việc sau khi mở lại")
     total_chunks: int = Field(..., description="Tổng số chunk trong phiên làm việc")
     reopened_at: str = Field(..., description="Thời điểm mở lại phiên làm việc (ISO 8601)")
@@ -487,7 +489,7 @@ class StgReopenResult(BaseModel):
 class StgRemoveEdgeResult(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    doc_slug: str = Field(..., description="Mã định danh slug của văn bản")
+    doc_slug: str = Field(..., description="Mã định danh slug của tài liệu")
     status: str = Field("SUCCESS", description="Trạng thái thực thi")
     removed_count: int = Field(default=1, description="Số lượng cạnh quan hệ đã xóa")
     total_edges: int = Field(..., description="Tổng số cạnh quan hệ còn lại")

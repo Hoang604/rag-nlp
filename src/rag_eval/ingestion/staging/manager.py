@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import datetime
 import json
 import logging
 import uuid
@@ -59,23 +58,87 @@ class StagingManager:
         doc_slug: str,
         title: str,
         raw_text: str,
-        valid_from: datetime.date | None = None,
-        valid_to: datetime.date | None = None,
         metadata: dict[str, object] | None = None,
     ) -> StagingDocumentSession:
-        """Initializes WAL directory session from raw text."""
-        stg_chunks: list[StagingChunk] = []
+        """Initializes WAL directory session from raw text using DocumentIngestionEngine."""
+        from rag_eval.ingestion.parser.engine import DocumentIngestionEngine
+
+        engine = DocumentIngestionEngine()
+        stg_chunks, stg_edges, doc_meta = engine.process_raw(
+            doc_slug=doc_slug, title=title, raw_text=raw_text, metadata=metadata
+        )
 
         wal_store = self._get_wal_store(doc_slug)
         genesis = GenesisSnapshot.create(
             doc_slug=doc_slug,
             title=title,
-            valid_from=valid_from,
-            valid_to=valid_to,
             raw_text=raw_text,
-            metadata=metadata or {},
+            metadata=doc_meta,
             initial_chunks=[c.model_dump(mode="json") for c in stg_chunks],
-            initial_edges=[],
+            initial_edges=[e.model_dump(mode="json") for e in stg_edges],
+        )
+
+        _, session = wal_store.init_genesis(genesis)
+        return session
+
+    def create_session_from_file(
+        self,
+        doc_slug: str,
+        title: str,
+        file_path: Path | str,
+        metadata: dict[str, object] | None = None,
+    ) -> StagingDocumentSession:
+        """Initializes WAL directory session from a document file path on disk."""
+        from rag_eval.ingestion.parser.engine import DocumentIngestionEngine
+
+        engine = DocumentIngestionEngine()
+        raw_text, stg_chunks, stg_edges, doc_meta = engine.process_file(
+            doc_slug=doc_slug, title=title, file_path=file_path, metadata=metadata
+        )
+
+        wal_store = self._get_wal_store(doc_slug)
+        genesis = GenesisSnapshot.create(
+            doc_slug=doc_slug,
+            title=title,
+            raw_text=raw_text,
+            metadata=doc_meta,
+            initial_chunks=[c.model_dump(mode="json") for c in stg_chunks],
+            initial_edges=[e.model_dump(mode="json") for e in stg_edges],
+        )
+
+        _, session = wal_store.init_genesis(genesis)
+        return session
+
+    def create_session_from_bytes(
+        self,
+        doc_slug: str,
+        title: str,
+        content: bytes,
+        file_name: str,
+        mime_type: str | None = None,
+        metadata: dict[str, object] | None = None,
+    ) -> StagingDocumentSession:
+        """Initializes WAL directory session from binary file bytes in memory."""
+        from rag_eval.ingestion.parser.engine import DocumentIngestionEngine
+
+        engine = DocumentIngestionEngine()
+        raw_text, stg_chunks, stg_edges, doc_meta = engine.process_bytes(
+            doc_slug=doc_slug,
+            title=title,
+            content=content,
+            file_name=file_name,
+            mime_type=mime_type,
+            metadata=metadata,
+        )
+
+        wal_store = self._get_wal_store(doc_slug)
+        genesis = GenesisSnapshot.create(
+            doc_slug=doc_slug,
+            title=title,
+            raw_text=raw_text,
+            metadata=doc_meta,
+            initial_chunks=[c.model_dump(mode="json") for c in stg_chunks],
+            initial_edges=[e.model_dump(mode="json") for e in stg_edges],
         )
 
         _, session = wal_store.init_genesis(genesis)
@@ -159,6 +222,14 @@ class StagingManager:
                 data={"doc_slug": doc_slug},
             )
 
+        session = wal_store.load_materialized_session()
+        if session.status not in (StagingStatus.DRAFT, StagingStatus.AMENDMENT):
+            raise CorpusDomainError(
+                error_code=E_CORPUS_INTEGRITY_VIOLATION,
+                message=f"Không thể chỉnh sửa phiên staging ở trạng thái '{session.status.value}'. Phiên làm việc phải ở trạng thái DRAFT hoặc AMENDMENT.",
+                data={"doc_slug": doc_slug, "status": session.status.value},
+            )
+
         parsed_deltas: list[StagingChunkDelta] = []
         if updated_chunks:
             for item in updated_chunks:
@@ -206,6 +277,14 @@ class StagingManager:
                 error_code=E_CORPUS_INTEGRITY_VIOLATION,
                 message=f"Staging session for document '{doc_slug}' does not exist at {wal_store.session_dir}",
                 data={"doc_slug": doc_slug},
+            )
+
+        session = wal_store.load_materialized_session()
+        if session.status not in (StagingStatus.DRAFT, StagingStatus.AMENDMENT):
+            raise CorpusDomainError(
+                error_code=E_CORPUS_INTEGRITY_VIOLATION,
+                message=f"Không thể chỉnh sửa phiên staging ở trạng thái '{session.status.value}'. Phiên làm việc phải ở trạng thái DRAFT hoặc AMENDMENT.",
+                data={"doc_slug": doc_slug, "status": session.status.value},
             )
 
         parsed_edges: list[StagingEdge] = []
@@ -349,8 +428,6 @@ class StagingManager:
                         status=session.status,
                         total_chunks=len(session.chunks),
                         total_edges=len(session.edges),
-                        valid_from=session.valid_from,
-                        valid_to=session.valid_to,
                         created_at=session.created_at,
                         updated_at=session.updated_at,
                         committed_at=session.committed_at,
@@ -539,12 +616,15 @@ class StagingManager:
             )
 
         snapshot = [c.model_dump(mode="json") for c in session.chunks]
+        edges_snapshot = [e.model_dump(mode="json") for e in session.edges]
         session.metadata["amendment_baseline_snapshot"] = snapshot
+        session.metadata["amendment_baseline_edges_snapshot"] = edges_snapshot
         payload = {
             "previous_status": session.status.value,
             "new_status": StagingStatus.AMENDMENT.value,
             "reason": reason or "Opened errata / amendment session",
             "amendment_baseline_snapshot": snapshot,
+            "amendment_baseline_edges_snapshot": edges_snapshot,
         }
         _, session = wal_store.append_record(
             actor=actor,
@@ -572,14 +652,12 @@ class StagingManager:
         if not doc:
             raise CorpusDomainError(
                 error_code=E_CORPUS_INTEGRITY_VIOLATION,
-                message=f"Không tìm thấy văn bản '{doc_slug}' trong cơ sở dữ liệu để hydrate.",
+                message=f"Không tìm thấy tài liệu '{doc_slug}' trong cơ sở dữ liệu để hydrate.",
                 data={"doc_slug": doc_slug},
             )
 
         doc_id: uuid.UUID = doc.id
         title: str = doc.title
-        valid_from: datetime.date | None = doc.valid_from
-        valid_to: datetime.date | None = doc.valid_to
         metadata: dict[str, object] = dict(doc.metadata or {})
         raw_text: str = doc.raw_text or ""
 
@@ -640,11 +718,29 @@ class StagingManager:
                 )
             )
 
+        # DEF-INGEST-012: Hydrate unresolved external references from chunk_context_refs
+        async with pool.acquire() as conn:
+            unresolved_refs = await conn.fetch(
+                """
+                SELECT c.path AS source_path, cr.target_path
+                FROM chunk_context_refs cr
+                JOIN chunks c ON c.id = cr.chunk_id
+                WHERE cr.chunk_id = ANY($1::uuid[]) AND cr.target_path IS NOT NULL;
+                """,
+                chunk_ids,
+            )
+            for r in unresolved_refs:
+                stg_edges.append(
+                    StagingEdge(
+                        source_path=r["source_path"],
+                        target_path=r["target_path"],
+                        relation_type=RelationType.REFERENCES,
+                    )
+                )
+
         genesis = GenesisSnapshot.create(
             doc_slug=doc_slug,
             title=title,
-            valid_from=valid_from,
-            valid_to=valid_to,
             raw_text=raw_text,
             metadata=metadata | {"hydrated_from_db": True},
             initial_chunks=[c.model_dump(mode="json") for c in stg_chunks],

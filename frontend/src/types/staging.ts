@@ -1,7 +1,8 @@
-export type StagingStatus = 'DRAFT' | 'AGENT_COMMITTED' | 'APPROVED' | 'PROMOTED';
+export type StagingStatus = 'DRAFT' | 'AGENT_COMMITTED' | 'APPROVED' | 'PROMOTED' | 'AMENDMENT';
 
 export interface StagingChunk {
   path: string;
+  node_type?: string;
   verbatim_text: string;
   contextualized_text: string;
   start_line: number;
@@ -31,8 +32,6 @@ export interface StagingSessionSummary {
   status: StagingStatus;
   total_chunks: number;
   total_edges: number;
-  valid_from?: string | null;
-  valid_to?: string | null;
   created_at: string;
   updated_at: string;
   committed_at?: string | null;
@@ -43,13 +42,12 @@ export interface StagingDocumentSession {
   doc_slug: string;
   title: string;
   status: StagingStatus;
-  valid_from?: string | null;
-  valid_to?: string | null;
   created_at: string;
   updated_at: string;
   committed_at?: string | null;
   promoted_at?: string | null;
   raw_text?: string | null;
+  metadata: Record<string, unknown>;
   doc_metadata?: Record<string, unknown>;
   chunks: StagingChunk[];
   edges: StagingEdge[];

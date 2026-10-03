@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "interface": {
+      "command": "uv",
+      "args": [
+        "run",
+        "rag-eval",
+        "server",
+        "--log-file",
+        "logs/mcp_server.log"
+      ],
+      "env": {
+        "DATABASE_URL": "postgresql://postgres:postgres@localhost:15432/rag_db",
+        "STAGING_DIR": ".cache/stg"
+      }
+    }
+  }
+}

@@ -42,7 +42,7 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({
           className={`inline-flex items-center rounded-full border border-emerald-600/50 bg-emerald-950/60 text-emerald-300 ${sizeClasses[size]}`}
         >
           <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-          <span>APPROVED (Đã Phê Duyệt)</span>
+          <span>APPROVED (Đã Xác Nhận)</span>
         </span>
       );
     case 'PROMOTED':
@@ -52,6 +52,15 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({
         >
           <Eye className="w-3.5 h-3.5 text-purple-400" />
           <span>PROMOTED (Đã Nhập CSDL)</span>
+        </span>
+      );
+    case 'AMENDMENT':
+      return (
+        <span
+          className={`inline-flex items-center rounded-full border border-amber-600/50 bg-amber-950/60 text-amber-300 ${sizeClasses[size]}`}
+        >
+          <Clock className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
+          <span>AMENDMENT (Đang Sửa Đổi)</span>
         </span>
       );
     default:

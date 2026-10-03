@@ -63,10 +63,21 @@ class TreeHierarchyBuilder:
                         else sanitized_root
                     )
 
+                    leaf_node_type = "SECTION"
+                    leaf_label = seg
+                    if is_leaf:
+                        leaf_node_type = str(
+                            chunk.metadata.get("node_type")
+                            or ("TABLE" if chunk.metadata.get("is_table") else "PARAGRAPH")
+                        )
+                        raw_h = chunk.metadata.get("heading_raw") or chunk.metadata.get("title")
+                        if raw_h and isinstance(raw_h, str):
+                            leaf_label = raw_h
+
                     new_node = DocumentTreeNodeResponse(
                         path=current_path_accum,
-                        label=seg,
-                        node_type="NODE",
+                        label=leaf_label,
+                        node_type=leaf_node_type,
                         verbatim_text=chunk.verbatim_text if is_leaf else "",
                         contextualized_text=chunk.contextualized_text if is_leaf else "",
                         start_line=chunk.start_line if is_leaf else 1,
@@ -74,6 +85,9 @@ class TreeHierarchyBuilder:
                         metadata=chunk.metadata if is_leaf else {},
                         review_status=(
                             chunk.review_status.value if is_leaf else "PENDING"
+                        ),
+                        finalization_state=(
+                            chunk.finalization_state.value if is_leaf and chunk.finalization_state else None
                         ),
                         children=[],
                     )
@@ -90,16 +104,38 @@ class TreeHierarchyBuilder:
                         existing.end_line = chunk.end_line
                         existing.metadata = chunk.metadata
                         existing.review_status = chunk.review_status.value
+                        existing.finalization_state = (
+                            chunk.finalization_state.value if chunk.finalization_state else None
+                        )
+                        leaf_node_type = str(
+                            chunk.metadata.get("node_type")
+                            or ("TABLE" if chunk.metadata.get("is_table") else "PARAGRAPH")
+                        )
+                        existing.node_type = leaf_node_type
+                        raw_h = chunk.metadata.get("heading_raw") or chunk.metadata.get("title")
+                        if raw_h and isinstance(raw_h, str):
+                            existing.label = raw_h
+
+        chunk_review_status_map = {
+            c.path: (c.review_status.value if hasattr(c.review_status, "value") else str(c.review_status))
+            for c in session.chunks
+        }
 
         def _sort_and_propagate_recursively(node: DocumentTreeNodeResponse) -> None:
             node.children.sort(key=lambda c: natural_path_key(c.path))
             for child in node.children:
                 _sort_and_propagate_recursively(child)
             if node.children:
-                if all(child.review_status == "REVIEWED" for child in node.children):
-                    node.review_status = "REVIEWED"
+                all_children_reviewed = all(child.review_status == "REVIEWED" for child in node.children)
+                # B-5: Preserve explicit review status of the section chunk itself
+                if node.path in chunk_review_status_map:
+                    own_status = chunk_review_status_map[node.path]
+                    if own_status == "REVIEWED" and all_children_reviewed:
+                        node.review_status = "REVIEWED"
+                    else:
+                        node.review_status = own_status
                 else:
-                    node.review_status = "PENDING"
+                    node.review_status = "REVIEWED" if all_children_reviewed else "PENDING"
 
         _sort_and_propagate_recursively(root_node)
 

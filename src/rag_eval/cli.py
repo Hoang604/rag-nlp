@@ -36,8 +36,10 @@ def migrate() -> None:
     )
 
 
-async def _prune_stale_chunks(manager: StagingManager) -> int:
-    """Deletes chunks of each staged document that the current staging no longer has."""
+async def _prune_stale_chunks(
+    manager: StagingManager, target_slugs: list[str] | None = None
+) -> int:
+    """Deletes chunks of promoted documents that the current staging no longer has."""
     from rag_eval.db.connection import get_db_pool
 
     pool = await get_db_pool()
@@ -45,8 +47,13 @@ async def _prune_stale_chunks(manager: StagingManager) -> int:
 
     corpus_repo = CorpusRepository(pool)
     removed = 0
-    for summary in manager.list_sessions():
-        session = manager.load_session(summary.doc_slug)
+    slugs_to_check = (
+        target_slugs
+        if target_slugs is not None
+        else [s.doc_slug for s in manager.list_sessions()]
+    )
+    for slug in slugs_to_check:
+        session = manager.load_session(slug)
         paths = [c.path for c in session.chunks]
         doc = await corpus_repo.documents.get_by_slug(session.doc_slug)
         if doc:
@@ -54,7 +61,7 @@ async def _prune_stale_chunks(manager: StagingManager) -> int:
             stale_paths = [c.path for c in all_chunks if c.path not in paths]
             if stale_paths:
                 stale_ids = [c.id for c in all_chunks if c.path in stale_paths]
-                await corpus_repo.graph.delete_edges_for_chunks(stale_ids)
+                await corpus_repo.graph.delete_outgoing_edges_for_chunks(stale_ids)
                 count = await corpus_repo.chunks.delete_stale_by_paths(doc.id, stale_paths)
                 removed += count
     return removed
@@ -75,42 +82,127 @@ async def _rebuild_indexes() -> None:
 @app.command(name="promote")
 def promote(
     embed: Annotated[bool, typer.Option("--embed/--no-embed")] = True,
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            "-f",
+            help="Automatically finalize unreviewed chunks and transition DRAFT/AMENDMENT sessions to APPROVED before promotion.",
+        ),
+    ] = False,
 ) -> None:
     """Promote every staged document into PostgreSQL, bypassing human review."""
     import asyncio
 
     from rag_eval.ingestion.staging import StagingManager
+    from rag_eval.ingestion.staging.models import ChunkReviewStatus, StagingStatus
     from rag_eval.web.services import HumanPromotionEngine
 
     async def run() -> None:
         manager = StagingManager()
         engine = HumanPromotionEngine(staging_manager=manager)
-        slugs = [s.doc_slug for s in manager.list_sessions()]
-        if not slugs:
-            console.print("[red]No staged documents in .cache/stg.[/red]")
-            raise typer.Exit(code=2)
+        eligible_sessions = [
+            s for s in manager.list_sessions()
+            if s.status != StagingStatus.PROMOTED
+        ]
+        if not eligible_sessions:
+            console.print("[yellow]No unpromoted staged documents found in .cache/stg.[/yellow]")
+            return
 
         chunks = edges = 0
-        for slug in slugs:
+        promoted_slugs: list[str] = []
+        for s_summary in eligible_sessions:
+            slug = s_summary.doc_slug
+            if force:
+                session = manager.load_session(slug)
+                unreviewed = [c.path for c in session.chunks if c.review_status != ChunkReviewStatus.REVIEWED]
+                if unreviewed:
+                    session, _, _ = manager.finalize_chunks(
+                        doc_slug=slug,
+                        paths=unreviewed,
+                        actor="CLI:force_promote",
+                    )
+                if session.status in (StagingStatus.DRAFT, StagingStatus.AMENDMENT):
+                    manager.update_session_status(
+                        doc_slug=slug,
+                        status=StagingStatus.APPROVED,
+                        actor="CLI:force_promote",
+                        description="Force transitioned to APPROVED for automated promotion.",
+                    )
+
             result = await engine.promote_session(
                 doc_slug=slug, compute_embeddings=embed
             )
             chunks += result.chunks_promoted
             edges += result.edges_promoted
+            promoted_slugs.append(slug)
             console.print(
                 f"  {slug}: {result.chunks_promoted} chunks, "
                 f"{result.edges_promoted} edges"
             )
-        pruned = await _prune_stale_chunks(manager)
+        pruned = await _prune_stale_chunks(manager, target_slugs=promoted_slugs)
         await _rebuild_indexes()
         console.print(
-            f"[green]✔ Promoted {len(slugs)} documents: "
+            f"[green]✔ Promoted {len(promoted_slugs)} documents: "
             f"{chunks} chunks, {edges} edges"
             + (f", pruned {pruned} stale chunks" if pruned else "")
             + ".[/green]"
         )
 
     asyncio.run(run())
+
+
+@app.command(name="ingest")
+def ingest(
+    file_path: Annotated[
+        Path,
+        typer.Argument(
+            help="Path to document file to ingest (PDF, DOCX, Markdown, HTML, TXT)",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+        ),
+    ],
+    slug: Annotated[
+        str | None,
+        typer.Option(
+            "--slug",
+            "-s",
+            help="Document slug (must adhere to PostgreSQL ltree label regex). Defaults to sanitized filename stem.",
+        ),
+    ] = None,
+    title: Annotated[
+        str | None,
+        typer.Option(
+            "--title",
+            "-t",
+            help="Human-readable document title. Defaults to filename stem.",
+        ),
+    ] = None,
+) -> None:
+    """Ingest a document file (PDF, DOCX, Markdown, HTML, TXT) into a new staging session."""
+    from rag_eval.exceptions import CorpusDomainError
+    from rag_eval.schemas import sanitize_ltree_label
+
+    doc_slug = sanitize_ltree_label(slug) if slug else sanitize_ltree_label(file_path.stem)
+    doc_title = title if title else file_path.stem
+
+    console.print(f"[cyan]Ingesting document '{file_path.name}' as '{doc_slug}'...[/cyan]")
+    manager = StagingManager()
+    try:
+        session = manager.create_session_from_file(
+            doc_slug=doc_slug,
+            title=doc_title,
+            file_path=file_path,
+        )
+        console.print(
+            f"[green]✔ Successfully created staging session for '{session.doc_slug}' "
+            f"({len(session.chunks)} chunks, {len(session.edges)} edges).[/green]"
+        )
+    except CorpusDomainError as exc:
+        console.print(f"[red]Error during ingestion:[/red] {exc.message}")
+        raise typer.Exit(code=1) from exc
 
 
 @app.command(name="server")

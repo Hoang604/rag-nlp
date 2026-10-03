@@ -34,7 +34,7 @@ export function useStagingSession(initialDocSlug?: string) {
       }
       return list;
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Lỗi tải danh sách văn bản';
+      const msg = err instanceof Error ? err.message : 'Lỗi tải danh sách tài liệu';
       setError(msg);
       return [];
     }
@@ -49,7 +49,7 @@ export function useStagingSession(initialDocSlug?: string) {
       setSession(data);
       return data;
     } catch (err) {
-      const msg = err instanceof Error ? err.message : `Lỗi tải văn bản ${docSlug}`;
+      const msg = err instanceof Error ? err.message : `Lỗi tải tài liệu ${docSlug}`;
       setError(msg);
       return null;
     } finally {

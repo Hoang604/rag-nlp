@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS chunk_context_refs (
     CONSTRAINT chk_ref_span_geometry CHECK (
         (char_start IS NULL AND char_end IS NULL)
         OR
-        (char_start IS NOT NULL AND char_end NOT NULL AND char_end > char_start AND char_start >= 0)
+        (char_start IS NOT NULL AND char_end IS NOT NULL AND char_end > char_start AND char_start >= 0)
     ),
     CONSTRAINT chk_ref_no_self_loop CHECK (target_chunk_id IS NULL OR target_chunk_id != chunk_id),
     CONSTRAINT chk_ref_edge_integrity CHECK (

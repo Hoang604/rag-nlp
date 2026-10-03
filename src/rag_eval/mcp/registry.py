@@ -40,12 +40,26 @@ from rag_eval.mcp.tools import (
 
 
 def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
-    """Registers all 18 canonical Agent-First corpus tools onto the MCPServer instance."""
+    """Registers all 19 canonical Agent-First corpus tools onto the MCPServer instance."""
+
+    @server.tool(
+        name="stg_validate",
+        description="Kiểm tra tiền kiểm toán (pre-flight validation) các bất biến toàn vẹn của phiên staging trước khi cam kết.",
+    )
+    async def stg_validate(
+        doc_slug: Annotated[
+            str,
+            Field(
+                description="Mã định danh doc_slug của phiên làm việc trong vùng đệm staging.",
+            ),
+        ],
+    ) -> dict[str, object]:
+        return await tool_impl.stg_validate(doc_slug=doc_slug)
 
     @server.tool(
         name="hybrid_search",
         description=(
-            "Truy xuất các đoạn văn bản/chunk thông qua kết hợp xếp hạng ngữ nghĩa (Dense Vector) "
+            "Truy xuất các chunk nội dung thông qua kết hợp xếp hạng ngữ nghĩa (Dense Vector) "
             "và đối sánh từ khóa (Sparse Full-Text Search RRF)."
         ),
     )
@@ -64,7 +78,7 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
                 default=10,
                 ge=1,
                 le=50,
-                description="Số lượng đoạn văn bản tối đa cần trả về, sắp xếp theo điểm hòa trộn tương đồng giảm dần.",
+                description="Số lượng chunk nội dung tối đa cần trả về, sắp xếp theo điểm hòa trộn tương đồng giảm dần.",
             ),
         ] = 10,
         doc_slugs: Annotated[
@@ -93,7 +107,7 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
         name="verbatim_grep",
         description=(
             "Tìm kiếm chính xác tuyệt đối theo chuỗi nguyên văn hoặc biểu thức chính quy POSIX "
-            "trên toàn bộ kho văn bản. Tối ưu hóa bằng chỉ mục Trigram GIN làm điểm neo."
+            "trên toàn bộ kho tài liệu. Tối ưu hóa bằng chỉ mục Trigram GIN làm điểm neo."
         ),
     )
     async def verbatim_grep(
@@ -137,7 +151,7 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
     @server.tool(
         name="hierarchical_navigate",
         description=(
-            "Điều hướng cấu trúc cây phân cấp văn bản xoay quanh một nút/chunk được chỉ định thông qua toán tử ltree. "
+            "Duyệt cấu trúc cây phân cấp tài liệu xoay quanh một nút/chunk được chỉ định thông qua toán tử ltree. "
             "Duyệt các hướng: CHILDREN, PARENT_CHAIN, SIBLINGS."
         ),
     )
@@ -153,7 +167,7 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
             str | None,
             Field(
                 default=None,
-                description="Mã định danh UUID tùy chọn của chunk cần điều hướng mở rộng (dùng khi không có path).",
+                description="Mã định danh UUID tùy chọn của chunk cần duyệt mở rộng (dùng khi không có path).",
             ),
         ] = None,
         direction: Annotated[
@@ -201,7 +215,7 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
             list[str] | None,
             Field(
                 default=None,
-                description="Danh sách các mã quan hệ cần lọc (REFERENCES, AMENDS, v.v.). Để None để duyệt tất cả.",
+                description="Danh sách các mã quan hệ cần lọc (REFERENCES, SUPPORTS, DEPENDS_ON, v.v.). Để None để duyệt tất cả.",
             ),
         ] = None,
     ) -> GraphTraverseResult:
@@ -277,7 +291,7 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
 
     @server.tool(
         name="stg_get_raw",
-        description="Đọc văn bản nguồn ban đầu được lưu trong phiên staging theo cửa sổ dòng (line window).",
+        description="Đọc tài liệu nguồn ban đầu được lưu trong phiên staging theo cửa sổ dòng (line window).",
     )
     async def stg_get_raw(
         doc_slug: Annotated[
@@ -393,7 +407,7 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
             bool,
             Field(
                 default=True,
-                description="Tự động cập nhật ngữ cảnh contextualized_text cho các phân vị con khi câu dẫn đề của phân vị cha thay đổi.",
+                description="Tự động cập nhật ngữ cảnh contextualized_text cho các nút con khi câu dẫn đề của nút cha thay đổi.",
             ),
         ] = True,
     ) -> StgPatchResult:
@@ -517,7 +531,7 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
 
     @server.tool(
         name="stg_finalize_chunks",
-        description="Đánh dấu danh sách các chunk sang trạng thái đã thẩm định (review_status = 'REVIEWED').",
+        description="Đánh dấu danh sách các chunk sang trạng thái đã rà soát (review_status = 'REVIEWED').",
     )
     async def stg_finalize_chunks(
         doc_slug: Annotated[
@@ -562,7 +576,7 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
             str,
             Field(
                 default="",
-                description="Lọc theo doc_slug văn bản. Để trống để quét toàn bộ kho.",
+                description="Lọc theo doc_slug tài liệu. Để trống để quét toàn bộ kho.",
             ),
         ] = "",
         limit: Annotated[
@@ -582,7 +596,7 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
 
     @server.tool(
         name="stg_reopen_session",
-        description="Mở lại phiên làm việc của một văn bản đã promote vào PostgreSQL sang trạng thái AMENDMENT.",
+        description="Mở lại phiên làm việc của một tài liệu đã promote vào PostgreSQL sang trạng thái AMENDMENT.",
     )
     async def stg_reopen_session(
         doc_slug: Annotated[

@@ -27,7 +27,7 @@ class Reranked(Protocol):
 
 
 class CorpusReranker(Protocol):
-    """Protocol for corpus provision rerankers reading candidate pairs against queries."""
+    """Protocol for corpus rerankers reading candidate pairs against queries."""
 
     async def rerank[T: Reranked](
         self, query: str, hits: list[T], top_k: int | None = None
@@ -67,7 +67,7 @@ class ThreadSafeScoreCache:
 
 
 class CrossEncoderReranker:
-    """Reorders retrieved provisions by reading them against the question.
+    """Reorders retrieved chunks by reading them against the question.
 
     The model loads lazily and once. Left to the first request it costs several
     seconds on the person waiting, so callers that care should warm it.

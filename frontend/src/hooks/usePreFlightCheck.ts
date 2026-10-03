@@ -21,7 +21,7 @@ export function usePreFlightCheck(docSlug?: string) {
       return res;
     } catch (err) {
       const msg =
-        err instanceof Error ? err.message : 'Lỗi chạy thẩm định tính toàn vẹn';
+        err instanceof Error ? err.message : 'Lỗi chạy kiểm tra tính toàn vẹn';
       setValidationError(msg);
       return null;
     } finally {

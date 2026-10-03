@@ -22,7 +22,6 @@ from rag_eval.schemas import (
     ChunkContextRefEntity,
     ChunkEntity,
     DocumentEntity,
-    FinalizationState,
     GraphEdgeEntity,
 )
 from rag_eval.web.schemas import PromotionResultResponse
@@ -52,20 +51,30 @@ class HumanPromotionEngine:
         """Validates and atomically promotes a staging session into PostgreSQL."""
         session, _ = self.staging_manager.replay_session(doc_slug)
 
-        # 100% review gate & status preconditions
-        if session.status not in (StagingStatus.AGENT_COMMITTED, StagingStatus.APPROVED):
-            raise CorpusDomainError(
-                error_code=E_AST_GROUNDING_VALIDATION,
-                message=f"Session status '{session.status.value}' is not eligible for promotion. Must be AGENT_COMMITTED or APPROVED.",
-                data={"status": session.status.value},
-            )
-
         unreviewed = [c.path for c in session.chunks if c.review_status != ChunkReviewStatus.REVIEWED]
         if unreviewed:
             raise CorpusDomainError(
                 error_code=E_AST_GROUNDING_VALIDATION,
                 message=f"Cannot promote session with {len(unreviewed)} unreviewed chunk(s). All chunks must be in REVIEWED status.",
                 data={"unreviewed_count": len(unreviewed), "sample_paths": unreviewed[:10]},
+            )
+
+        # Auto-transition DRAFT or AMENDMENT to APPROVED if human reviewer verified 100% of chunks
+        if session.status in (StagingStatus.DRAFT, StagingStatus.AMENDMENT):
+            self.staging_manager.update_session_status(
+                doc_slug=doc_slug,
+                status=StagingStatus.APPROVED,
+                actor="HUMAN:reviewer",
+                description="Human reviewer verified and approved all chunks for promotion",
+            )
+            session, _ = self.staging_manager.replay_session(doc_slug)
+
+        # 100% review gate & status preconditions
+        if session.status not in (StagingStatus.AGENT_COMMITTED, StagingStatus.APPROVED):
+            raise CorpusDomainError(
+                error_code=E_AST_GROUNDING_VALIDATION,
+                message=f"Session status '{session.status.value}' is not eligible for promotion. Must be AGENT_COMMITTED or APPROVED.",
+                data={"status": session.status.value},
             )
 
         validation = self.validator.validate(session)
@@ -90,8 +99,6 @@ class HumanPromotionEngine:
         doc_entity = DocumentEntity(
             doc_slug=session.doc_slug,
             title=session.title,
-            valid_from=session.valid_from,
-            valid_to=session.valid_to,
             metadata=session.metadata,
             raw_text=session.raw_text,
         )
@@ -112,32 +119,32 @@ class HumanPromotionEngine:
                     start_line=c.start_line,
                     end_line=c.end_line,
                     context_type=(
-                        "SELF_CONTAINED"
-                        if (
-                            c.finalization_state == FinalizationState.FINALIZED_SELF_CONTAINED
-                            and chunk_edges_count.get(c.path, 0) == 0
-                        )
-                        else "REQUIRES_EXTERNAL_CONTEXT"
+                        "REQUIRES_EXTERNAL_CONTEXT"
+                        if chunk_edges_count.get(c.path, 0) > 0
+                        else "SELF_CONTAINED"
                     ),
-                    is_all_refs_resolved=(
-                        c.finalization_state == FinalizationState.FINALIZED_SELF_CONTAINED
-                        and chunk_edges_count.get(c.path, 0) == 0
-                    ),
+                    is_all_refs_resolved=(chunk_edges_count.get(c.path, 0) == 0),
                     embedding=computed_embeddings[idx] if computed_embeddings else None,
                     metadata=c.metadata,
                 )
                 for idx, c in enumerate(session.chunks)
             ]
-            path_to_uuid = await loader.load_chunks(canonical_chunks, conn=conn)
-
-            # Prune stale edges and context refs for existing document chunks to prevent duplicate & FK errors
-            doc_chunk_ids = list(path_to_uuid.values())
-            if doc_chunk_ids:
+            # DEF-INGEST-010: Prune existing context refs and outgoing edges for this document before updating chunks,
+            # ensuring trg_assert_chunk_invariants permits temporary is_all_refs_resolved = FALSE without trigger violation
+            existing_chunk_ids = await conn.fetch(
+                "SELECT id FROM chunks WHERE document_id = $1;", doc_id
+            )
+            if existing_chunk_ids:
+                c_uuids = [r["id"] for r in existing_chunk_ids]
                 await conn.execute(
                     "DELETE FROM chunk_context_refs WHERE chunk_id = ANY($1::uuid[]);",
-                    doc_chunk_ids,
+                    c_uuids,
                 )
-                await loader.corpus_repo.graph.delete_edges_for_chunks(doc_chunk_ids, conn=conn)
+                # DEF-INGEST-011: Delete ONLY outgoing edges, preserving incoming edges from other documents
+                await loader.corpus_repo.graph.delete_outgoing_edges_for_chunks(c_uuids, conn=conn)
+
+            path_to_uuid = await loader.load_chunks(canonical_chunks, conn=conn)
+            doc_chunk_ids = list(path_to_uuid.values())
 
             unresolved_target_paths: list[str] = [
                 e.target_path
@@ -167,9 +174,20 @@ class HumanPromotionEngine:
                         tgt_uuid = path_to_uuid[edge.target_path]
                     elif edge.target_path in external_path_to_uuid:
                         tgt_uuid = external_path_to_uuid[edge.target_path]
+                    else:
+                        logger.warning(
+                            "External edge target '%s' from source '%s' (type: %s) could not be resolved in PostgreSQL. Target document may not be promoted yet.",
+                            edge.target_path,
+                            edge.source_path,
+                            edge.relation_type,
+                        )
 
                 if tgt_uuid is not None:
-                    rel_val = edge.relation_type.value
+                    rel_val = (
+                        edge.relation_type.value
+                        if hasattr(edge.relation_type, "value")
+                        else str(edge.relation_type)
+                    )
                     graph_edge_entities.append(
                         GraphEdgeEntity(
                             id=uuid.uuid4(),
@@ -209,20 +227,57 @@ class HumanPromotionEngine:
                                 edge_id=persisted_edge_id,
                             )
                         )
+                    else:
+                        logger.warning(
+                            "Persisted edge_id missing for (%s, %s, %s); falling back to unresolved ref.",
+                            src_uuid,
+                            tgt_uuid,
+                            rel_val,
+                        )
+                        chunk_context_refs.append(
+                            ChunkContextRefEntity(
+                                id=uuid.uuid4(),
+                                chunk_id=src_uuid,
+                                target_chunk_id=None,
+                                edge_id=None,
+                                target_path=edge.target_path,
+                            )
+                        )
+                elif edge.target_path:
+                    # DEF-INGEST-001: Persist unresolved external dependency with target_path for agent resolution
+                    chunk_context_refs.append(
+                        ChunkContextRefEntity(
+                            id=uuid.uuid4(),
+                            chunk_id=src_uuid,
+                            target_chunk_id=None,
+                            edge_id=None,
+                            target_path=edge.target_path,
+                        )
+                    )
 
+            # SEC-INGEST-001: Persist chunk_context_refs into PostgreSQL before status update
             if chunk_context_refs:
-                await loader.corpus_repo.context_refs.batch_create_refs(chunk_context_refs, conn=conn)
+                await loader.corpus_repo.context_refs.batch_create_refs(
+                    chunk_context_refs, conn=conn
+                )
 
-            fully_linked_uuids = [
-                path_to_uuid[c.path]
-                for c in session.chunks
-                if c.finalization_state == FinalizationState.FINALIZED_FULLY_LINKED
-                and c.path in path_to_uuid
-            ]
-            if fully_linked_uuids:
+            if doc_chunk_ids:
                 await conn.execute(
-                    "UPDATE chunks SET is_all_refs_resolved = TRUE WHERE id = ANY($1::uuid[])",
-                    fully_linked_uuids,
+                    """
+                    UPDATE chunks
+                    SET is_all_refs_resolved = TRUE
+                    WHERE id = ANY($1::uuid[])
+                      AND context_type = 'REQUIRES_EXTERNAL_CONTEXT'
+                      AND id IN (
+                          SELECT chunk_id
+                          FROM chunk_context_refs
+                          WHERE chunk_id = ANY($1::uuid[])
+                          GROUP BY chunk_id
+                          HAVING COUNT(*) > 0 
+                             AND COUNT(*) FILTER (WHERE target_chunk_id IS NULL OR edge_id IS NULL OR target_path IS NOT NULL) = 0
+                      );
+                    """,
+                    doc_chunk_ids,
                 )
 
         now = datetime.datetime.now(datetime.UTC)

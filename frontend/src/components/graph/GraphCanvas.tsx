@@ -7,7 +7,7 @@ import {
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
-import { StagingDocumentSession, StagingEdge } from '../../types/staging';
+import { StagingChunk, StagingDocumentSession, StagingEdge } from '../../types/staging';
 
 interface GraphCanvasProps {
   session: StagingDocumentSession;
@@ -18,6 +18,9 @@ interface GraphCanvasProps {
 interface GraphNodePos {
   path: string;
   label: string;
+  nodeType?: string;
+  reviewStatus?: string;
+  isExternal?: boolean;
   x: number;
   y: number;
   width: number;
@@ -66,11 +69,17 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
     };
   }, []);
 
-  // Extract all unique nodes involved in edges
+  // F-7: Extract all unique nodes from session.chunks as well as session.edges so isolated nodes are fully visible
   const { nodes, edgesWithPos } = useMemo(() => {
     const nodeSet = new Set<string>();
     const inDegrees: Record<string, number> = {};
     const outDegrees: Record<string, number> = {};
+    const chunkMap = new Map<string, StagingChunk>();
+
+    for (const c of session.chunks || []) {
+      chunkMap.set(c.path, c);
+      nodeSet.add(c.path);
+    }
 
     for (const e of session.edges) {
       nodeSet.add(e.source_path);
@@ -81,35 +90,54 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
       }
     }
 
-    // Cluster nodes by Article / Section prefix
+    // Hierarchical DAG / Tree layout: group by ltree depth level
     const sortedNodePaths = Array.from(nodeSet).sort();
     const nodePositions: GraphNodePos[] = [];
     const nMap = new Map<string, GraphNodePos>();
 
-    const cols = Math.max(3, Math.ceil(Math.sqrt(sortedNodePaths.length * 1.5)));
-    const colWidth = 260;
-    const rowHeight = 110;
+    const levelMap = new Map<number, string[]>();
+    sortedNodePaths.forEach((path) => {
+      const depth = Math.max(0, path.split('.').length - 1);
+      if (!levelMap.has(depth)) {
+        levelMap.set(depth, []);
+      }
+      levelMap.get(depth)!.push(path);
+    });
 
-    sortedNodePaths.forEach((path, idx) => {
-      const col = idx % cols;
-      const row = Math.floor(idx / cols);
+    const levelSpacing = 280;
+    const rowSpacing = 110;
 
-      const x = col * colWidth + 50;
-      const y = row * rowHeight + 50;
+    levelMap.forEach((pathsInLevel, level) => {
+      pathsInLevel.forEach((path, rowIdx) => {
+        const x = 50 + level * levelSpacing;
+        const y = 50 + rowIdx * rowSpacing;
 
-      const nodeObj: GraphNodePos = {
-        path,
-        label: path.split('.').slice(-2).join('.'),
-        x,
-        y,
-        width: 210,
-        height: 64,
-        inDegree: inDegrees[path] || 0,
-        outDegree: outDegrees[path] || 0,
-      };
+        const chunk = chunkMap.get(path);
+        const isExternal = !chunk;
+        const nodeType = isExternal
+          ? 'NGOẠI VI'
+          : (chunk?.metadata?.node_type as string) ||
+            (chunk as { node_type?: string })?.node_type ||
+            (chunk?.metadata?.is_table ? 'TABLE' : 'PARAGRAPH');
+        const reviewStatus = isExternal ? undefined : (chunk?.review_status || 'PENDING');
 
-      nodePositions.push(nodeObj);
-      nMap.set(path, nodeObj);
+        const nodeObj: GraphNodePos = {
+          path,
+          label: path.split('.').slice(-2).join('.'),
+          nodeType,
+          reviewStatus,
+          isExternal,
+          x,
+          y,
+          width: 220,
+          height: 72,
+          inDegree: inDegrees[path] || 0,
+          outDegree: outDegrees[path] || 0,
+        };
+
+        nodePositions.push(nodeObj);
+        nMap.set(path, nodeObj);
+      });
     });
 
     const renderedEdges = session.edges.map((e) => {
@@ -123,7 +151,7 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
     });
 
     return { nodes: nodePositions, edgesWithPos: renderedEdges };
-  }, [session.edges]);
+  }, [session.chunks, session.edges]);
 
   // Pan handlers
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -146,7 +174,7 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
     setIsPanning(false);
   };
 
-  if (session.edges.length === 0) {
+  if (nodes.length === 0) {
     return (
       <div className="flex h-full w-full items-center justify-center bg-slate-950 p-8">
         <div className="max-w-md text-center">
@@ -154,10 +182,10 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
             <Info className="h-6 w-6" />
           </div>
           <h4 className="text-sm font-bold text-slate-200">
-            Chưa Có Cạnh Đồ Thị Quan Hệ
+            Chưa Có Chunk Hay Quan Hệ Nào
           </h4>
           <p className="mt-1.5 text-xs text-slate-400 leading-relaxed">
-            Văn bản này chưa có các liên kết dẫn chiếu, bổ trợ hoặc quy chuẩn. Bạn có thể bấm nút &ldquo;Thêm Quan Hệ Mới&rdquo; để nối 2 chunks lại với nhau.
+            Phiên làm việc này hiện chưa có mục nội dung nào được bóc tách vào Staging.
           </p>
         </div>
       </div>
@@ -222,6 +250,17 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
         >
           <Maximize2 className="h-4 w-4" />
         </button>
+      </div>
+
+      {/* Floating Relation Legend */}
+      <div className="absolute left-5 top-5 z-20 hidden lg:flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-900/90 px-3 py-1.5 shadow-xl backdrop-blur-md text-[10px] font-mono">
+        <span className="text-slate-400 font-bold uppercase text-[9px]">Quan Hệ:</span>
+        <span className="flex items-center gap-1 text-sky-400"><span className="h-2 w-2 rounded-full bg-sky-400" />REF</span>
+        <span className="flex items-center gap-1 text-emerald-400"><span className="h-2 w-2 rounded-full bg-emerald-400" />SUPPORT</span>
+        <span className="flex items-center gap-1 text-rose-400"><span className="h-2 w-2 rounded-full bg-rose-400" />CONTRADICT</span>
+        <span className="flex items-center gap-1 text-purple-400"><span className="h-2 w-2 rounded-full bg-purple-400" />DEFINE</span>
+        <span className="flex items-center gap-1 text-indigo-400"><span className="h-2 w-2 rounded-full bg-indigo-400" />EXTEND</span>
+        <span className="flex items-center gap-1 text-cyan-400"><span className="h-2 w-2 rounded-full bg-cyan-400" />DEPEND</span>
       </div>
 
       {/* Main SVG Graph Surface */}
@@ -478,17 +517,41 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
               className="overflow-visible cursor-pointer"
             >
               <div
-                className={`flex h-full w-full flex-col justify-between rounded-xl border p-2.5 shadow-lg backdrop-blur-md transition-all duration-150 ${
-                  isHovered || isConnected
-                    ? 'border-brand-400 bg-brand-950/90 ring-2 ring-brand-400/40 shadow-brand-950'
-                    : 'border-slate-800 bg-slate-900/90 hover:border-slate-600'
+                className={`flex h-full w-full flex-col justify-between rounded-xl p-2.5 shadow-lg backdrop-blur-md transition-all duration-150 ${
+                  n.isExternal
+                    ? 'border-2 border-dashed border-amber-600/80 bg-slate-950/95 shadow-amber-950/50'
+                    : isHovered || isConnected
+                    ? 'border border-brand-400 bg-brand-950/90 ring-2 ring-brand-400/40 shadow-brand-950'
+                    : 'border border-slate-800 bg-slate-900/90 hover:border-slate-600'
                 }`}
               >
                 <div className="flex items-center justify-between gap-1.5">
-                  <span className="font-mono text-[11px] font-bold text-slate-100 truncate">
-                    {n.label}
-                  </span>
+                  <div className="flex items-center gap-1.5 truncate">
+                    {n.isExternal ? (
+                      <span
+                        className="rounded bg-amber-950 px-1 py-0.5 text-[8px] font-mono font-bold uppercase text-amber-300 border border-amber-700/80"
+                        title="Chunk ngoại vi / chưa nạp nội bộ"
+                      >
+                        NGOẠI VI
+                      </span>
+                    ) : (
+                      <span
+                        className={`h-2 w-2 rounded-full shrink-0 ${
+                          n.reviewStatus === 'REVIEWED' ? 'bg-emerald-400' : 'bg-amber-400'
+                        }`}
+                        title={n.reviewStatus === 'REVIEWED' ? 'Đã rà soát' : 'Chờ rà soát'}
+                      />
+                    )}
+                    <span className="font-mono text-[11px] font-bold text-slate-100 truncate">
+                      {n.label}
+                    </span>
+                  </div>
                   <div className="flex items-center gap-1">
+                    {n.nodeType && !n.isExternal && (
+                      <span className="rounded bg-slate-800 px-1 py-0.2 text-[8px] font-mono uppercase text-slate-300 border border-slate-700">
+                        {n.nodeType}
+                      </span>
+                    )}
                     {n.outDegree > 0 && (
                       <span className="rounded bg-blue-950 px-1 py-0.2 text-[9px] font-mono font-bold text-blue-300 border border-blue-800">
                         {n.outDegree} ra
@@ -502,7 +565,7 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
                   </div>
                 </div>
 
-                <div className="font-mono text-[10px] text-slate-400 truncate">
+                <div className={`font-mono text-[10px] truncate ${n.isExternal ? 'text-amber-400/90' : 'text-slate-400'}`}>
                   {n.path}
                 </div>
               </div>
@@ -545,14 +608,37 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
             </div>
           </div>
 
-          <div className="mt-4 flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
+          <div className="mt-4 flex items-center justify-between gap-2 pt-3 border-t border-slate-800">
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => {
+                  if (onSelectNode) onSelectNode(selectedEdge.source_path);
+                }}
+                className="rounded bg-slate-800 px-2.5 py-1 text-[11px] font-semibold text-brand-300 hover:bg-slate-700 transition"
+              >
+                Xem Nguồn →
+              </button>
+              {selectedEdge.target_path && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (onSelectNode) onSelectNode(selectedEdge.target_path);
+                  }}
+                  className="rounded bg-slate-800 px-2.5 py-1 text-[11px] font-semibold text-blue-300 hover:bg-slate-700 transition"
+                >
+                  Xem Đích →
+                </button>
+              )}
+            </div>
+
             <button
               type="button"
               onClick={async () => {
                 await onDeleteEdge(selectedEdge);
                 setSelectedEdge(null);
               }}
-              className="flex items-center gap-1.5 rounded-lg bg-rose-950 px-3 py-1.5 text-xs font-semibold text-rose-300 border border-rose-800 hover:bg-rose-900 transition"
+              className="flex items-center gap-1.5 rounded-lg bg-rose-950 px-3 py-1 text-xs font-semibold text-rose-300 border border-rose-800 hover:bg-rose-900 transition"
             >
               <Trash2 className="h-3.5 w-3.5" />
               <span>Xóa Cạnh Này</span>

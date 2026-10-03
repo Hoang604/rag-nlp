@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import atexit
-import datetime
 import json
 import logging
 import os
@@ -134,8 +133,8 @@ class CorpusMCPServer:
         self.tools = tools if tools is not None else create_default_corpus_mcp_tools()
         self.mcp_server = create_corpus_mcp_server(self.tools)
 
-    async def get_instructions(self, as_of_date: datetime.date | None = None) -> str:
-        manifest = await self.tools.build_dynamic_corpus_manifest(as_of_date=as_of_date)
+    async def get_instructions(self) -> str:
+        manifest = await self.tools.build_dynamic_corpus_manifest()
         return render_server_instructions(manifest_block=manifest)
 
     async def get_tool_definitions(self) -> list[dict[str, object]]:

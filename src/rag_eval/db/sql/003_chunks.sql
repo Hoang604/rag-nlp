@@ -46,7 +46,7 @@ BEFORE INSERT OR UPDATE OF contextualized_text, verbatim_text ON chunks
 FOR EACH ROW EXECUTE FUNCTION update_chunks_tsv();
 
 -- Trigger Assert: Kiểm tra cờ is_all_refs_resolved trên bảng chunks (Admit or Reject)
--- KHÔNG tự sửa đè giá trị của caller. Nếu caller khai man trạng thái so với thực tế -> REJECT NGAY LẬP TỨC.
+-- KHÔNG tự sửa đè giá trị của caller. Nếu trạng thái khai báo sai lệch so với thực tế -> REJECT NGAY LẬP TỨC.
 CREATE OR REPLACE FUNCTION assert_chunk_invariants()
 RETURNS TRIGGER AS $$
 DECLARE
@@ -69,10 +69,10 @@ BEGIN
                 FROM chunk_context_refs WHERE chunk_id = NEW.id;
 
                 IF NEW.is_all_refs_resolved = TRUE AND (total_refs = 0 OR unattached_refs > 0) THEN
-                    RAISE EXCEPTION 'Khai man trạng thái: Chunk % khai báo is_all_refs_resolved = TRUE nhưng thực tế có % ref và % ref chưa được gắn đầy đủ.',
+                    RAISE EXCEPTION 'Sai lệch trạng thái: Chunk % khai báo is_all_refs_resolved = TRUE nhưng thực tế có % ref và % ref chưa được gắn đầy đủ.',
                         NEW.id, total_refs, unattached_refs;
                 ELSIF NEW.is_all_refs_resolved = FALSE AND (total_refs > 0 AND unattached_refs = 0) THEN
-                    RAISE EXCEPTION 'Khai man trạng thái: Chunk % khai báo is_all_refs_resolved = FALSE nhưng thực tế toàn bộ % ref đều đã được gắn.',
+                    RAISE EXCEPTION 'Sai lệch trạng thái: Chunk % khai báo is_all_refs_resolved = FALSE nhưng thực tế toàn bộ % ref đều đã được gắn.',
                         NEW.id, total_refs;
                 END IF;
             END IF;

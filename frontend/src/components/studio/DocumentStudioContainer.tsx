@@ -1,4 +1,10 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import {
+  PanelLeftClose,
+  PanelLeftOpen,
+  PanelRightClose,
+  PanelRightOpen,
+} from 'lucide-react';
 import { CreateEdgePayload } from '../../types/api';
 import { StagingDocumentSession } from '../../types/staging';
 import { DocumentTreeNode, DocumentTreeResponse } from '../../types/tree';
@@ -10,28 +16,53 @@ import { TreeOutlineExplorer } from './TreeOutlineExplorer';
 interface DocumentStudioContainerProps {
   session: StagingDocumentSession;
   treeData: DocumentTreeResponse | null;
+  selectedPathProp?: string;
+  onSelectPathProp?: (path: string) => void;
   onEditChunk: (node: DocumentTreeNode) => void;
   onDeleteChunk: (path: string) => void;
   onAddChildChunk: (parentPath: string) => void;
   onAddEdge: (edge: CreateEdgePayload) => Promise<boolean>;
   onToggleFinalizeChunk?: (node: DocumentTreeNode) => Promise<boolean | void>;
+  onRefreshSession?: () => void;
+  onBatchFinalizeChunks?: (paths: string[]) => Promise<void | boolean>;
+  onBatchReopenChunks?: (paths: string[]) => Promise<void | boolean>;
+  onBatchDeleteChunks?: (paths: string[]) => Promise<void | boolean>;
 }
 
 export const DocumentStudioContainer: React.FC<DocumentStudioContainerProps> = ({
   session,
   treeData,
+  selectedPathProp,
+  onSelectPathProp,
   onEditChunk,
   onDeleteChunk,
   onAddChildChunk,
   onAddEdge,
   onToggleFinalizeChunk,
+  onRefreshSession,
+  onBatchFinalizeChunks,
+  onBatchReopenChunks,
+  onBatchDeleteChunks,
 }) => {
   const [selectedPath, setSelectedPath] = useState<string>(() => {
-    return treeData?.root?.path || '';
+    return selectedPathProp || treeData?.root?.path || '';
   });
 
+  const [showLeftSidebar, setShowLeftSidebar] = useState(true);
+  const [showRightSidebar, setShowRightSidebar] = useState(true);
+
+  useEffect(() => {
+    if (selectedPathProp) {
+      setSelectedPath(selectedPathProp);
+    }
+  }, [selectedPathProp]);
+
+  const handleSelectPath = (path: string) => {
+    setSelectedPath(path);
+    onSelectPathProp?.(path);
+  };
+
   const [collapsedPaths, setCollapsedPaths] = useState<Set<string>>(() => {
-    // Collect all paths that have depth > 1 to collapse by default for instant performance
     const set = new Set<string>();
     function traverse(node: DocumentTreeNode, depth: number) {
       if (depth > 0 && node.children && node.children.length > 0) {
@@ -93,49 +124,124 @@ export const DocumentStudioContainer: React.FC<DocumentStudioContainerProps> = (
 
   return (
     <div className="flex h-full w-full overflow-hidden bg-slate-950">
-      {/* Left Pane: Tree Outline Explorer (280px) */}
-      <div className="w-72 shrink-0 h-full overflow-hidden">
-        <TreeOutlineExplorer
-          rootNode={treeData?.root || null}
-          totalFinalized={treeData?.total_finalized}
-          totalPending={treeData?.total_pending}
-          progressPercent={treeData?.progress_percent}
-          selectedPath={selectedPath}
-          onSelectPath={setSelectedPath}
-          collapsedPaths={collapsedPaths}
-          onToggleCollapse={handleToggleCollapse}
-          onExpandAll={handleExpandAll}
-          onCollapseAll={handleCollapseAll}
-        />
+      {/* Left Pane: Tree Outline Explorer */}
+      <div
+        className={`${
+          showLeftSidebar ? 'w-72 min-w-[240px] max-w-[340px]' : 'w-0'
+        } shrink-0 h-full overflow-hidden transition-all duration-200 border-r border-slate-800 flex flex-col`}
+      >
+        {showLeftSidebar && (
+          <TreeOutlineExplorer
+            rootNode={treeData?.root || null}
+            totalFinalized={treeData?.total_finalized}
+            totalPending={treeData?.total_pending}
+            progressPercent={treeData?.progress_percent}
+            selectedPath={selectedPath}
+            onSelectPath={handleSelectPath}
+            collapsedPaths={collapsedPaths}
+            onToggleCollapse={handleToggleCollapse}
+            onExpandAll={handleExpandAll}
+            onCollapseAll={handleCollapseAll}
+            onBatchFinalize={onBatchFinalizeChunks}
+            onBatchReopen={onBatchReopenChunks}
+            onBatchDelete={onBatchDeleteChunks}
+          />
+        )}
       </div>
 
-      {/* Center Pane: Document Reader & Inline Editor (Flex-1) */}
-      <div className="flex-1 h-full overflow-hidden">
-        <DocumentReaderEditor
-          rootNode={treeData?.root || null}
-          selectedPath={selectedPath}
-          onSelectPath={setSelectedPath}
-          onEditNode={onEditChunk}
-          onDeleteNode={onDeleteChunk}
-          onAddChildNode={onAddChildChunk}
-          edges={session.edges}
-        />
+      {/* Center Pane: Document Reader & Inline Editor */}
+      <div className="flex-1 h-full overflow-hidden flex flex-col min-w-0">
+        {/* Distraction-Free Toggle Header Bar */}
+        <div className="flex items-center justify-between border-b border-slate-800 bg-slate-900/60 px-3 py-1.5 text-xs select-none">
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => setShowLeftSidebar(!showLeftSidebar)}
+              className="flex items-center gap-1.5 rounded px-2 py-1 text-[11px] font-medium text-slate-400 hover:bg-slate-800 hover:text-slate-200 transition"
+              title={showLeftSidebar ? 'Thu gọn Cây Cấu Trúc' : 'Mở rộng Cây Cấu Trúc'}
+            >
+              {showLeftSidebar ? (
+                <PanelLeftClose className="h-3.5 w-3.5" />
+              ) : (
+                <PanelLeftOpen className="h-3.5 w-3.5 text-brand-400" />
+              )}
+              <span>{showLeftSidebar ? 'Ẩn Cấu Trúc' : 'Hiện Cấu Trúc'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                const isZen = !showLeftSidebar && !showRightSidebar;
+                setShowLeftSidebar(isZen);
+                setShowRightSidebar(isZen);
+              }}
+              className={`rounded px-2 py-0.5 text-[10px] font-semibold transition ${
+                !showLeftSidebar && !showRightSidebar
+                  ? 'bg-brand-900 text-brand-200 border border-brand-700'
+                  : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+              }`}
+              title="Chế độ đọc tập trung toàn màn hình (Zen Focus Mode)"
+            >
+              {!showLeftSidebar && !showRightSidebar ? 'Thoát Zen' : 'Zen Mode'}
+            </button>
+          </div>
+
+          <span className="text-[11px] text-slate-500 font-mono truncate px-2">
+            {session.doc_slug}
+          </span>
+
+          <button
+            type="button"
+            onClick={() => setShowRightSidebar(!showRightSidebar)}
+            className="flex items-center gap-1.5 rounded px-2 py-1 text-[11px] font-medium text-slate-400 hover:bg-slate-800 hover:text-slate-200 transition"
+            title={showRightSidebar ? 'Thu gọn Inspector Chunk' : 'Mở rộng Inspector Chunk'}
+          >
+            <span>{showRightSidebar ? 'Ẩn Inspector' : 'Hiện Inspector'}</span>
+            {showRightSidebar ? (
+              <PanelRightClose className="h-3.5 w-3.5" />
+            ) : (
+              <PanelRightOpen className="h-3.5 w-3.5 text-brand-400" />
+            )}
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-hidden">
+          <DocumentReaderEditor
+            rootNode={treeData?.root || null}
+            selectedPath={selectedPath}
+            onSelectPath={handleSelectPath}
+            onEditNode={onEditChunk}
+            onDeleteNode={onDeleteChunk}
+            onAddChildNode={onAddChildChunk}
+            edges={session.edges}
+          />
+        </div>
       </div>
 
-      {/* Right Pane: Node Inspector Panel (320px) */}
-      <div className="w-80 shrink-0 h-full overflow-hidden">
-        <NodeInspectorPanel
-          selectedNode={selectedNode}
-          onEditNode={onEditChunk}
-          onDeleteNode={onDeleteChunk}
-          onAddChildNode={onAddChildChunk}
-          onOpenAddEdge={(src) => {
-            setEdgeModalSourcePath(src);
-            setIsEdgeModalOpen(true);
-          }}
-          onToggleFinalize={onToggleFinalizeChunk}
-          edges={session.edges}
-        />
+      {/* Right Pane: Node Inspector Panel */}
+      <div
+        className={`${
+          showRightSidebar ? 'w-80 min-w-[280px] max-w-[380px]' : 'w-0'
+        } shrink-0 h-full overflow-hidden transition-all duration-200 border-l border-slate-800 flex flex-col`}
+      >
+        {showRightSidebar && (
+          <NodeInspectorPanel
+            selectedNode={selectedNode}
+            onSelectPath={handleSelectPath}
+            onEditNode={onEditChunk}
+            onDeleteNode={onDeleteChunk}
+            onAddChildNode={onAddChildChunk}
+            onOpenAddEdge={(src) => {
+              setEdgeModalSourcePath(src);
+              setIsEdgeModalOpen(true);
+            }}
+            onToggleFinalize={onToggleFinalizeChunk}
+            edges={session.edges}
+            docSlug={session.doc_slug}
+            onRefreshSession={onRefreshSession}
+            candidateParentPaths={session.chunks.map((c) => c.path)}
+          />
+        )}
       </div>
 
       {/* Add Edge Modal */}

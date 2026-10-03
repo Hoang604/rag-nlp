@@ -81,10 +81,27 @@ class GraphRepository(BaseRepository):
         DO UPDATE SET relation_type = EXCLUDED.relation_type
         RETURNING id, source_chunk_id, target_chunk_id, relation_type;
         """
-        edge_ids = [e.id for e in edges]
-        source_ids = [e.source_chunk_id for e in edges]
-        target_ids = [e.target_chunk_id for e in edges]
-        relations = [e.relation_type for e in edges]
+        deduped: dict[tuple[uuid.UUID, uuid.UUID, str], GraphEdgeEntity] = {}
+        for e in edges:
+            rel: str = str(
+                e.relation_type.value
+                if hasattr(e.relation_type, "value")
+                else e.relation_type
+            )
+            deduped[(e.source_chunk_id, e.target_chunk_id, rel)] = e
+
+        unique_edges = list(deduped.values())
+        edge_ids = [e.id for e in unique_edges]
+        source_ids = [e.source_chunk_id for e in unique_edges]
+        target_ids = [e.target_chunk_id for e in unique_edges]
+        relations: list[str] = [
+            str(
+                e.relation_type.value
+                if hasattr(e.relation_type, "value")
+                else e.relation_type
+            )
+            for e in unique_edges
+        ]
 
         try:
             async with self._connection_scope(conn) as c:
@@ -116,6 +133,23 @@ class GraphRepository(BaseRepository):
                 return int(status.rsplit(" ", 1)[-1] or 0)
         except (asyncpg.PostgresError, OSError, RuntimeError) as exc:
             raise self._translate_error("delete_edges_for_chunks", exc) from exc
+
+    async def delete_outgoing_edges_for_chunks(
+        self, chunk_ids: list[uuid.UUID], conn: asyncpg.Connection | None = None
+    ) -> int:
+        """Deletes only outgoing edges originating from the given chunk IDs."""
+        if not chunk_ids:
+            return 0
+        query = """
+        DELETE FROM graph_edges 
+        WHERE source_chunk_id = ANY($1::uuid[]);
+        """
+        try:
+            async with self._connection_scope(conn) as c:
+                status = await c.execute(query, chunk_ids)
+                return int(status.rsplit(" ", 1)[-1] or 0)
+        except (asyncpg.PostgresError, OSError, RuntimeError) as exc:
+            raise self._translate_error("delete_outgoing_edges_for_chunks", exc) from exc
 
     async def list_edges_for_chunks(
         self, chunk_ids: list[uuid.UUID], conn: asyncpg.Connection | None = None

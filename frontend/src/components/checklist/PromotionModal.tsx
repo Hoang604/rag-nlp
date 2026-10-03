@@ -36,7 +36,7 @@ export const PromotionModal: React.FC<PromotionModalProps> = ({
         setResult(res);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Lỗi khi phê duyệt');
+      setError(err instanceof Error ? err.message : 'Lỗi khi lưu trữ');
     } finally {
       setLoading(false);
     }
@@ -49,7 +49,7 @@ export const PromotionModal: React.FC<PromotionModalProps> = ({
           <div className="flex items-center gap-2">
             <Database className="h-5 w-5 text-brand-400" />
             <h3 className="text-base font-bold text-slate-100">
-              Phê Duyệt & Chuyển Dữ Liệu Vào CSDL
+              Xác Nhận & Lưu Trữ Vào CSDL
             </h3>
           </div>
           <button
@@ -71,7 +71,7 @@ export const PromotionModal: React.FC<PromotionModalProps> = ({
             <div className="rounded-lg border border-emerald-800/80 bg-emerald-950/60 p-4 text-center">
               <CheckCircle2 className="mx-auto h-8 w-8 text-emerald-400 mb-2" />
               <h4 className="text-sm font-bold text-emerald-200">
-                Phê Duyệt & Nhập CSDL Thành Công!
+                Xác Nhận & Lưu Trữ CSDL Thành Công!
               </h4>
               <p className="mt-1 text-xs text-emerald-300/80">
                 Toàn bộ dữ liệu đã được ghi nguyên tử vào các bảng PostgreSQL production.
@@ -103,7 +103,7 @@ export const PromotionModal: React.FC<PromotionModalProps> = ({
             {/* Session Summary Card */}
             <div className="rounded-lg bg-slate-950 p-4 border border-slate-800 space-y-2 text-xs">
               <div className="flex justify-between">
-                <span className="text-slate-400">Văn bản:</span>
+                <span className="text-slate-400">Tài liệu:</span>
                 <span className="font-bold text-slate-100 font-mono">{session.doc_slug}</span>
               </div>
               <div className="flex justify-between">
@@ -114,22 +114,18 @@ export const PromotionModal: React.FC<PromotionModalProps> = ({
                 <span className="text-slate-400">Số lượng Cạnh Quan Hệ:</span>
                 <span className="font-bold text-blue-400">{session.edges.length}</span>
               </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400">Ngày hiệu lực:</span>
-                <span className="text-slate-200 font-mono">{session.valid_from || 'Chưa đặt'}</span>
-              </div>
             </div>
 
             {/* Reviewer Notes */}
             <div>
               <label className="block text-xs font-semibold text-slate-300 mb-1">
-                Ghi Chú Thẩm Định Của Chuyên Viên (Audit Notes)
+                Ghi Chú Rà Soát (Audit Notes)
               </label>
               <textarea
                 rows={3}
                 value={reviewerNotes}
                 onChange={(e) => setReviewerNotes(e.target.value)}
-                placeholder="Nhập ý kiến thẩm định hoặc số quyết định ban hành..."
+                placeholder="Nhập ý kiến rà soát hoặc ghi chú xác nhận..."
                 className="w-full rounded-md border border-slate-700 bg-slate-950 p-3 text-xs text-slate-100 focus:border-brand-500 focus:outline-none"
               />
             </div>

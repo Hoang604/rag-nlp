@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+import re
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
@@ -51,11 +52,26 @@ def apply_chunk_deltas_to_session(
     chunk_map: dict[str, StagingChunk] = {c.path: c for c in session.chunks}
     removed_count = 0
     if removed_paths:
+        clean_removed: set[str] = set()
         for rp in removed_paths:
             clean_rp = validate_ltree_path(rp)
             if clean_rp in chunk_map:
                 del chunk_map[clean_rp]
+                clean_removed.add(clean_rp)
                 removed_count += 1
+            # Cascade deletion to all descendant ltree paths
+            prefix = f"{clean_rp}."
+            descendants = [p for p in list(chunk_map.keys()) if p.startswith(prefix)]
+            for child_path in descendants:
+                del chunk_map[child_path]
+                clean_removed.add(child_path)
+                removed_count += 1
+        if clean_removed:
+            session.edges = [
+                e
+                for e in session.edges
+                if e.source_path not in clean_removed and e.target_path not in clean_removed
+            ]
 
     fields_modified_set: set[str] = set()
     cascaded_count = 0
@@ -80,7 +96,7 @@ def apply_chunk_deltas_to_session(
                 continue
             raise CorpusDomainError(
                 error_code=E_INVALID_DOCUMENT_HIERARCHY,
-                message=f"Chunk '{clean_p}' không tồn tại trong phiên làm việc cho văn bản '{session.doc_slug}'.",
+                message=f"Chunk '{clean_p}' không tồn tại trong phiên làm việc cho tài liệu '{session.doc_slug}'.",
                 data={"doc_slug": session.doc_slug, "path": clean_p},
             )
 
@@ -133,6 +149,69 @@ def apply_chunk_deltas_to_session(
         if delta.finalization_state is not None:
             chunk.finalization_state = delta.finalization_state
             fields_modified_set.add("finalization_state")
+
+    if cascade_breadcrumbs and deltas:
+        updated_paths = {
+            validate_ltree_path(d.path)
+            for d in deltas
+            if validate_ltree_path(d.path) in chunk_map
+        }
+        explicit_context_paths = {
+            validate_ltree_path(d.path)
+            for d in deltas
+            if d.contextualized_text is not None and validate_ltree_path(d.path) in chunk_map
+        }
+
+        def _extract_chunk_title(c: StagingChunk) -> str:
+            if isinstance(c.metadata, dict):
+                if c.metadata.get("heading_raw"):
+                    return str(c.metadata["heading_raw"]).strip()
+                if c.metadata.get("title"):
+                    return str(c.metadata["title"]).strip()
+            if c.verbatim_text:
+                first_line = c.verbatim_text.splitlines()[0].strip()
+                m = re.match(r"^#{1,6}\s+(.+)$", first_line)
+                if m:
+                    return m.group(1).strip()
+                return first_line
+            return c.path.split(".")[-1]
+
+        cascaded_chunks: list[StagingChunk] = []
+        for path_key, chunk_obj in chunk_map.items():
+            if path_key in explicit_context_paths:
+                continue
+            is_descendant = any(
+                path_key.startswith(f"{up}.") for up in updated_paths if path_key != up
+            )
+            if is_descendant:
+                parts = path_key.split(".")
+                ancestors: list[str] = []
+                for idx in range(1, len(parts)):
+                    prefix_p = ".".join(parts[:idx])
+                    if prefix_p in chunk_map:
+                        anc_t = _extract_chunk_title(chunk_map[prefix_p])
+                        if anc_t:
+                            ancestors.append(anc_t)
+
+                if not ancestors and session.title:
+                    ancestors.append(session.title)
+
+                clean_verbatim = chunk_obj.verbatim_text.strip()
+                if ancestors:
+                    chunk_obj.contextualized_text = f"[{' > '.join(ancestors)}]\n{clean_verbatim}"
+                else:
+                    chunk_obj.contextualized_text = clean_verbatim
+
+                meta_dict = (
+                    dict(chunk_obj.metadata)
+                    if isinstance(chunk_obj.metadata, dict)
+                    else dict(chunk_obj.metadata or {})
+                )
+                meta_dict["ancestor_titles"] = ancestors
+                chunk_obj.metadata = meta_dict
+                cascaded_chunks.append(chunk_obj)
+
+        cascaded_count = len(cascaded_chunks)
 
     session.chunks = sorted(chunk_map.values(), key=lambda x: x.path)
     now = applied_at or datetime.datetime.now(datetime.UTC)
@@ -194,7 +273,11 @@ def finalize_chunks_in_session(
                 target_chunk.finalization_state = FinalizationState.FINALIZED_SELF_CONTAINED
             else:
                 has_unattached = any(e.target_path is None for e in chunk_edges)
-                if has_unattached:
+                has_unverified_external = any(
+                    e.target_path is not None and e.target_path not in chunk_map
+                    for e in chunk_edges
+                )
+                if has_unattached or has_unverified_external:
                     target_chunk.finalization_state = FinalizationState.UNFINALIZED
                 else:
                     target_chunk.finalization_state = FinalizationState.FINALIZED_FULLY_LINKED
@@ -318,14 +401,14 @@ def reparent_subtree_in_session(
     if not (clean_old == doc_prefix or clean_old.startswith(f"{doc_prefix}.")):
         raise CorpusDomainError(
             error_code=E_INVALID_DOCUMENT_HIERARCHY,
-            message=f"Đường dẫn cũ '{clean_old}' không thuộc văn bản '{session.doc_slug}'.",
+            message=f"Đường dẫn cũ '{clean_old}' không thuộc tài liệu '{session.doc_slug}'.",
             data={"doc_slug": session.doc_slug, "path": clean_old},
         )
 
     if not (clean_new == doc_prefix or clean_new.startswith(f"{doc_prefix}.")):
         raise CorpusDomainError(
             error_code=E_INVALID_DOCUMENT_HIERARCHY,
-            message=f"Đường dẫn mới '{clean_new}' không thuộc văn bản '{session.doc_slug}'.",
+            message=f"Đường dẫn mới '{clean_new}' không thuộc tài liệu '{session.doc_slug}'.",
             data={"doc_slug": session.doc_slug, "path": clean_new},
         )
 

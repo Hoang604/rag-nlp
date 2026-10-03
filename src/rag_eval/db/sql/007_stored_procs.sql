@@ -109,7 +109,7 @@ $$ LANGUAGE plpgsql STABLE;
 -- 2. Stored Procedure: Exact & Trigram Grep Search (Strict Contract)
 -- Tối ưu hóa:
 -- - Bổ sung start_line, end_line cho phép grounding chính xác dòng trong tài liệu.
--- - Bổ sung lọc phân cấp cây văn bản (path_prefix LTREE) qua index GiST.
+-- - Bổ sung lọc phân cấp cây tài liệu (path_prefix LTREE) qua index GiST.
 -- - Bổ sung lọc trạng thái hoàn thiện ngữ cảnh (only_resolved BOOLEAN).
 CREATE OR REPLACE FUNCTION verbatim_grep(
     query_pattern TEXT,
@@ -274,7 +274,7 @@ $$ LANGUAGE plpgsql STABLE;
 -- 4. Stored Procedure: Generalized Hybrid Search (Strict Contract)
 -- Tối ưu hóa:
 -- - Bổ sung start_line, end_line.
--- - Bổ sung lọc phân cấp cây văn bản (path_prefix LTREE) qua index GiST ở cả 2 nhánh dense và sparse.
+-- - Bổ sung lọc phân cấp cây tài liệu (path_prefix LTREE) qua index GiST ở cả 2 nhánh dense và sparse.
 -- - Bổ sung lọc trạng thái hoàn thiện tham chiếu (only_resolved BOOLEAN).
 -- - Fail-fast kiểm tra giá trị tham số hợp lệ (match_limit, rrf_k, ts_config).
 CREATE OR REPLACE FUNCTION hybrid_search(
@@ -336,16 +336,19 @@ BEGIN
     END IF;
 
     IF clean_query != '' AND ts_query IS NOT NULL AND ts_query::text != '' THEN
-        lexemes := string_to_array(replace(ts_query::text, '''', ''), ' & ');
-    END IF;
-
-    IF lexemes IS NOT NULL AND array_length(lexemes, 1) >= 2 THEN
-        SELECT string_agg(format('%s <-> %s', lexemes[i], lexemes[i + 1]), ' | ')
-        INTO ts_any
-        FROM generate_subscripts(lexemes, 1) AS i
-        WHERE i < array_length(lexemes, 1);
-    ELSIF lexemes IS NOT NULL THEN
-        ts_any := lexemes[1]::tsquery;
+        BEGIN
+            lexemes := string_to_array(replace(ts_query::text, '''', ''), ' & ');
+            IF lexemes IS NOT NULL AND array_length(lexemes, 1) >= 2 THEN
+                SELECT string_agg(format('''%s'' <-> ''%s''', replace(lexemes[i], '''', ''''''), replace(lexemes[i + 1], '''', '''''')), ' | ')::tsquery
+                INTO ts_any
+                FROM generate_subscripts(lexemes, 1) AS i
+                WHERE i < array_length(lexemes, 1);
+            ELSIF lexemes IS NOT NULL AND array_length(lexemes, 1) = 1 THEN
+                ts_any := format('''%s''', replace(lexemes[1], '''', ''''''))::tsquery;
+            END IF;
+        EXCEPTION WHEN OTHERS THEN
+            ts_any := NULL;
+        END;
     END IF;
 
     RETURN QUERY

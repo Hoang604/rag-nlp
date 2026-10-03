@@ -5,7 +5,7 @@ import json
 import re
 from collections.abc import Sequence
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 from rag_eval.exceptions import (
     E_AST_GROUNDING_VALIDATION,
@@ -29,9 +29,6 @@ from rag_eval.ingestion.staging.operations import (
     reparent_subtree_in_session,
     validate_and_attach_edges_to_session,
 )
-from rag_eval.schemas import (
-    parse_flexible_date,
-)
 
 
 class StagingDocumentSession(BaseModel):
@@ -42,8 +39,6 @@ class StagingDocumentSession(BaseModel):
     doc_slug: str = Field(..., description="Document slug identifier")
     title: str = Field(..., description="Document title")
     status: StagingStatus = Field(default=StagingStatus.DRAFT, description="Current staging status")
-    valid_from: datetime.date | None = Field(None, description="Valid from date")
-    valid_to: datetime.date | None = Field(None, description="Valid to date")
     created_at: datetime.datetime = Field(
         default_factory=lambda: datetime.datetime.now(datetime.UTC),
         description="Session creation timestamp",
@@ -56,21 +51,26 @@ class StagingDocumentSession(BaseModel):
     promoted_at: datetime.datetime | None = Field(None, description="Session promotion timestamp")
     raw_text: str | None = Field(default=None, description="Raw document source text")
     metadata: dict[str, object] = Field(default_factory=dict, description="Document metadata")
+
+    @property
+    def doc_metadata(self) -> dict[str, object]:
+        """Backward-compatibility alias for metadata."""
+        return self.metadata
+
+    @doc_metadata.setter
+    def doc_metadata(self, val: dict[str, object]) -> None:
+        self.metadata = val
     chunks: list[StagingChunk] = Field(default_factory=list, description="List of staged chunks")
     edges: list[StagingEdge] = Field(default_factory=list, description="List of staged graph edges")
     raw_ast_snapshot: list[dict[str, object]] | None = Field(
         default=None, description="Initial AST baseline snapshot for version diffing"
     )
+    raw_edge_snapshot: list[dict[str, object]] | None = Field(
+        default=None, description="Initial graph edges baseline snapshot for version diffing"
+    )
     mutation_history: list[StagingMutationRecord] = Field(
         default_factory=list, description="Audit trail of mutations"
     )
-
-    @field_validator("valid_from", "valid_to", mode="before")
-    @classmethod
-    def parse_dates(cls, v: object) -> datetime.date | None:
-        if v is None:
-            return None
-        return parse_flexible_date(v)
 
     def get_chunk(self, path: str) -> StagingChunk | None:
         """Looks up a single staged chunk by dot-separated ltree path."""
@@ -85,7 +85,7 @@ class StagingDocumentSession(BaseModel):
         if not self.raw_text or not self.raw_text.strip():
             raise CorpusDomainError(
                 error_code=E_CORPUS_INTEGRITY_VIOLATION,
-                message=f"Văn bản gốc (raw_text) cho '{self.doc_slug}' chưa được lưu hoặc đang rỗng.",
+                message=f"Nội dung gốc (raw_text) cho '{self.doc_slug}' chưa được lưu hoặc đang rỗng.",
                 data={"doc_slug": self.doc_slug},
             )
 
@@ -113,7 +113,7 @@ class StagingDocumentSession(BaseModel):
         if total_lines == 0:
             raise CorpusDomainError(
                 error_code=E_CORPUS_INTEGRITY_VIOLATION,
-                message=f"Văn bản gốc (raw_text) cho '{self.doc_slug}' không chứa dòng nào.",
+                message=f"Nội dung gốc (raw_text) cho '{self.doc_slug}' không chứa dòng nào.",
                 data={"doc_slug": self.doc_slug},
             )
 
