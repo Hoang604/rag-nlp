@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from typing import Final, Literal
@@ -153,7 +154,14 @@ class CorpusRuntimeSensors:
             return ""
 
     async def _get_repo(self) -> CorpusRepository:
-        if self._pool is None:
+        current_loop = asyncio.get_running_loop()
+        pool_loop = getattr(self._pool, "_loop", None) if self._pool is not None else None
+        if (
+            self._pool is None
+            or self._pool._closed
+            or pool_loop is not current_loop
+            or (isinstance(pool_loop, asyncio.AbstractEventLoop) and pool_loop.is_closed())
+        ):
             self._pool = await get_db_pool()
         return CorpusRepository(self._pool)
 

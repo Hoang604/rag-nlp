@@ -18,14 +18,21 @@ def _resolve_default_staging_dir() -> Path:
     """Resolves absolute staging directory anchored to repository root or STAGING_DIR env var."""
     import os
 
-    env_dir = os.environ.get("STAGING_DIR")
-    if env_dir:
-        return Path(env_dir).resolve()
     curr = Path(__file__).resolve().parent
+    repo_root = Path.cwd()
     for parent in [curr, *curr.parents]:
         if (parent / "pyproject.toml").exists() and (parent / "src" / "rag_eval").exists():
-            return (parent / ".cache" / "stg").resolve()
-    return (Path.cwd() / ".cache" / "stg").resolve()
+            repo_root = parent
+            break
+
+    env_dir = os.environ.get("STAGING_DIR")
+    if env_dir:
+        p = Path(env_dir)
+        if not p.is_absolute():
+            return (repo_root / p).resolve()
+        return p.resolve()
+    return (repo_root / ".cache" / "stg").resolve()
+
 
 
 DEFAULT_STAGING_DIR = _resolve_default_staging_dir()

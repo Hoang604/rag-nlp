@@ -399,6 +399,16 @@ class ChunkRepository(BaseRepository):
             raise self._translate_error("reindex_and_vacuum", exc) from exc
 
     def _row_to_entity(self, r: asyncpg.Record) -> ChunkEntity:
+        raw_emb = r["embedding"]
+        embedding_val: list[float] | None = None
+        if raw_emb is not None:
+            if hasattr(raw_emb, "to_list"):
+                embedding_val = [float(x) for x in raw_emb.to_list()]
+            elif hasattr(raw_emb, "tolist"):
+                embedding_val = [float(x) for x in raw_emb.tolist()]
+            else:
+                embedding_val = [float(x) for x in raw_emb]
+
         return ChunkEntity(
             id=uuid.UUID(str(r["id"])),
             document_id=uuid.UUID(str(r["document_id"])),
@@ -409,7 +419,7 @@ class ChunkRepository(BaseRepository):
             end_line=int(r["end_line"]),
             context_type="SELF_CONTAINED" if r["context_type"] == "SELF_CONTAINED" else "REQUIRES_EXTERNAL_CONTEXT",
             is_all_refs_resolved=bool(r["is_all_refs_resolved"]),
-            embedding=list(r["embedding"]) if r["embedding"] is not None else None,
+            embedding=embedding_val,
             metadata=self._parse_metadata(r["metadata"]),
             created_at=r["created_at"],
             updated_at=r["updated_at"],

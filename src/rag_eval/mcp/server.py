@@ -101,6 +101,9 @@ def create_corpus_mcp_server(
             loop = asyncio.get_event_loop()
             if not loop.is_running():
                 rendered_manifest = loop.run_until_complete(tool_impl.build_dynamic_corpus_manifest())
+                from rag_eval.db.connection import close_db_pool
+                loop.run_until_complete(close_db_pool())
+                tool_impl.sensors._pool = None
         except (RuntimeError, OSError, ValueError) as exc:
             logger.debug("Could not build dynamic corpus manifest: %s", exc)
 

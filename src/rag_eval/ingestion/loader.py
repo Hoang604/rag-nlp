@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 import uuid
 from typing import Final
@@ -43,7 +44,12 @@ def get_embedding_model(
         import torch
         from sentence_transformers import SentenceTransformer
 
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        device_env = os.environ.get("RAG_EMBEDDING_DEVICE")
+        device = (
+            device_env
+            if device_env
+            else ("cuda" if torch.cuda.is_available() else "cpu")
+        )
         model_kwargs = (
             {"torch_dtype": torch.float16}
             if device == "cuda"
@@ -83,7 +89,7 @@ def get_embedding_model(
 def compute_chunk_embeddings(
     texts: list[str],
     model_name: str = DEFAULT_EMBEDDING_MODEL,
-    batch_size: int = 128,
+    batch_size: int = 16,
     is_query: bool = False,
     truncate_dim: int = DEFAULT_EMBEDDING_DIM,
 ) -> list[list[float]]:
@@ -99,16 +105,16 @@ def compute_chunk_embeddings(
             data={"model_name": model_name},
         )
 
-    try:
-        if "e5" in model_name.lower():
-            prefix = "query: " if is_query else "passage: "
-            formatted = [
-                f"{prefix}{t}" if not t.startswith(("query: ", "passage: ")) else t
-                for t in texts
-            ]
-        else:
-            formatted = texts
+    if "e5" in model_name.lower():
+        prefix = "query: " if is_query else "passage: "
+        formatted = [
+            f"{prefix}{t}" if not t.startswith(("query: ", "passage: ")) else t
+            for t in texts
+        ]
+    else:
+        formatted = texts
 
+    try:
         try:
             import torch
 
