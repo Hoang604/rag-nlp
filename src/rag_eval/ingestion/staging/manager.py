@@ -16,6 +16,7 @@ from rag_eval.exceptions import (
 from rag_eval.ingestion.staging.models import (
     DEFAULT_STAGING_DIR,
     ChunkReviewStatus,
+    ContextType,
     RelationType,
     StagingChunk,
     StagingChunkDelta,
@@ -246,6 +247,7 @@ class StagingManager:
                             metadata=item.metadata,
                             review_status=item.review_status,
                             finalization_state=item.finalization_state,
+                            context_type=item.context_type,
                         )
                     )
                 elif isinstance(item, dict):
@@ -535,7 +537,10 @@ class StagingManager:
                 data={"doc_slug": doc_slug, "status": session.status.value},
             )
         clean_paths = [validate_ltree_path(p) for p in paths]
-        payload = {"paths": clean_paths}
+        payload = {
+            "paths": clean_paths,
+            "inspected_paths": list(session.inspected_paths),
+        }
         _, session = wal_store.append_record(
             actor=actor,
             op_type="CHUNKS_FINALIZED",
@@ -547,6 +552,7 @@ class StagingManager:
                 "path": c.path,
                 "review_status": c.review_status,
                 "finalization_state": c.finalization_state,
+                "context_type": c.context_type,
             }
             for c in session.chunks
             if c.path in clean_paths and c.review_status == ChunkReviewStatus.REVIEWED
@@ -688,6 +694,7 @@ class StagingManager:
                     metadata=dict(c.metadata or {}),
                     review_status=ChunkReviewStatus.REVIEWED,
                     finalization_state=f_state,
+                    context_type=ContextType(c.context_type) if c.context_type else None,
                 )
             )
 

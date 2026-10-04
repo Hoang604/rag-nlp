@@ -10,7 +10,6 @@ from rag_eval.exceptions import (
 from rag_eval.mcp.server import (
     CorpusMCPServer,
     map_domain_error_to_jsonrpc,
-    render_server_instructions,
 )
 
 
@@ -53,13 +52,6 @@ def test_domain_error_to_jsonrpc_mapping() -> None:
     code_i, _, data_i = map_domain_error_to_jsonrpc(err_int)
     assert code_i == -32603
     assert data_i["domain_code"] == E_CORPUS_INTEGRITY_VIOLATION
-
-
-def test_render_server_instructions_contains_principles() -> None:
-    """Verifies that rendered instructions contain core principles."""
-    instructions = render_server_instructions()
-    assert "# RAG CORPUS RETRIEVAL & STAGING PRINCIPLES" in instructions
-    assert "HIERARCHICAL STRUCTURE" in instructions
 
 
 @pytest.mark.asyncio

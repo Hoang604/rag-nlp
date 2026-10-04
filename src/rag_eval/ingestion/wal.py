@@ -553,6 +553,9 @@ class WALSessionStore:
 
         if record.op_type == "CHUNKS_FINALIZED":
             raw_paths = record.payload.get("paths")
+            raw_inspected = record.payload.get("inspected_paths")
+            if isinstance(raw_inspected, list):
+                session.inspected_paths.update(str(p) for p in raw_inspected)
             paths_list = [str(p) for p in raw_paths] if isinstance(raw_paths, (list, tuple)) else []
             session.finalize_chunks(
                 paths=paths_list,

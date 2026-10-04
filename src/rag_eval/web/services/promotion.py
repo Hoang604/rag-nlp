@@ -21,6 +21,7 @@ from rag_eval.ingestion.staging.models import ChunkReviewStatus, StagingStatus
 from rag_eval.schemas import (
     ChunkContextRefEntity,
     ChunkEntity,
+    ContextType,
     DocumentEntity,
     GraphEdgeEntity,
 )
@@ -106,29 +107,32 @@ class HumanPromotionEngine:
         async with target_pool.acquire() as conn, conn.transaction():
             doc_id = await loader.load_document(doc_entity, conn=conn)
 
-            chunk_edges_count: dict[str, int] = {}
-            for edge in session.edges:
-                chunk_edges_count[edge.source_path] = chunk_edges_count.get(edge.source_path, 0) + 1
-
-            canonical_chunks = [
-                ChunkEntity(
-                    document_id=doc_id,
-                    path=c.path,
-                    verbatim_text=c.verbatim_text,
-                    contextualized_text=c.contextualized_text,
-                    start_line=c.start_line,
-                    end_line=c.end_line,
-                    context_type=(
-                        "REQUIRES_EXTERNAL_CONTEXT"
-                        if chunk_edges_count.get(c.path, 0) > 0
-                        else "SELF_CONTAINED"
-                    ),
-                    is_all_refs_resolved=(chunk_edges_count.get(c.path, 0) == 0),
-                    embedding=computed_embeddings[idx] if computed_embeddings else None,
-                    metadata=c.metadata,
+            canonical_chunks = []
+            for idx, c in enumerate(session.chunks):
+                if c.context_type is None:
+                    raise CorpusDomainError(
+                        error_code=E_AST_GROUNDING_VALIDATION,
+                        message=f"Chunk '{c.path}' không thể promote vì thiếu context_type.",
+                    )
+                ctx_type = (
+                    c.context_type
+                    if isinstance(c.context_type, ContextType)
+                    else ContextType(str(c.context_type))
                 )
-                for idx, c in enumerate(session.chunks)
-            ]
+                canonical_chunks.append(
+                    ChunkEntity(
+                        document_id=doc_id,
+                        path=c.path,
+                        verbatim_text=c.verbatim_text,
+                        contextualized_text=c.contextualized_text,
+                        start_line=c.start_line,
+                        end_line=c.end_line,
+                        context_type=ctx_type,
+                        is_all_refs_resolved=(ctx_type == ContextType.SELF_CONTAINED),
+                        embedding=computed_embeddings[idx] if computed_embeddings else None,
+                        metadata=c.metadata,
+                    )
+                )
             # DEF-INGEST-010: Prune existing context refs and outgoing edges for this document before updating chunks,
             # ensuring trg_assert_chunk_invariants permits temporary is_all_refs_resolved = FALSE without trigger violation
             existing_chunk_ids = await conn.fetch(

@@ -38,6 +38,7 @@ from rag_eval.ingestion.staging.models import (
     StgRemoveEdgeResult,
     StgReopenResult,
     StgReparentResult,
+    get_staging_poll_limit,
 )
 from rag_eval.ingestion.staging.session import StagingDocumentSession
 from rag_eval.schemas import (
@@ -65,6 +66,8 @@ class CorpusStagingTools:
         return self._pool
 
     async def _ensure_session(self, doc_slug: str) -> StagingDocumentSession:
+        if self._staging.session_exists(doc_slug):
+            return self._staging.load_session(doc_slug)
         return await self._staging.load_or_hydrate_session(
             doc_slug=doc_slug, pool=await self._get_pool()
         )
@@ -119,6 +122,7 @@ class CorpusStagingTools:
                 message=f"Chunk '{clean_path}' không tồn tại trong phiên làm việc cho tài liệu '{doc_slug}'.",
                 data={"doc_slug": doc_slug, "path": clean_path},
             )
+        self._staging.save_session(session)
         return StgGetChunkResult(doc_slug=doc_slug, chunk=chunk)
 
     async def stg_get_raw(
@@ -126,6 +130,7 @@ class CorpusStagingTools:
     ) -> StgGetRawResult:
         session = await self._ensure_session(doc_slug)
         window = session.get_raw_window(start_line=start_line, end_line=end_line)
+        self._staging.save_session(session)
         return StgGetRawResult(
             doc_slug=window.doc_slug,
             start_line=window.start_line,
@@ -291,12 +296,14 @@ class CorpusStagingTools:
     async def stg_poll_pending_chunks(
         self,
         doc_slug: str,
-        limit: int = 10,
+        limit: int = 5,
         path_prefix: str | None = None,
     ) -> StgPollPendingResult:
         await self._ensure_session(doc_slug)
+        configured_limit = get_staging_poll_limit()
+        clamped_limit = min(limit or configured_limit, configured_limit)
         chunks, stats = self._staging.poll_pending_chunks(
-            doc_slug=doc_slug, limit=limit, path_prefix=path_prefix
+            doc_slug=doc_slug, limit=clamped_limit, path_prefix=path_prefix
         )
         stats_dict = dict(stats)
         progress_stats = ChunkProgressStats.model_validate(stats_dict)
@@ -304,7 +311,7 @@ class CorpusStagingTools:
         return StgPollPendingResult(
             doc_slug=doc_slug,
             progress=progress_stats,
-            limit=limit,
+            limit=clamped_limit,
             has_more=pending_val > len(chunks),
             chunks=chunks,
         )

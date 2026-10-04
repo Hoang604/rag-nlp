@@ -233,10 +233,52 @@ class PreFlightValidator:
         }
 
         # Rule 8: CHUNK_REVIEW_COMPLETION
-        unreviewed_chunks = [c.path for c in session.chunks if c.review_status != ChunkReviewStatus.REVIEWED]
+        unreviewed_chunks = [
+            c.path for c in session.chunks if c.review_status != ChunkReviewStatus.REVIEWED
+        ]
+        unclassified_chunks = [
+            c.path
+            for c in session.chunks
+            if c.review_status == ChunkReviewStatus.REVIEWED and c.context_type is None
+        ]
+        edges_by_source: dict[str, list[str]] = {}
+        for edge in session.edges:
+            edges_by_source.setdefault(edge.source_path, []).append(edge.target_path)
+
+        invalid_external_chunks = [
+            c.path
+            for c in session.chunks
+            if c.review_status == ChunkReviewStatus.REVIEWED
+            and (
+                c.context_type.value
+                if hasattr(c.context_type, "value")
+                else str(c.context_type)
+            )
+            == "REQUIRES_EXTERNAL_CONTEXT"
+            and not edges_by_source.get(c.path)
+        ]
+        invalid_self_contained_chunks = [
+            c.path
+            for c in session.chunks
+            if c.review_status == ChunkReviewStatus.REVIEWED
+            and (
+                c.context_type.value
+                if hasattr(c.context_type, "value")
+                else str(c.context_type)
+            )
+            == "SELF_CONTAINED"
+            and edges_by_source.get(c.path)
+        ]
+
+        review_violations = (
+            len(unreviewed_chunks)
+            + len(unclassified_chunks)
+            + len(invalid_external_chunks)
+            + len(invalid_self_contained_chunks)
+        )
         summary["chunk_review_completion"] = {
-            "passed": len(unreviewed_chunks) == 0,
-            "violations": len(unreviewed_chunks),
+            "passed": review_violations == 0,
+            "violations": review_violations,
         }
         if unreviewed_chunks:
             issues.append(
@@ -245,6 +287,36 @@ class PreFlightValidator:
                     severity="ERROR",
                     path=None,
                     message=f"There are {len(unreviewed_chunks)} unreviewed chunk(s). Promotion requires 100% reviewed chunks.",
+                    blocking=True,
+                )
+            )
+        if unclassified_chunks:
+            issues.append(
+                ValidationIssue(
+                    rule="CHUNK_REVIEW_COMPLETION",
+                    severity="ERROR",
+                    path=unclassified_chunks[0],
+                    message=f"There are {len(unclassified_chunks)} reviewed chunk(s) missing context_type classification.",
+                    blocking=True,
+                )
+            )
+        if invalid_external_chunks:
+            issues.append(
+                ValidationIssue(
+                    rule="CHUNK_REVIEW_COMPLETION",
+                    severity="ERROR",
+                    path=invalid_external_chunks[0],
+                    message=f"There are {len(invalid_external_chunks)} chunk(s) marked REQUIRES_EXTERNAL_CONTEXT without graph edges.",
+                    blocking=True,
+                )
+            )
+        if invalid_self_contained_chunks:
+            issues.append(
+                ValidationIssue(
+                    rule="CHUNK_REVIEW_COMPLETION",
+                    severity="ERROR",
+                    path=invalid_self_contained_chunks[0],
+                    message=f"There are {len(invalid_self_contained_chunks)} chunk(s) marked SELF_CONTAINED possessing outgoing relation edges.",
                     blocking=True,
                 )
             )

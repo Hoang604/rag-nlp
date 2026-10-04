@@ -9,6 +9,7 @@ from rag_eval.ingestion.staging.models import (
     StagingChunkDelta,
     StagingEdge,
     StagingEdgeFilter,
+    get_staging_poll_limit,
 )
 from rag_eval.mcp.tools import (
     HIERARCHICAL_DIRECTION_DESCRIPTION,
@@ -380,7 +381,7 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
 
     @server.tool(
         name="stg_patch",
-        description="Thực hiện vá lỗi vi phẫu, tạo mới (upsert) hoặc xóa các chunk trong vùng đệm staging.",
+        description="Thực hiện vá lỗi vi phẫu, phân loại context_type kèm giải trình, tạo mới (upsert) hoặc xóa các chunk trong vùng đệm staging.",
     )
     async def stg_patch(
         doc_slug: Annotated[
@@ -497,24 +498,24 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
 
     @server.tool(
         name="stg_poll_pending",
-        description="Lấy danh sách các chunk chưa chốt (PENDING) kèm thống kê tiến độ rà soát tổng thể trong vùng đệm staging.",
+        description="Lấy danh sách các chunk chưa chốt (PENDING) kèm thống kê tiến độ rà soát trong vùng đệm staging.",
     )
     async def stg_poll_pending(
         doc_slug: Annotated[
             str,
             Field(
-                description="Mã định danh doc_slug của phiên làm việc trong vùng đệm staging.",
+                description="Mã định danh doc_slug của phiên làm việc.",
             ),
         ],
         limit: Annotated[
             int,
             Field(
-                default=10,
+                default=get_staging_poll_limit(),
                 ge=1,
-                le=50,
-                description="Số lượng chunk tối đa cần lấy ra trong đợt này.",
+                le=get_staging_poll_limit(),
+                description="Số lượng chunk yêu cầu lấy trong đợt này.",
             ),
-        ] = 10,
+        ] = get_staging_poll_limit(),
         path_prefix: Annotated[
             str,
             Field(

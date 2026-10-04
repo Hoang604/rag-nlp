@@ -4,6 +4,7 @@ from pathlib import Path
 from rag_eval.ingestion.staging.manager import StagingManager
 from rag_eval.ingestion.staging.models import (
     ChunkReviewStatus,
+    ContextType,
     RelationType,
     StagingChunk,
     StagingEdge,
@@ -114,13 +115,14 @@ def test_deterministic_wal_replay(temp_staging_manager: StagingManager) -> None:
     ]
     temp_staging_manager.patch_chunks(doc_slug=doc_slug, updated_chunks=chunks)
 
-    # Apply chunk patch edit
+    # Apply chunk patch edit with context_type
     updated_chunk = StagingChunk(
         path=f"{doc_slug}.sec_1",
         verbatim_text="Section 1 modified.",
         contextualized_text="Section 1 modified.",
         start_line=1,
         end_line=1,
+        context_type=ContextType.REQUIRES_EXTERNAL_CONTEXT,
     )
     temp_staging_manager.patch_chunks(
         doc_slug=doc_slug,
@@ -134,6 +136,11 @@ def test_deterministic_wal_replay(temp_staging_manager: StagingManager) -> None:
         relation_type=RelationType.REFERENCES,
     )
     temp_staging_manager.add_edges(doc_slug=doc_slug, edges=[edge])
+
+    # Inspect chunk before finalizing to satisfy review gate invariant
+    session = temp_staging_manager.load_session(doc_slug)
+    session.get_chunk(f"{doc_slug}.sec_1")
+    temp_staging_manager.save_session(session)
 
     # Finalize chunk
     temp_staging_manager.finalize_chunks(

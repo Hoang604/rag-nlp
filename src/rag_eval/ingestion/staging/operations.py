@@ -3,10 +3,11 @@ from __future__ import annotations
 import datetime
 import re
 from collections.abc import Sequence
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NoReturn
 
 from rag_eval.ingestion.staging.models import (
     ChunkReviewStatus,
+    ContextType,
     ReparentPathMapping,
     StagingChunk,
     StagingChunkDelta,
@@ -14,6 +15,8 @@ from rag_eval.ingestion.staging.models import (
     StagingEdge,
     StagingMutationRecord,
     StagingStatus,
+    StagingViolationCode,
+    StagingViolationData,
     StgReparentResult,
     deep_merge_dict,
 )
@@ -87,10 +90,14 @@ def apply_chunk_deltas_to_session(
                     contextualized_text=delta.contextualized_text or delta.verbatim_text,
                     start_line=delta.start_line or 1,
                     end_line=delta.end_line or 1,
-                    metadata=delta.metadata or {},
+                    metadata=dict(delta.metadata or {}),
                     review_status=delta.review_status or ChunkReviewStatus.PENDING,
                     finalization_state=delta.finalization_state or FinalizationState.UNFINALIZED,
+                    context_type=delta.context_type,
                 )
+                if delta.justification:
+                    new_chunk.metadata["justification"] = delta.justification
+                    new_chunk.metadata["finalization_justification"] = delta.justification
                 chunk_map[clean_p] = new_chunk
                 fields_modified_set.add("created")
                 continue
@@ -149,6 +156,21 @@ def apply_chunk_deltas_to_session(
         if delta.finalization_state is not None:
             chunk.finalization_state = delta.finalization_state
             fields_modified_set.add("finalization_state")
+
+        if delta.context_type is not None:
+            chunk.context_type = delta.context_type
+            fields_modified_set.add("context_type")
+
+        if delta.justification is not None:
+            base_dict = (
+                dict(chunk.metadata)
+                if isinstance(chunk.metadata, dict)
+                else dict(chunk.metadata or {})
+            )
+            base_dict["justification"] = delta.justification
+            base_dict["finalization_justification"] = delta.justification
+            chunk.metadata = base_dict
+            fields_modified_set.add("metadata")
 
     if cascade_breadcrumbs and deltas:
         updated_paths = {
@@ -242,6 +264,27 @@ def apply_chunk_deltas_to_session(
     )
 
 
+def raise_staging_violation(
+    violation_code: StagingViolationCode,
+    path: str,
+    doc_slug: str,
+    message: str,
+    remediation_hint: str,
+) -> NoReturn:
+    payload = StagingViolationData(
+        violation_code=violation_code,
+        path=path,
+        doc_slug=doc_slug,
+        message=message,
+        remediation_hint=remediation_hint,
+    )
+    raise CorpusDomainError(
+        error_code=E_AST_GROUNDING_VALIDATION,
+        message=f"[{violation_code.value}] {message} Hướng dẫn thẩm định: {remediation_hint}",
+        data=payload.model_dump(mode="json"),
+    )
+
+
 def finalize_chunks_in_session(
     session: StagingDocumentSession,
     paths: Sequence[str],
@@ -267,25 +310,54 @@ def finalize_chunks_in_session(
     for p in sorted(target_paths):
         if p in chunk_map:
             target_chunk = chunk_map[p]
-            target_chunk.review_status = ChunkReviewStatus.REVIEWED
-            chunk_edges = edges_by_source.get(p, [])
-            if not chunk_edges:
-                target_chunk.finalization_state = FinalizationState.FINALIZED_SELF_CONTAINED
-            else:
-                has_unattached = any(e.target_path is None for e in chunk_edges)
-                has_unverified_external = any(
-                    e.target_path is not None and e.target_path not in chunk_map
-                    for e in chunk_edges
+
+            if not session.is_chunk_inspected(p):
+                raise_staging_violation(
+                    violation_code=StagingViolationCode.UNINSPECTED_CHUNK,
+                    path=p,
+                    doc_slug=session.doc_slug,
+                    message=f"Chunk '{p}' chưa từng được đọc qua stg_get_chunk hoặc stg_get_raw trong phiên làm việc.",
+                    remediation_hint="Nghĩa vụ thẩm định: Bạn phải đọc và kiểm tra trực tiếp nội dung văn bản của chunk qua stg_get_chunk hoặc stg_get_raw trước khi được phép chốt nghiệm thu.",
                 )
-                if has_unattached or has_unverified_external:
-                    target_chunk.finalization_state = FinalizationState.UNFINALIZED
-                else:
-                    target_chunk.finalization_state = FinalizationState.FINALIZED_FULLY_LINKED
+
+            if target_chunk.context_type is None:
+                raise_staging_violation(
+                    violation_code=StagingViolationCode.UNCLASSIFIED_CHUNK,
+                    path=p,
+                    doc_slug=session.doc_slug,
+                    message=f"Chunk '{p}' chưa được phân loại context_type qua stg_patch trước khi finalize.",
+                    remediation_hint="Nghĩa vụ thẩm định: Hãy đối soát nội dung chunk để xác định tính tự chứa hay có căn cứ phụ thuộc, sau đó sử dụng stg_patch để thiết lập context_type kèm giải trình thực tế trước khi nghiệm thu.",
+                )
+
+            chunk_edges = edges_by_source.get(p, [])
+            if target_chunk.context_type == ContextType.SELF_CONTAINED:
+                if chunk_edges:
+                    raise_staging_violation(
+                        violation_code=StagingViolationCode.INVALID_RELATION_ON_SELF_CONTAINED,
+                        path=p,
+                        doc_slug=session.doc_slug,
+                        message=f"Chunk '{p}' được phân loại SELF_CONTAINED nhưng lại tồn tại {len(chunk_edges)} cạnh quan hệ xuất phát từ nó.",
+                        remediation_hint="Xung đột trạng thái: Chunk được khai báo SELF_CONTAINED nhưng lại có cạnh phụ thuộc xuất phát từ nó. Hãy kiểm tra lại: (1) Nếu chunk thực sự độc lập, hãy xóa các cạnh thừa bằng stg_remove_edge; (2) Nếu chunk có phụ thuộc, dùng stg_patch cập nhật context_type thành REQUIRES_EXTERNAL_CONTEXT.",
+                    )
+                target_chunk.finalization_state = FinalizationState.FINALIZED_SELF_CONTAINED
+            elif target_chunk.context_type == ContextType.REQUIRES_EXTERNAL_CONTEXT:
+                if not chunk_edges:
+                    raise_staging_violation(
+                        violation_code=StagingViolationCode.MISSING_RELATION_EDGE,
+                        path=p,
+                        doc_slug=session.doc_slug,
+                        message=f"Chunk '{p}' được gắn nhãn REQUIRES_EXTERNAL_CONTEXT nhưng chưa có cạnh quan hệ nào được liên kết.",
+                        remediation_hint="Xung đột trạng thái: Chunk được gắn nhãn REQUIRES_EXTERNAL_CONTEXT nhưng đồ thị chưa có cạnh liên kết. Đối soát: (1) Nếu chunk thực sự có viện dẫn, hãy tra cứu nút đích và tạo cạnh bằng stg_add_edges; (2) Nếu đã phân loại nhầm, dùng stg_patch để đính chính lại context_type thành SELF_CONTAINED kèm lý do.",
+                    )
+                target_chunk.finalization_state = FinalizationState.FINALIZED_FULLY_LINKED
+
+            target_chunk.review_status = ChunkReviewStatus.REVIEWED
             finalized_count += 1
             results.append({
                 "path": target_chunk.path,
                 "review_status": target_chunk.review_status,
                 "finalization_state": target_chunk.finalization_state,
+                "context_type": target_chunk.context_type,
             })
 
     now = applied_at or datetime.datetime.now(datetime.UTC)
@@ -293,8 +365,8 @@ def finalize_chunks_in_session(
     session.mutation_history.append(
         StagingMutationRecord(
             actor=actor,
-            action_type="CHUNKS_REVIEWED",
-            description=f"Marked {finalized_count} chunks as REVIEWED.",
+            action_type="CHUNKS_FINALIZED",
+            description=f"Finalized {finalized_count} chunks.",
             timestamp=now,
             diff_payload={"paths": sorted(target_paths), "finalized_count": finalized_count},
         )
@@ -317,6 +389,7 @@ def validate_and_attach_edges_to_session(
         )
 
     valid_paths = {c.path for c in session.chunks}
+    chunks_by_path = {c.path: c for c in session.chunks}
     doc_prefix = sanitize_ltree_label(session.doc_slug)
 
     existing_edges: dict[tuple[str, str, str], StagingEdge] = {
@@ -339,6 +412,23 @@ def validate_and_attach_edges_to_session(
             raise CorpusDomainError(
                 error_code=E_AST_GROUNDING_VALIDATION,
                 message=f"Invalid edge source path '{clean_src}': path does not exist in staged document '{session.doc_slug}'.",
+                data={"doc_slug": session.doc_slug, "source_path": clean_src},
+            )
+
+        src_chunk = chunks_by_path.get(clean_src)
+        if (
+            src_chunk
+            and src_chunk.review_status == ChunkReviewStatus.REVIEWED
+            and (
+                src_chunk.context_type.value
+                if hasattr(src_chunk.context_type, "value")
+                else str(src_chunk.context_type)
+            )
+            == "SELF_CONTAINED"
+        ):
+            raise CorpusDomainError(
+                error_code=E_AST_GROUNDING_VALIDATION,
+                message=f"Không thể thêm cạnh phụ thuộc từ chunk '{clean_src}' đã hoàn thiện với trạng thái SELF_CONTAINED. Hãy dùng stg_patch cập nhật context_type trước.",
                 data={"doc_slug": session.doc_slug, "source_path": clean_src},
             )
 

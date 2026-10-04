@@ -71,12 +71,21 @@ class StagingDocumentSession(BaseModel):
     mutation_history: list[StagingMutationRecord] = Field(
         default_factory=list, description="Audit trail of mutations"
     )
+    inspected_paths: set[str] = Field(
+        default_factory=set,
+        description="Set of chunk dot-separated ltree paths that have been inspected via get_chunk or get_raw_window",
+    )
+
+    def is_chunk_inspected(self, path: str) -> bool:
+        """Returns True if the specified chunk path was inspected during this session."""
+        return path.strip() in self.inspected_paths
 
     def get_chunk(self, path: str) -> StagingChunk | None:
         """Looks up a single staged chunk by dot-separated ltree path."""
         clean_path = path.strip()
         for chunk in self.chunks:
             if chunk.path == clean_path:
+                self.inspected_paths.add(chunk.path)
                 return chunk
         return None
 
@@ -120,6 +129,10 @@ class StagingDocumentSession(BaseModel):
         clamped_start = max(1, min(start_line, total_lines))
         clamped_end = max(clamped_start, min(end_line, total_lines))
         content = "\n".join(lines)
+
+        for c in self.chunks:
+            if max(c.start_line, clamped_start) <= min(c.end_line, clamped_end):
+                self.inspected_paths.add(c.path)
 
         return RawTextWindow(
             doc_slug=self.doc_slug,

@@ -9,6 +9,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from rag_eval.schemas import (
+    ContextType,
     FinalizationState,
     validate_ltree_path,
 )
@@ -38,6 +39,19 @@ def _resolve_default_staging_dir() -> Path:
 DEFAULT_STAGING_DIR = _resolve_default_staging_dir()
 
 
+def get_staging_poll_limit() -> int:
+    """Reads STAGING_POLL_LIMIT (or STAGING_BATCH_SIZE) from env, bounded to [1, 50], default 5."""
+    import os
+
+    raw = os.environ.get("STAGING_POLL_LIMIT") or os.environ.get("STAGING_BATCH_SIZE")
+    if raw:
+        try:
+            return max(1, min(int(raw), 50))
+        except ValueError:
+            pass
+    return 5
+
+
 def deep_merge_dict(base: dict[str, object], delta: dict[str, object]) -> dict[str, object]:
     """Recursively merges delta dictionary into base dictionary without clobbering sibling keys."""
     merged = dict(base)
@@ -48,6 +62,27 @@ def deep_merge_dict(base: dict[str, object], delta: dict[str, object]) -> dict[s
         else:
             merged[key] = value
     return merged
+
+
+class StagingViolationCode(str, Enum):
+    UNINSPECTED_CHUNK = "UNINSPECTED_CHUNK"
+    UNCLASSIFIED_CHUNK = "UNCLASSIFIED_CHUNK"
+    MISSING_RELATION_EDGE = "MISSING_RELATION_EDGE"
+    INVALID_RELATION_ON_SELF_CONTAINED = "INVALID_RELATION_ON_SELF_CONTAINED"
+    BATCH_LIMIT_EXCEEDED = "BATCH_LIMIT_EXCEEDED"
+
+
+class StagingViolationData(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    violation_code: StagingViolationCode = Field(..., description="Mã lỗi máy đọc được.")
+    path: str = Field(..., description="Đường dẫn ltree của chunk vi phạm.")
+    doc_slug: str = Field(..., description="Mã định danh tài liệu.")
+    message: str = Field(..., description="Mô tả chi tiết nguyên nhân vi phạm.")
+    remediation_hint: str = Field(
+        ...,
+        description="Chỉ dẫn nghĩa vụ nhận thức để tự sửa sai tuân thủ nguyên tắc chống gian lận.",
+    )
 
 
 class ChunkReviewStatus(str, Enum):
@@ -119,6 +154,14 @@ class StagingChunkDelta(BaseModel):
     finalization_state: FinalizationState | None = Field(
         None,
         description="Trạng thái hoàn thiện của chunk trong quy trình staging và review.",
+    )
+    context_type: ContextType | None = Field(
+        None,
+        description="Phân loại ngữ nghĩa: SELF_CONTAINED (tự chứa) hoặc REQUIRES_EXTERNAL_CONTEXT (cần liên kết ngoài).",
+    )
+    justification: str | None = Field(
+        None,
+        description="Căn cứ thẩm định: giải trình vì sao tự chứa hoặc tóm tắt các điểm cần liên kết.",
     )
 
 
@@ -243,6 +286,10 @@ class StagingChunk(BaseModel):
     finalization_state: FinalizationState = Field(
         default=FinalizationState.UNFINALIZED,
         description="Semantic finalization state ('FINALIZED_*' | 'UNFINALIZED')",
+    )
+    context_type: ContextType | None = Field(
+        default=None,
+        description="Semantic context classification ('SELF_CONTAINED' | 'REQUIRES_EXTERNAL_CONTEXT')",
     )
 
     @model_validator(mode="after")
@@ -466,6 +513,10 @@ class ChunkFinalizeStatus(BaseModel):
     review_status: ChunkReviewStatus = Field(..., description="Trạng thái rà soát (REVIEWED)")
     finalization_state: FinalizationState = Field(
         ..., description="Trạng thái hoàn thiện được tự động suy diễn"
+    )
+    context_type: ContextType | None = Field(
+        None,
+        description="Phân loại ngữ nghĩa: SELF_CONTAINED hoặc REQUIRES_EXTERNAL_CONTEXT",
     )
 
 

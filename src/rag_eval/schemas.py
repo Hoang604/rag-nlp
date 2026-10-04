@@ -14,6 +14,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 # ---------------------------------------------------------------------------
 
 
+class ContextType(str, Enum):
+    SELF_CONTAINED = "SELF_CONTAINED"
+    REQUIRES_EXTERNAL_CONTEXT = "REQUIRES_EXTERNAL_CONTEXT"
+
+
 class FinalizationState(str, Enum):
     UNFINALIZED = "UNFINALIZED"
     FINALIZED_SELF_CONTAINED = "FINALIZED_SELF_CONTAINED"
@@ -116,8 +121,8 @@ class ChunkEntity(BaseModel):
     contextualized_text: str = Field(..., description="Nội dung ngữ cảnh đầy đủ")
     start_line: int = Field(default=1, ge=1, description="Dòng bắt đầu 1-indexed trong tài liệu gốc")
     end_line: int = Field(default=1, ge=1, description="Dòng kết thúc 1-indexed trong tài liệu gốc")
-    context_type: str = Field(
-        default="SELF_CONTAINED",
+    context_type: ContextType = Field(
+        default=ContextType.SELF_CONTAINED,
         description="Độ tự thân ngữ cảnh ('SELF_CONTAINED' | 'REQUIRES_EXTERNAL_CONTEXT')",
     )
     is_all_refs_resolved: bool = Field(

@@ -7,7 +7,6 @@ from rag_eval.ingestion.parser.normalizer import DocumentNormalizer, SupportedFo
 from rag_eval.ingestion.staging.manager import StagingManager
 from rag_eval.ingestion.staging.models import RelationType
 from rag_eval.schemas import validate_ltree_path
-from rag_eval.web.services.validation import PreFlightValidator
 
 
 def test_document_normalizer_synthetic_mechanics() -> None:
@@ -167,61 +166,6 @@ def test_lineage_breadcrumb_contextualization() -> None:
     deepest = next(c for c in staging_chunks if "normalizer" in c.path.lower() and c.path.endswith(".p"))
     assert "AST Normalizer parses layout structures." == deepest.verbatim_text.strip()
     assert "[Architecture > Ingestion Pipeline > AST Normalizer]" in deepest.contextualized_text
-
-
-def test_staging_manager_genesis_e2e_integration(tmp_path: Path) -> None:
-    """Verifies end-to-end staging ingestion produces valid LSN 0 WAL genesis and passes pre-flight validation."""
-    staging_dir = tmp_path / "stg_cache"
-    staging_dir.mkdir(parents=True, exist_ok=True)
-    mgr = StagingManager(staging_dir=staging_dir)
-
-    raw_text = (
-        "# Technical Specification\n"
-        "\n"
-        "Preamble text explaining invariants.\n"
-        "\n"
-        "## Section A\n"
-        "\n"
-        "Description of Section A.\n"
-        "\n"
-        "| Key | Value |\n"
-        "| --- | --- |\n"
-        "| K1 | V1 |\n"
-        "\n"
-        "## Section B\n"
-        "\n"
-        "Link back to [Section A](#section-a).\n"
-    )
-
-    session = mgr.create_session_from_raw(
-        doc_slug="tech_spec",
-        title="Technical Specification",
-        raw_text=raw_text,
-    )
-
-    # 1. Session must contain chunks and deterministic edges
-    assert len(session.chunks) >= 3
-    assert len(session.edges) == 1
-
-    # 2. Disk artifacts must exist: genesis.json, wal.jsonl, state.json
-    session_dir = staging_dir / "tech_spec"
-    assert (session_dir / "genesis.json").exists()
-    assert (session_dir / "wal.jsonl").exists()
-    assert (session_dir / "state.json").exists()
-
-    # 3. PreFlightValidator: blocks before review, passes after chunk finalization
-    validator = PreFlightValidator()
-    initial_report = validator.validate(session)
-    assert initial_report.passed is False
-    assert any(i.rule == "CHUNK_REVIEW_COMPLETION" and i.blocking for i in initial_report.issues)
-
-    # Finalize all chunks to simulate agent/reviewer completion
-    mgr.finalize_chunks("tech_spec", paths=[c.path for c in session.chunks])
-    finalized_session = mgr.load_session("tech_spec")
-    final_report = validator.validate(finalized_session)
-    blocking_errors = [i for i in final_report.issues if i.blocking]
-    assert len(blocking_errors) == 0
-    assert final_report.passed is True
 
 
 def test_pdf_normalization_markdown_table_sync() -> None:

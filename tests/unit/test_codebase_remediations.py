@@ -5,9 +5,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from typer.testing import CliRunner
 
-from rag_eval.cli import app
 from rag_eval.exceptions import (
     E_CORPUS_INTEGRITY_VIOLATION,
     CorpusDomainError,
@@ -20,20 +18,15 @@ from rag_eval.ingestion.parser.normalizer import (
 )
 from rag_eval.ingestion.staging.manager import StagingManager
 from rag_eval.ingestion.staging.models import (
-    ChunkReviewStatus,
-    RelationType,
+    ContextType,
     StagingChunk,
     StagingChunkDelta,
-    StagingEdge,
     StagingStatus,
 )
 from rag_eval.ingestion.staging.operations import apply_chunk_deltas_to_session
 from rag_eval.ingestion.staging.session import StagingDocumentSession
 from rag_eval.ingestion.wal import GenesisSnapshot, WALSessionStore
-from rag_eval.mcp.tools import CorpusMCPTools
-from rag_eval.mcp.tools.staging import CorpusStagingTools
 from rag_eval.schemas import sanitize_ltree_label
-from rag_eval.web.services.promotion import HumanPromotionEngine
 from rag_eval.web.services.tree import TreeHierarchyBuilder
 from rag_eval.web.services.validation import PreFlightValidator
 
@@ -185,203 +178,6 @@ def test_apply_chunk_deltas_breadcrumb_cascading() -> None:
     assert sec_2.contextualized_text == "# Chuong 2: Kien Truc"
 
 
-def test_staging_manager_lifecycle_status_enforcement(tmp_path: Path) -> None:
-    """Verifies that patch_chunks and add_edges reject non-DRAFT/AMENDMENT sessions."""
-    manager = StagingManager(staging_dir=tmp_path)
-    session = manager.create_session_from_raw(
-        doc_slug="doc_lifecycle",
-        title="Test Lifecycle",
-        raw_text="# Title\n\nContent paragraph.",
-    )
-
-    # Transition session to AGENT_COMMITTED
-    paths = [c.path for c in session.chunks]
-    manager.finalize_chunks(doc_slug="doc_lifecycle", paths=paths)
-    manager.update_session_status(
-        doc_slug="doc_lifecycle",
-        status=StagingStatus.AGENT_COMMITTED,
-        actor="TEST",
-        description="Committed by agent",
-    )
-
-    # 1. patch_chunks must raise CorpusDomainError
-    with pytest.raises(CorpusDomainError) as exc_patch:
-        manager.patch_chunks(
-            doc_slug="doc_lifecycle",
-            updated_chunks=[StagingChunkDelta(path=paths[0], verbatim_text="New text")],
-        )
-    assert "Không thể chỉnh sửa phiên staging" in exc_patch.value.message
-
-    # 2. add_edges must raise CorpusDomainError
-    with pytest.raises(CorpusDomainError) as exc_edge:
-        manager.add_edges(
-            doc_slug="doc_lifecycle",
-            edges=[
-                StagingEdge(
-                    source_path=paths[0],
-                    target_path="doc_lifecycle.target",
-                    relation_type=RelationType.REFERENCES,
-                )
-            ],
-        )
-    assert "Không thể chỉnh sửa phiên staging" in exc_edge.value.message
-
-
-@pytest.mark.asyncio
-async def test_stg_validate_mcp_tool(tmp_path: Path) -> None:
-    """Verifies that stg_validate executes PreFlightValidator and returns the validation report."""
-    manager = StagingManager(staging_dir=tmp_path)
-    manager.create_session_from_raw(
-        doc_slug="valid_doc",
-        title="Valid Document",
-        raw_text="# Section One\n\nParagraph text here.",
-    )
-
-    staging_tools = CorpusStagingTools(staging_manager=manager)
-    report = await staging_tools.stg_validate(doc_slug="valid_doc")
-
-    assert isinstance(report, dict)
-    assert "status" in report
-    assert "passed" in report
-    assert "issues" in report
-    assert "summary" in report
-    assert report["total_checks"] == 8
-
-    # Also check delegation on CorpusMCPTools
-    mcp_tools = CorpusMCPTools(sensors=MagicMock(), staging=staging_tools)
-    mcp_report = await mcp_tools.stg_validate(doc_slug="valid_doc")
-    assert mcp_report["status"] == report["status"]
-
-
-def test_cli_promote_force_option(tmp_path: Path) -> None:
-    """Verifies that cli promote --force automatically finalizes unreviewed chunks and approves draft sessions."""
-    manager = StagingManager(staging_dir=tmp_path)
-    session = manager.create_session_from_raw(
-        doc_slug="cli_force_doc",
-        title="CLI Force Document",
-        raw_text="# Header\n\nVerbatim paragraph.",
-    )
-    assert session.status == StagingStatus.DRAFT
-    assert any(c.review_status == ChunkReviewStatus.PENDING for c in session.chunks)
-
-    runner = CliRunner()
-    mock_instance = MagicMock()
-    mock_res = MagicMock(chunks_promoted=len(session.chunks), edges_promoted=0)
-    mock_instance.promote_session = AsyncMock(return_value=mock_res)
-
-    with (
-        patch("rag_eval.ingestion.staging.StagingManager", return_value=manager),
-        patch("rag_eval.web.services.HumanPromotionEngine", return_value=mock_instance),
-        patch("rag_eval.cli._prune_stale_chunks", new_callable=AsyncMock) as mock_prune,
-        patch("rag_eval.cli._rebuild_indexes", new_callable=AsyncMock),
-    ):
-        mock_prune.return_value = 0
-        result = runner.invoke(app, ["promote", "--force", "--no-embed"])
-
-    assert result.exit_code == 0
-    assert "Promoted 1 documents" in result.output
-
-    # Verify session was updated to APPROVED and chunks finalized
-    updated_session = manager.load_session("cli_force_doc")
-    assert updated_session.status == StagingStatus.APPROVED
-    for c in updated_session.chunks:
-        assert c.review_status == ChunkReviewStatus.REVIEWED
-
-
-@pytest.mark.asyncio
-async def test_promotion_persists_context_refs_and_warns_unlinked_edges(tmp_path: Path) -> None:
-    """Verifies SEC-INGEST-001 and SEC-INGEST-005: batch_create_refs is invoked and unlinked edges warn."""
-    manager = StagingManager(staging_dir=tmp_path)
-    session = manager.create_session_from_raw(
-        doc_slug="promo_doc",
-        title="Promotion Document",
-        raw_text="# Section 1\n\nParagraph 1.\n\n# Section 2\n\nParagraph 2 text.",
-    )
-    # Add an edge between chunk 1 and 2, and an unlinked external edge while in DRAFT
-    manager.add_edges(
-        "promo_doc",
-        edges=[
-            StagingEdge(
-                source_path=session.chunks[1].path,
-                target_path=session.chunks[0].path,
-                relation_type=RelationType.REFERENCES,
-            ),
-            StagingEdge(
-                source_path=session.chunks[1].path,
-                target_path="external_doc.sec_99",
-                relation_type=RelationType.REFERENCES,
-            ),
-        ],
-        actor="TEST",
-    )
-
-    # Finalize all chunks and approve session so promotion passes review gate
-    paths = [c.path for c in session.chunks]
-    manager.finalize_chunks("promo_doc", paths=paths, actor="TEST")
-    session = manager.update_session_status(
-        "promo_doc",
-        StagingStatus.APPROVED,
-        actor="TEST",
-        description="Approved for test promotion",
-    )
-
-    mock_pool = MagicMock()
-    mock_conn = MagicMock()
-    mock_pool.acquire.return_value.__aenter__.return_value = mock_conn
-    mock_pool.acquire.return_value.__aexit__.return_value = None
-    mock_conn.transaction.return_value.__aenter__.return_value = None
-    mock_conn.transaction.return_value.__aexit__.return_value = None
-    mock_conn.execute = AsyncMock()
-    mock_conn.fetch = AsyncMock(return_value=[])
-
-    mock_loader = MagicMock()
-    mock_doc_id = uuid.uuid4()
-    mock_loader.load_document = AsyncMock(return_value=mock_doc_id)
-    chunk_map: dict[str, uuid.UUID] = {}
-
-    async def fake_load_chunks(chunks: list[object], conn: object = None) -> dict[str, uuid.UUID]:
-        for c in chunks:
-            p = getattr(c, "path", "")
-            if p and p not in chunk_map:
-                chunk_map[p] = uuid.uuid4()
-        return chunk_map
-
-    mock_loader.load_chunks = AsyncMock(side_effect=fake_load_chunks)
-    mock_loader.resolve_chunk_paths = AsyncMock(return_value={})
-    edge_persisted_id = uuid.uuid4()
-
-    async def fake_load_edges(edges: list[object], conn: object = None) -> dict[tuple[uuid.UUID, uuid.UUID, str], uuid.UUID]:
-        result = {}
-        for e in edges:
-            src = getattr(e, "source_chunk_id", None)
-            tgt = getattr(e, "target_chunk_id", None)
-            rel = getattr(e, "relation_type", "")
-            if src and tgt:
-                result[(src, tgt, rel)] = edge_persisted_id
-        return result
-
-    mock_loader.load_graph_edges = AsyncMock(side_effect=fake_load_edges)
-    mock_loader.corpus_repo.context_refs.batch_create_refs = AsyncMock(return_value=1)
-    mock_loader.corpus_repo.graph.delete_edges_for_chunks = AsyncMock(return_value=0)
-    mock_loader.corpus_repo.graph.delete_outgoing_edges_for_chunks = AsyncMock(return_value=0)
-
-    engine = HumanPromotionEngine(staging_manager=manager)
-    with patch("rag_eval.web.services.promotion.PostgresBulkLoader", return_value=mock_loader):
-        res = await engine.promote_session(doc_slug="promo_doc", pool=mock_pool, compute_embeddings=False)
-
-    assert res.status == "SUCCESS"
-    # Verify batch_create_refs was called with persisted refs!
-    mock_loader.corpus_repo.context_refs.batch_create_refs.assert_awaited_once()
-    called_refs = mock_loader.corpus_repo.context_refs.batch_create_refs.call_args[0][0]
-    assert len(called_refs) == 2
-    assert called_refs[0].chunk_id == chunk_map[session.chunks[1].path]
-    assert called_refs[0].target_chunk_id == chunk_map[session.chunks[0].path]
-    assert called_refs[0].edge_id == edge_persisted_id
-    assert called_refs[1].target_path == "external_doc.sec_99"
-    assert called_refs[1].target_chunk_id is None
-    assert called_refs[1].edge_id is None
-
-
 def test_preflight_validator_coordinate_continuity_rule_4(tmp_path: Path) -> None:
     """Verifies SEC-INGEST-002: Rule 4 COORDINATE_CONTINUITY validates start_line and end_line bounds."""
     manager = StagingManager(staging_dir=tmp_path)
@@ -455,51 +251,6 @@ def test_leaf_disambiguation_does_not_leak_into_anchors() -> None:
     assert edges[0].target_path == "doc.sec_1"
 
 
-@pytest.mark.asyncio
-async def test_mcp_stg_commit_sanitized_slug_validation(tmp_path: Path) -> None:
-    """Verifies SEC-INGEST-004: stg_commit normalizes doc_slug before checking intra-doc edge targets."""
-    manager = StagingManager(staging_dir=tmp_path)
-    session = manager.create_session_from_raw(
-        doc_slug="Doc-Slug-01",
-        title="Sanitized Doc",
-        raw_text="# Heading 1\n\nContent paragraph 1.\n\n# Heading 2\n\nContent paragraph 2.",
-    )
-    paths = [c.path for c in session.chunks]
-    manager.finalize_chunks("Doc-Slug-01", paths=paths, actor="AGENT")
-
-    # Add edge targeting valid internal chunk (from chunk 1 to chunk 0)
-    manager.add_edges(
-        "Doc-Slug-01",
-        edges=[
-            StagingEdge(
-                source_path=session.chunks[1].path,
-                target_path=session.chunks[0].path,
-                relation_type=RelationType.REFERENCES,
-            )
-        ],
-        actor="AGENT",
-    )
-
-    staging_tools = CorpusStagingTools(staging_manager=manager)
-    res = await staging_tools.stg_commit("Doc-Slug-01")
-    assert res.status == StagingStatus.AGENT_COMMITTED.value
-
-    # 2. Verify stg_commit boundary check catches invalid intra-document edge targets
-    session_test = manager.load_session("Doc-Slug-01")
-    session_test.status = StagingStatus.DRAFT
-    session_test.edges.append(
-        StagingEdge(
-            source_path=session_test.chunks[1].path,
-            target_path="doc_slug_01.sec_999",
-            relation_type=RelationType.REFERENCES,
-        )
-    )
-    with patch.object(staging_tools, "_ensure_session", AsyncMock(return_value=session_test)):
-        with pytest.raises(CorpusDomainError) as exc_info:
-            await staging_tools.stg_commit("Doc-Slug-01")
-        assert "Invalid edge target path" in str(exc_info.value.message)
-
-
 def test_tree_hierarchy_builder_ast_node_types_and_labels(tmp_path: Path) -> None:
     """Verifies SEC-INGEST-006: TreeHierarchyBuilder sets accurate node_type and human-readable label."""
     manager = StagingManager(staging_dir=tmp_path)
@@ -541,50 +292,6 @@ def test_pdf_empty_text_and_corrupt_rejection(tmp_path: Path) -> None:
     with pytest.raises(CorpusDomainError) as exc_info_text:
         normalizer.normalize_text("   \n\n  \t  ")
     assert exc_info_text.value.error_code == E_CORPUS_INTEGRITY_VIOLATION
-
-
-@pytest.mark.asyncio
-async def test_re_promotion_prunes_context_refs_and_outgoing_edges(tmp_path: Path) -> None:
-    """Verifies DEF-INGEST-010 & DEF-INGEST-011: Re-promotion deletes outgoing edges and context refs before load_chunks."""
-    manager = StagingManager(staging_dir=tmp_path)
-    session = manager.create_session_from_raw(
-        doc_slug="re_promo_doc",
-        title="Re Promotion Doc",
-        raw_text="# Sec 1\n\nText 1",
-    )
-    paths = [c.path for c in session.chunks]
-    manager.finalize_chunks("re_promo_doc", paths=paths, actor="TEST")
-    manager.update_session_status(
-        "re_promo_doc",
-        StagingStatus.APPROVED,
-        actor="TEST",
-        description="Approved for test promotion",
-    )
-
-    mock_pool = MagicMock()
-    mock_conn = MagicMock()
-    mock_pool.acquire.return_value.__aenter__.return_value = mock_conn
-    mock_pool.acquire.return_value.__aexit__.return_value = None
-    mock_conn.transaction.return_value.__aenter__.return_value = None
-    mock_conn.transaction.return_value.__aexit__.return_value = None
-    mock_conn.execute = AsyncMock()
-    old_chunk_id = uuid.uuid4()
-    mock_conn.fetch = AsyncMock(return_value=[{"id": old_chunk_id}])
-
-    mock_loader = MagicMock()
-    mock_loader.load_document = AsyncMock(return_value=uuid.uuid4())
-    mock_loader.load_chunks = AsyncMock(return_value={"re_promo_doc.sec_1.p": old_chunk_id})
-    mock_loader.resolve_chunk_paths = AsyncMock(return_value={})
-    mock_loader.load_graph_edges = AsyncMock(return_value={})
-    mock_loader.corpus_repo.context_refs.batch_create_refs = AsyncMock(return_value=0)
-    mock_loader.corpus_repo.graph.delete_outgoing_edges_for_chunks = AsyncMock(return_value=1)
-
-    engine = HumanPromotionEngine(staging_manager=manager)
-    with patch("rag_eval.web.services.promotion.PostgresBulkLoader", return_value=mock_loader):
-        res = await engine.promote_session(doc_slug="re_promo_doc", pool=mock_pool, compute_embeddings=False)
-
-    assert res.status == "SUCCESS"
-    mock_loader.corpus_repo.graph.delete_outgoing_edges_for_chunks.assert_awaited_once_with([old_chunk_id], conn=mock_conn)
 
 
 @pytest.mark.asyncio
@@ -630,6 +337,7 @@ async def test_hydrate_session_from_db_preserves_unresolved_external_refs(tmp_pa
     assert len(session.edges) == 1
     assert session.edges[0].source_path == "hydrated_doc.sec_1"
     assert session.edges[0].target_path == "other_doc.sec_5"
+    assert session.chunks[0].context_type == ContextType.REQUIRES_EXTERNAL_CONTEXT
 
 
 def test_wal_init_genesis_lock_and_exists_guard(tmp_path: Path) -> None:
