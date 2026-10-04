@@ -245,8 +245,8 @@ class DocumentNormalizer:
                 tmp_path.unlink(missing_ok=True)
 
     def _normalize_pdf(self, path: Path) -> NormalizedDocument:
-        import fitz
         import pdfplumber
+        import pymupdf
         import pymupdf4llm
 
         clean_text = ""
@@ -256,7 +256,7 @@ class DocumentNormalizer:
             markdown_content = pymupdf4llm.to_markdown(str(path))
             if markdown_content and markdown_content.strip():
                 clean_text = markdown_content.replace("\r\n", "\n").replace("\r", "\n")
-        except (RuntimeError, ValueError, OSError, TypeError, fitz.FileDataError, Exception) as exc:  # noqa: BLE001
+        except (RuntimeError, ValueError, OSError, TypeError, pymupdf.FileDataError, Exception) as exc:  # noqa: BLE001
             logger.warning("pymupdf4llm thất bại trên %s (%s), fallback sang pdfplumber", path, exc)
             clean_text = ""
 
@@ -271,7 +271,7 @@ class DocumentNormalizer:
                         if txt.strip():
                             page_blocks.append(txt.strip())
                 clean_text = "\n\n".join(page_blocks).replace("\r\n", "\n").replace("\r", "\n")
-            except (RuntimeError, ValueError, OSError, TypeError, fitz.FileDataError, Exception) as exc:  # noqa: BLE001
+            except (RuntimeError, ValueError, OSError, TypeError, pymupdf.FileDataError, Exception) as exc:  # noqa: BLE001
                 logger.warning("pdfplumber trích xuất text thất bại trên %s: %s", path, exc)
                 clean_text = ""
 

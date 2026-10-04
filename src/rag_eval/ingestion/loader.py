@@ -5,10 +5,12 @@ import logging
 import os
 import threading
 import uuid
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 import asyncpg
-from sentence_transformers import SentenceTransformer
+
+if TYPE_CHECKING:
+    from sentence_transformers import SentenceTransformer
 
 from rag_eval.db.repositories import CorpusRepository
 from rag_eval.exceptions import (

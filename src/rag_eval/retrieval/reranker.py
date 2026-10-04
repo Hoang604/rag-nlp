@@ -4,9 +4,10 @@ import asyncio
 import collections
 import logging
 import threading
-from typing import Final, Protocol, Self
+from typing import TYPE_CHECKING, Final, Protocol, Self
 
-from sentence_transformers import CrossEncoder
+if TYPE_CHECKING:
+    from sentence_transformers import CrossEncoder
 
 logger = logging.getLogger(__name__)
 

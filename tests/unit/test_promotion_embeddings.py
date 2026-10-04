@@ -8,7 +8,10 @@ from rag_eval.ingestion.loader import compute_chunk_embeddings
 
 def test_promotion_embeddings() -> None:
     """Verifies that compute_chunk_embeddings raises CorpusDomainError(E_CORPUS_INTEGRITY_VIOLATION) on model failure instead of silently returning None."""
-    with patch("rag_eval.ingestion.loader.get_embedding_model") as mock_get_model:
+    with (
+        patch("rag_eval.ingestion.loader.get_embedding_model") as mock_get_model,
+        patch.dict("sys.modules", {"torch": MagicMock()}),
+    ):
         mock_model = MagicMock()
         mock_model.encode.side_effect = RuntimeError("PyTorch CUDA out of memory")
         mock_get_model.return_value = mock_model

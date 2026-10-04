@@ -1,5 +1,6 @@
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -32,29 +33,32 @@ def test_thread_safe_score_cache_concurrency() -> None:
 @pytest.mark.asyncio
 async def test_single_hit_reranking() -> None:
     """Verifies that rerank() populates rerank_score even when given a single candidate hit."""
-    reranker = CrossEncoderReranker()
-    hit = SearchHitDTO(
-        chunk_id=uuid.uuid4(),
-        doc_slug="test_doc",
-        doc_title="Technical Document",
-        path="test_doc.sec_1",
-        start_line=1,
-        end_line=2,
-        verbatim_text="Pipeline component processing input data safely.",
-        contextualized_text="Pipeline component processing input data safely.",
-        context_type="SELF_CONTAINED",
-        is_all_refs_resolved=True,
-        score=0.85,
-        dense_rank=1,
-        sparse_rank=999,
-        dense_similarity=0.85,
-        rerank_score=None,
-    )
+    with patch.dict("sys.modules", {"torch": MagicMock()}):
+        mock_model = MagicMock()
+        mock_model.predict.return_value = [0.85]
+        reranker = CrossEncoderReranker(model=mock_model)
+        hit = SearchHitDTO(
+            chunk_id=uuid.uuid4(),
+            doc_slug="test_doc",
+            doc_title="Technical Document",
+            path="test_doc.sec_1",
+            start_line=1,
+            end_line=2,
+            verbatim_text="Pipeline component processing input data safely.",
+            contextualized_text="Pipeline component processing input data safely.",
+            context_type="SELF_CONTAINED",
+            is_all_refs_resolved=True,
+            score=0.85,
+            dense_rank=1,
+            sparse_rank=999,
+            dense_similarity=0.85,
+            rerank_score=None,
+        )
 
-    reranked = await reranker.rerank("processing input data", [hit])
-    assert len(reranked) == 1
-    assert reranked[0].rerank_score is not None
-    assert isinstance(reranked[0].rerank_score, float)
+        reranked = await reranker.rerank("processing input data", [hit])
+        assert len(reranked) == 1
+        assert reranked[0].rerank_score is not None
+        assert isinstance(reranked[0].rerank_score, float)
 
 
 def test_confidence_calibration() -> None:

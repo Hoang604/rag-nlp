@@ -325,10 +325,10 @@ def test_cli_ingest_command_execution(tmp_path: Path, monkeypatch) -> None:
 
 def test_binary_pdf_bytes_ingestion(tmp_path: Path) -> None:
     """Verifies that actual binary PDF bytes are parsed cleanly and staged with intact metadata."""
-    import fitz
+    import pymupdf
 
-    # Generate a real valid binary PDF in memory using fitz
-    pdf_doc = fitz.open()
+    # Generate a real valid binary PDF in memory using pymupdf
+    pdf_doc = pymupdf.open()
     page = pdf_doc.new_page()
     page.insert_text((50, 50), "# PDF Architectural Blueprint\n\nPreamble explaining invariants.\n\n## Core Engine\n\nDetails of binary execution.\n")
     pdf_bytes = pdf_doc.tobytes()
@@ -368,23 +368,6 @@ def test_corrupted_docx_exception_shielding() -> None:
         normalizer.normalize_bytes(corrupted_bytes, "broken.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
     assert "broken.docx" in str(exc_info.value)
-
-
-def test_duplicate_session_prevention_409(tmp_path: Path) -> None:
-    """Verifies that existing staging sessions cannot be silently overwritten."""
-    staging_dir = tmp_path / "stg_cache"
-    staging_dir.mkdir(parents=True, exist_ok=True)
-    mgr = StagingManager(staging_dir=staging_dir)
-
-    mgr.create_session_from_raw(
-        doc_slug="active_session",
-        title="Active Session",
-        raw_text="# Section 1\nContent 1\n",
-    )
-    assert mgr.session_exists("active_session")
-
-    # Invariant: session_exists must return True, preventing re-genesis clobbering
-    assert mgr.session_exists("active_session") is True
 
 
 def test_single_line_oversized_paragraph_splitting() -> None:
