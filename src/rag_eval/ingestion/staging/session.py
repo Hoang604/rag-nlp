@@ -18,6 +18,7 @@ from rag_eval.ingestion.staging.models import (
     StagingChunkDelta,
     StagingDeltaReport,
     StagingEdge,
+    StagingEdgeInput,
     StagingGrepHit,
     StagingMutationRecord,
     StagingStatus,
@@ -260,7 +261,7 @@ class StagingDocumentSession(BaseModel):
 
     def validate_and_attach_edges(
         self,
-        edges: Sequence[StagingEdge],
+        edges: Sequence[StagingEdge | StagingEdgeInput | dict[str, object]],
         actor: str = "AGENT",
         applied_at: datetime.datetime | None = None,
     ) -> tuple[int, list[StagingEdge]]:

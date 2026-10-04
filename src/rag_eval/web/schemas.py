@@ -212,6 +212,9 @@ class CreateEdgeRequest(BaseModel):
     source_path: str = Field(..., description="Source chunk ltree path")
     target_path: str = Field(..., description="Target chunk ltree path")
     relation_type: str = Field(..., description="Relation type enum string")
+    anchor_text: str | None = Field(None, description="Verbatim text quote from source chunk")
+    char_start: int | None = Field(None, description="Start character offset in source chunk text")
+    char_end: int | None = Field(None, description="End character offset in source chunk text")
 
 
 class DeleteEdgeRequest(BaseModel):
@@ -236,6 +239,9 @@ class StagingEdgeResponse(BaseModel):
     source_path: str = Field(..., description="Source chunk ltree path")
     target_path: str = Field(..., description="Target chunk ltree path")
     relation_type: str = Field(..., description="Relation type enum string")
+    anchor_text: str | None = Field(None, description="Verbatim text quote from source chunk")
+    char_start: int | None = Field(None, description="Start character offset in source chunk text")
+    char_end: int | None = Field(None, description="End character offset in source chunk text")
 
 
 class StatusTransitionRequest(BaseModel):

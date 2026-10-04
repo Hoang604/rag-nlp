@@ -156,8 +156,7 @@ class DiffCalculator:
                         "baseline_chunk": init_item,
                     })
 
-        # B-4: Compute edge baseline diffs for Stage 3 Knowledge Graph
-        initial_edges_map: dict[tuple[str, str, str], dict[str, object]] = {}
+        initial_edges_map: dict[tuple[str, str, str, int | None, int | None], dict[str, object]] = {}
         has_amendment_edges_baseline = bool(session.metadata.get("amendment_baseline_edges_snapshot"))
         baseline_edges_snapshot = (
             session.metadata.get("amendment_baseline_edges_snapshot")
@@ -170,14 +169,16 @@ class DiffCalculator:
                     src = str(edge_item.get("source_path", ""))
                     tgt = str(edge_item.get("target_path", ""))
                     rel = str(edge_item.get("relation_type", ""))
+                    c_start = edge_item.get("char_start")
+                    c_end = edge_item.get("char_end")
                     if src and tgt:
-                        initial_edges_map[(src, tgt, rel)] = edge_item
+                        initial_edges_map[(src, tgt, rel, c_start if isinstance(c_start, int) else None, c_end if isinstance(c_end, int) else None)] = edge_item
 
-        current_edges_map: dict[tuple[str, str, str], StagingEdge] = {}
+        current_edges_map: dict[tuple[str, str, str, int | None, int | None], StagingEdge] = {}
         for e in session.edges:
             rel_str = e.relation_type.value if hasattr(e.relation_type, "value") else str(e.relation_type)
             tgt_str = e.target_path or ""
-            current_edges_map[(e.source_path, tgt_str, rel_str)] = e
+            current_edges_map[(e.source_path, tgt_str, rel_str, e.char_start, e.char_end)] = e
 
         for key, edge in current_edges_map.items():
             if key not in initial_edges_map:

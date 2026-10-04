@@ -431,6 +431,9 @@ async def list_staging_edges(
             source_path=e.source_path,
             target_path=e.target_path,
             relation_type=e.relation_type.value if hasattr(e.relation_type, "value") else str(e.relation_type),
+            anchor_text=e.anchor_text,
+            char_start=e.char_start,
+            char_end=e.char_end,
         )
         for e in session.edges
     ]
@@ -451,6 +454,9 @@ async def add_staging_edges(
             source_path=item.source_path,
             target_path=item.target_path,
             relation_type=item.relation_type,
+            anchor_text=item.anchor_text,
+            char_start=item.char_start,
+            char_end=item.char_end,
         )
         for item in items
     ]

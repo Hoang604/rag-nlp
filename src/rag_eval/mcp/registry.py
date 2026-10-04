@@ -7,8 +7,8 @@ from pydantic import Field
 
 from rag_eval.ingestion.staging.models import (
     StagingChunkDelta,
-    StagingEdge,
     StagingEdgeFilter,
+    StagingEdgeInput,
     get_staging_poll_limit,
 )
 from rag_eval.mcp.tools import (
@@ -431,9 +431,9 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
             ),
         ],
         edges: Annotated[
-            list[StagingEdge],
+            list[StagingEdgeInput],
             Field(
-                description="Danh sách các cạnh quan hệ đồ thị tuân thủ StagingEdge.",
+                description="Danh sách các cạnh quan hệ đồ thị tuân thủ StagingEdgeInput.",
             ),
         ],
     ) -> StgAddEdgesResult:

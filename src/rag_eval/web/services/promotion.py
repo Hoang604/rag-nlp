@@ -227,6 +227,8 @@ class HumanPromotionEngine:
                             ChunkContextRefEntity(
                                 id=uuid.uuid4(),
                                 chunk_id=src_uuid,
+                                char_start=edge.char_start,
+                                char_end=edge.char_end,
                                 target_chunk_id=tgt_uuid,
                                 edge_id=persisted_edge_id,
                             )
@@ -242,6 +244,8 @@ class HumanPromotionEngine:
                             ChunkContextRefEntity(
                                 id=uuid.uuid4(),
                                 chunk_id=src_uuid,
+                                char_start=edge.char_start,
+                                char_end=edge.char_end,
                                 target_chunk_id=None,
                                 edge_id=None,
                                 target_path=edge.target_path,
@@ -253,6 +257,8 @@ class HumanPromotionEngine:
                         ChunkContextRefEntity(
                             id=uuid.uuid4(),
                             chunk_id=src_uuid,
+                            char_start=edge.char_start,
+                            char_end=edge.char_end,
                             target_chunk_id=None,
                             edge_id=None,
                             target_path=edge.target_path,

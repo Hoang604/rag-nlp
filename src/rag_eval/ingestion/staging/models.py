@@ -345,6 +345,51 @@ class StagingEdgeFilter(BaseModel):
         return self
 
 
+class StagingEdgeInput(BaseModel):
+    """Thông tin cạnh quan hệ đồ thị giữa hai chunk."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    source_path: str = Field(
+        ...,
+        description="Đường dẫn phân cấp ltree của chunk nguồn phát sinh quan hệ.",
+    )
+    target_path: str = Field(
+        ...,
+        description="Đường dẫn phân cấp ltree của chunk đích trong cùng tài liệu hoặc tài liệu đã nạp.",
+    )
+    relation_type: RelationType = Field(
+        default=RelationType.REFERENCES,
+        description="Loại quan hệ có hướng giữa hai chunk.",
+    )
+    anchor_text: str | None = Field(
+        default=None,
+        description="Đoạn văn bản trích dẫn nguyên văn câu/cụm từ viện dẫn trong nội dung chunk nguồn làm căn cứ kết nối.",
+    )
+
+    @model_validator(mode="after")
+    def validate_edge_targets(self) -> StagingEdgeInput:
+        clean_src = self.source_path.strip() if self.source_path else ""
+        clean_tgt = self.target_path.strip() if self.target_path else ""
+
+        if not clean_src:
+            raise ValueError("source_path không được để trống")
+        if not clean_tgt:
+            raise ValueError("target_path không được để trống")
+
+        self.source_path = validate_ltree_path(clean_src)
+        self.target_path = validate_ltree_path(clean_tgt)
+
+        if self.source_path == self.target_path:
+            raise ValueError(f"Self-referencing edge loop detected on '{self.source_path}'.")
+
+        if self.anchor_text is not None:
+            clean_anchor = self.anchor_text.strip()
+            self.anchor_text = clean_anchor if clean_anchor else None
+
+        return self
+
+
 class StagingEdge(BaseModel):
     """Represents a candidate directed relation edge within a staging session."""
 
@@ -362,10 +407,21 @@ class StagingEdge(BaseModel):
         default=RelationType.REFERENCES,
         description="Loại quan hệ có hướng giữa hai chunk.",
     )
+    anchor_text: str | None = Field(
+        default=None,
+        description="Đoạn văn bản trích dẫn nguyên văn câu/cụm từ viện dẫn trong nội dung chunk nguồn làm căn cứ kết nối.",
+    )
+    char_start: int | None = Field(
+        default=None,
+        description="Vị trí ký tự bắt đầu của tham chiếu trong verbatim_text.",
+    )
+    char_end: int | None = Field(
+        default=None,
+        description="Vị trí ký tự kết thúc của tham chiếu trong verbatim_text.",
+    )
 
     @model_validator(mode="after")
     def validate_edge_targets(self) -> StagingEdge:
-
         clean_src = self.source_path.strip() if self.source_path else ""
         clean_tgt = self.target_path.strip() if self.target_path else ""
 
@@ -379,6 +435,23 @@ class StagingEdge(BaseModel):
 
         if self.source_path == self.target_path:
             raise ValueError(f"Self-referencing edge loop detected on '{self.source_path}'.")
+
+        if self.anchor_text is not None:
+            clean_anchor = self.anchor_text.strip()
+            self.anchor_text = clean_anchor if clean_anchor else None
+
+        # Khớp với ràng buộc PostgreSQL chk_ref_span_geometry
+        if (self.char_start is None and self.char_end is not None) or (
+            self.char_start is not None and self.char_end is None
+        ):
+            raise ValueError("char_start và char_end phải cùng có giá trị hoặc cùng là None.")
+
+        if (
+            self.char_start is not None
+            and self.char_end is not None
+            and (self.char_start < 0 or self.char_end <= self.char_start)
+        ):
+            raise ValueError("char_end phải lớn hơn char_start và char_start >= 0.")
 
         return self
 

@@ -5,6 +5,8 @@ import re
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, NoReturn
 
+from pydantic import BaseModel
+
 from rag_eval.ingestion.staging.models import (
     ChunkReviewStatus,
     ContextType,
@@ -13,6 +15,7 @@ from rag_eval.ingestion.staging.models import (
     StagingChunkDelta,
     StagingDeltaReport,
     StagingEdge,
+    StagingEdgeInput,
     StagingMutationRecord,
     StagingStatus,
     StagingViolationCode,
@@ -376,7 +379,7 @@ def finalize_chunks_in_session(
 
 def validate_and_attach_edges_to_session(
     session: StagingDocumentSession,
-    edges: Sequence[StagingEdge],
+    edges: Sequence[StagingEdge | StagingEdgeInput | dict[str, object]],
     actor: str = "AGENT",
     applied_at: datetime.datetime | None = None,
 ) -> tuple[int, list[StagingEdge]]:
@@ -392,12 +395,37 @@ def validate_and_attach_edges_to_session(
     chunks_by_path = {c.path: c for c in session.chunks}
     doc_prefix = sanitize_ltree_label(session.doc_slug)
 
-    existing_edges: dict[tuple[str, str, str], StagingEdge] = {
-        (e.source_path, e.target_path, e.relation_type.value if hasattr(e.relation_type, "value") else str(e.relation_type)): e
+    existing_edges: dict[tuple[str, str, str, int | None, int | None], StagingEdge] = {
+        (
+            e.source_path,
+            e.target_path,
+            e.relation_type.value if hasattr(e.relation_type, "value") else str(e.relation_type),
+            e.char_start,
+            e.char_end,
+        ): e
         for e in session.edges
     }
 
-    for new_edge in edges:
+    for raw_edge in edges:
+        if isinstance(raw_edge, StagingEdge):
+            new_edge = raw_edge.model_copy()
+        elif isinstance(raw_edge, StagingEdgeInput):
+            new_edge = StagingEdge(
+                source_path=raw_edge.source_path,
+                target_path=raw_edge.target_path,
+                relation_type=raw_edge.relation_type,
+                anchor_text=raw_edge.anchor_text,
+            )
+        elif isinstance(raw_edge, BaseModel):
+            new_edge = StagingEdge.model_validate(raw_edge.model_dump())
+        elif isinstance(raw_edge, dict):
+            new_edge = StagingEdge.model_validate(raw_edge)
+        else:
+            raise CorpusDomainError(
+                error_code=E_AST_GROUNDING_VALIDATION,
+                message=f"Invalid edge payload type: {type(raw_edge)}",
+            )
+
         clean_src = validate_ltree_path(new_edge.source_path)
         clean_tgt = validate_ltree_path(new_edge.target_path)
 
@@ -446,10 +474,80 @@ def validate_and_attach_edges_to_session(
                 data={"doc_slug": session.doc_slug, "target_path": clean_tgt},
             )
 
+        # Deterministic anchor text resolution
+        if new_edge.anchor_text is not None and (new_edge.char_start is None or new_edge.char_end is None):
+            if src_chunk is None:
+                raise CorpusDomainError(
+                    error_code=E_AST_GROUNDING_VALIDATION,
+                    message=f"Invalid edge source path '{clean_src}': path does not exist in staged document '{session.doc_slug}'.",
+                    data={"doc_slug": session.doc_slug, "source_path": clean_src},
+                )
+            idx = src_chunk.verbatim_text.find(new_edge.anchor_text)
+            if idx == -1:
+                raise CorpusDomainError(
+                    error_code=E_AST_GROUNDING_VALIDATION,
+                    message=(
+                        f"Đoạn trích viện dẫn (anchor_text) '{new_edge.anchor_text}' không tồn tại "
+                        f"trong nội dung gốc của chunk nguồn '{clean_src}'."
+                    ),
+                    data={
+                        "doc_slug": session.doc_slug,
+                        "source_path": clean_src,
+                        "anchor_text": new_edge.anchor_text,
+                    },
+                )
+            new_edge.char_start = idx
+            new_edge.char_end = idx + len(new_edge.anchor_text)
+
+        # Boundary checks when char_start and char_end are present
+        if new_edge.char_start is not None and new_edge.char_end is not None:
+            if src_chunk is None:
+                raise CorpusDomainError(
+                    error_code=E_AST_GROUNDING_VALIDATION,
+                    message=f"Invalid edge source path '{clean_src}': path does not exist in staged document '{session.doc_slug}'.",
+                    data={"doc_slug": session.doc_slug, "source_path": clean_src},
+                )
+            src_len = len(src_chunk.verbatim_text)
+            if new_edge.char_end > src_len:
+                raise CorpusDomainError(
+                    error_code=E_AST_GROUNDING_VALIDATION,
+                    message=(
+                        f"Tọa độ span [char_start={new_edge.char_start}, char_end={new_edge.char_end}] "
+                        f"vượt quá độ dài văn bản của chunk nguồn '{clean_src}' ({src_len} ký tự)."
+                    ),
+                    data={
+                        "doc_slug": session.doc_slug,
+                        "source_path": clean_src,
+                        "char_start": new_edge.char_start,
+                        "char_end": new_edge.char_end,
+                        "text_len": src_len,
+                    },
+                )
+            if new_edge.anchor_text is not None:
+                actual_snippet = src_chunk.verbatim_text[new_edge.char_start : new_edge.char_end]
+                if actual_snippet != new_edge.anchor_text:
+                    raise CorpusDomainError(
+                        error_code=E_AST_GROUNDING_VALIDATION,
+                        message=(
+                            f"Tọa độ span [{new_edge.char_start}:{new_edge.char_end}] trích xuất chuỗi '{actual_snippet}', "
+                            f"không khớp với anchor_text đã khai báo '{new_edge.anchor_text}'."
+                        ),
+                        data={
+                            "doc_slug": session.doc_slug,
+                            "source_path": clean_src,
+                            "expected": new_edge.anchor_text,
+                            "actual": actual_snippet,
+                        },
+                    )
+
         new_edge.source_path = clean_src
         new_edge.target_path = clean_tgt
-        rel_str = new_edge.relation_type.value if hasattr(new_edge.relation_type, "value") else str(new_edge.relation_type)
-        key = (clean_src, clean_tgt, rel_str)
+        rel_str = (
+            new_edge.relation_type.value
+            if hasattr(new_edge.relation_type, "value")
+            else str(new_edge.relation_type)
+        )
+        key = (clean_src, clean_tgt, rel_str, new_edge.char_start, new_edge.char_end)
         existing_edges[key] = new_edge
 
     session.edges = list(existing_edges.values())
@@ -569,7 +667,7 @@ def reparent_subtree_in_session(
     for c in target_chunks:
         c.path = path_rename_map[c.path]
 
-    existing_edges: dict[tuple[str, str, str], StagingEdge] = {}
+    existing_edges: dict[tuple[str, str, str, int | None, int | None], StagingEdge] = {}
     for e in session.edges:
         new_src = path_rename_map.get(e.source_path)
         if new_src is None and e.source_path.startswith(old_dot):
@@ -585,7 +683,7 @@ def reparent_subtree_in_session(
                 e.target_path = new_tgt
 
         rel_str = e.relation_type.value if hasattr(e.relation_type, "value") else str(e.relation_type)
-        key = (e.source_path, e.target_path, rel_str)
+        key = (e.source_path, e.target_path, rel_str, e.char_start, e.char_end)
         existing_edges[key] = e
 
     session.edges = list(existing_edges.values())

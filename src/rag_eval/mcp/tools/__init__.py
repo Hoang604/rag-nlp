@@ -9,6 +9,7 @@ from rag_eval.ingestion.staging import (
     StagingChunkDelta,
     StagingEdge,
     StagingEdgeFilter,
+    StagingEdgeInput,
     StgReparentResult,
 )
 from rag_eval.ingestion.staging.manager import StagingManager
@@ -228,7 +229,7 @@ class CorpusMCPTools:
     async def stg_add_edges(
         self,
         doc_slug: str,
-        edges: Sequence[StagingEdge | dict[str, object]],
+        edges: Sequence[StagingEdge | StagingEdgeInput | dict[str, object]],
     ) -> StgAddEdgesResult:
         return await self._staging.stg_add_edges(
             doc_slug=doc_slug,

@@ -21,6 +21,7 @@ from rag_eval.ingestion.staging.models import (
     StagingChunkDelta,
     StagingEdge,
     StagingEdgeFilter,
+    StagingEdgeInput,
     StagingStatus,
     StagingStatusFilter,
     StgAddEdgesResult,
@@ -198,7 +199,7 @@ class CorpusStagingTools:
     async def stg_add_edges(
         self,
         doc_slug: str,
-        edges: Sequence[StagingEdge | dict[str, object]],
+        edges: Sequence[StagingEdge | StagingEdgeInput | dict[str, object]],
     ) -> StgAddEdgesResult:
         await self._ensure_session(doc_slug)
         session = self._staging.add_edges(

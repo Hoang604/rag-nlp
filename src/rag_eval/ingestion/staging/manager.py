@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import asyncpg
+from pydantic import BaseModel
 
 from rag_eval.exceptions import (
     E_AST_GROUNDING_VALIDATION,
@@ -22,6 +23,7 @@ from rag_eval.ingestion.staging.models import (
     StagingChunkDelta,
     StagingEdge,
     StagingEdgeFilter,
+    StagingEdgeInput,
     StagingSessionSummary,
     StagingStatus,
     StgReparentResult,
@@ -269,7 +271,7 @@ class StagingManager:
     def add_edges(
         self,
         doc_slug: str,
-        edges: Sequence[StagingEdge | dict[str, object]],
+        edges: Sequence[StagingEdge | StagingEdgeInput | dict[str, object]],
         actor: str = "AGENT",
     ) -> StagingDocumentSession:
         """Appends EDGES_ATTACHED record to WAL journal and updates materialized state."""
@@ -293,8 +295,19 @@ class StagingManager:
         for e in edges:
             if isinstance(e, StagingEdge):
                 parsed_edges.append(e)
+            elif isinstance(e, StagingEdgeInput):
+                parsed_edges.append(
+                    StagingEdge(
+                        source_path=e.source_path,
+                        target_path=e.target_path,
+                        relation_type=e.relation_type,
+                        anchor_text=e.anchor_text,
+                    )
+                )
             elif isinstance(e, dict):
                 parsed_edges.append(StagingEdge.model_validate(e))
+            elif isinstance(e, BaseModel):
+                parsed_edges.append(StagingEdge.model_validate(e.model_dump()))
 
         payload = {
             "edges": [e.model_dump(mode="json") for e in parsed_edges],

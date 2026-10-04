@@ -16,6 +16,9 @@ export interface StagingEdge {
   source_path: string;
   target_path: string;
   relation_type: string;
+  anchor_text?: string | null;
+  char_start?: number | null;
+  char_end?: number | null;
 }
 
 export interface StagingMutationRecord {
