@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from rag_eval.mcp.tools.sensors import HybridSearchResult
+from rag_eval.retrieval.confidence import compute_search_confidence
 from rag_eval.retrieval.reranker import CrossEncoderReranker, ThreadSafeScoreCache
 from rag_eval.schemas import SearchHitDTO
 
@@ -80,11 +80,7 @@ def test_confidence_calibration() -> None:
         dense_rank=1,
         sparse_rank=999,
     )
-    result_high = HybridSearchResult(
-        total_hits=1,
-        hits=[high_dense_hit],
-    )
-    assert result_high.confidence == "high"
+    assert compute_search_confidence([high_dense_hit]) == "high"
 
     # Test Medium Confidence: dense similarity between 0.70 and 0.82
     med_dense_hit = SearchHitDTO(
@@ -103,11 +99,7 @@ def test_confidence_calibration() -> None:
         dense_rank=2,
         sparse_rank=999,
     )
-    result_med = HybridSearchResult(
-        total_hits=1,
-        hits=[med_dense_hit],
-    )
-    assert result_med.confidence == "medium"
+    assert compute_search_confidence([med_dense_hit]) == "medium"
 
     # Test None Confidence: dense < 0.70 and sparse is 999
     low_hit = SearchHitDTO(
@@ -126,8 +118,4 @@ def test_confidence_calibration() -> None:
         dense_rank=15,
         sparse_rank=999,
     )
-    result_low = HybridSearchResult(
-        total_hits=1,
-        hits=[low_hit],
-    )
-    assert result_low.confidence == "none"
+    assert compute_search_confidence([low_hit]) == "none"

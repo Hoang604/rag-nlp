@@ -41,27 +41,23 @@ def create_app(
                 logger.warning("Database pool initialization deferred/offline: %s", exc)
                 app.state.pool = None
 
-        app.state.search_tools = None
+        app.state.retrieval_engine = None
         if app.state.pool is not None:
             try:
-                from rag_eval.mcp.tools import (
-                    CorpusMCPTools,
-                    SentenceTransformerQueryEmbedder,
-                )
+                from rag_eval.retrieval.embedder import SentenceTransformerQueryEmbedder
+                from rag_eval.retrieval.engine import RetrievalEngine
+                from rag_eval.retrieval.reranker import CrossEncoderReranker
 
                 embedder = SentenceTransformerQueryEmbedder()
                 await embedder.embed_query("khởi động")
 
-                from rag_eval.retrieval.reranker import CrossEncoderReranker
-
                 reranker = CrossEncoderReranker(max_length=256)
                 await reranker.warm()
 
-                app.state.search_tools = CorpusMCPTools.build(
+                app.state.retrieval_engine = RetrievalEngine(
                     pool=app.state.pool,
-                    embedding_engine=embedder,
+                    embedder=embedder,
                     reranker=reranker,
-                    rerank_by_default=True,
                 )
                 logger.info("Retrieval engine warm.")
             except (RuntimeError, OSError, ImportError, ValueError) as exc:

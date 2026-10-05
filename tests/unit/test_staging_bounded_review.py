@@ -6,6 +6,7 @@ import pytest
 
 from rag_eval.exceptions import (
     E_AST_GROUNDING_VALIDATION,
+    E_INVALID_DOCUMENT_HIERARCHY,
     CorpusDomainError,
 )
 from rag_eval.ingestion.staging.manager import StagingManager
@@ -263,3 +264,46 @@ async def test_stg_commit_transitions_session_to_agent_committed(tmp_path: Path)
     assert commit_res.status == StagingStatus.AGENT_COMMITTED.value
     committed_session = mgr.load_session("doc_commit")
     assert committed_session.status == StagingStatus.AGENT_COMMITTED
+
+
+@pytest.mark.asyncio
+async def test_stg_unfinalize_chunks_reverts_state_and_evicts_inspection(tmp_path: Path) -> None:
+    """Verifies that stg_unfinalize_chunks reverts REVIEWED chunk to PENDING, resets finalization_state, and evicts inspected_paths."""
+    mgr, tools = _setup_test_session(tmp_path, "doc_unfinalize")
+    session = mgr.load_session("doc_unfinalize")
+    target_path = session.chunks[0].path
+
+    # First inspect, patch context_type, and finalize
+    await tools.stg_get_chunk(doc_slug="doc_unfinalize", path=target_path)
+    await tools.stg_patch(
+        doc_slug="doc_unfinalize",
+        updated_chunks=[
+            StagingChunkDelta(
+                path=target_path,
+                context_type=ContextType.SELF_CONTAINED,
+                justification="Self contained section",
+            )
+        ],
+    )
+    fin_res = await tools.stg_finalize_chunks(doc_slug="doc_unfinalize", paths=[target_path])
+    assert fin_res.finalized_count == 1
+
+    # Verify finalized in session
+    session = mgr.load_session("doc_unfinalize")
+    assert session.chunks[0].review_status == ChunkReviewStatus.REVIEWED
+    assert target_path in session.inspected_paths
+
+    # Now unfinalize
+    unfin_res = await tools.stg_unfinalize_chunks(doc_slug="doc_unfinalize", paths=[target_path])
+    assert unfin_res.status == "SUCCESS"
+    assert unfin_res.unfinalized_count == 1
+
+    session = mgr.load_session("doc_unfinalize")
+    assert session.chunks[0].review_status == ChunkReviewStatus.PENDING
+    assert session.chunks[0].finalization_state == FinalizationState.UNFINALIZED
+    assert target_path not in session.inspected_paths
+
+    # Attempting to unfinalize non-existent path raises E_INVALID_DOCUMENT_HIERARCHY
+    with pytest.raises(CorpusDomainError) as exc_info:
+        await tools.stg_unfinalize_chunks(doc_slug="doc_unfinalize", paths=["nonexistent.chunk"])
+    assert exc_info.value.error_code == E_INVALID_DOCUMENT_HIERARCHY

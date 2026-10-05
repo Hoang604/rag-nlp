@@ -5,13 +5,12 @@ import datetime
 from pydantic import BaseModel, ConfigDict, Field
 
 from rag_eval.ingestion.staging import (
-    ChunkReviewStatus,
     StagingChunk,
+    StagingChunkDelta,
     StagingEdge,
     StagingMutationRecord,
     StagingStatus,
 )
-from rag_eval.schemas import FinalizationState
 
 
 class StagingSessionSummaryResponse(BaseModel):
@@ -150,33 +149,23 @@ class FinalizeChunksResponse(BaseModel):
     pending_remaining: int = Field(..., description="Remaining pending chunks in session")
 
 
-class ChunkPatchItem(BaseModel):
-    """Single chunk payload for surgical in-place patch supporting partial delta fields."""
+class UnfinalizeChunksRequest(BaseModel):
+    """Request payload to revert chunks back to PENDING and UNFINALIZED."""
 
     model_config = ConfigDict(extra="ignore")
 
-    path: str = Field(..., description="Dot-separated ltree path")
-    verbatim_text: str | None = Field(
-        None, description="Raw verbatim text (optional for deltas)"
-    )
-    contextualized_text: str | None = Field(
-        None, description="Synthesized contextual text (optional for deltas)"
-    )
-    start_line: int | None = Field(
-        None, ge=1, description="Optional updated starting line number"
-    )
-    end_line: int | None = Field(
-        None, ge=1, description="Optional updated ending line number"
-    )
-    metadata: dict[str, object] | None = Field(
-        None, description="Dynamic chunk metadata to deep-merge (optional)"
-    )
-    review_status: ChunkReviewStatus | None = Field(
-        None, description="Optional updated review status ('PENDING' | 'REVIEWED')"
-    )
-    finalization_state: FinalizationState | None = Field(
-        None, description="Optional updated semantic finalization state"
-    )
+    paths: list[str] = Field(..., min_length=1, description="List of chunk LTREE paths to unfinalize")
+
+
+class UnfinalizeChunksResponse(BaseModel):
+    """Response returned after unfinalizing chunks."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    status: str = Field("SUCCESS", description="Operation status")
+    doc_slug: str = Field(..., description="Document slug identifier")
+    unfinalized_count: int = Field(..., description="Number of chunks successfully unfinalized")
+    pending_remaining: int = Field(..., description="Number of chunks currently pending review")
 
 
 class BatchPatchRequest(BaseModel):
@@ -184,7 +173,7 @@ class BatchPatchRequest(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    updated_chunks: list[ChunkPatchItem] = Field(
+    updated_chunks: list[StagingChunkDelta] = Field(
         default_factory=list, description="List of chunks to add or update"
     )
     removed_paths: list[str] = Field(

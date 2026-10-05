@@ -98,7 +98,7 @@ class WALRecord(BaseModel):
     actor: str = Field(..., description="'SYSTEM' | 'AGENT' | 'HUMAN:<username>'")
     op_type: str = Field(
         ...,
-        description="'GENESIS' | 'CHUNK_PATCHED' | 'EDGES_ATTACHED' | 'EDGE_REMOVED' | 'SUBTREE_REPARENTED' | 'STATUS_TRANSITION' | 'CHUNKS_FINALIZED' | 'PROMOTED_TO_PRODUCTION'",
+        description="'GENESIS' | 'CHUNK_PATCHED' | 'EDGES_ATTACHED' | 'EDGE_REMOVED' | 'SUBTREE_REPARENTED' | 'STATUS_TRANSITION' | 'CHUNKS_FINALIZED' | 'CHUNKS_UNFINALIZED' | 'PROMOTED_TO_PRODUCTION'",
     )
     description: str = Field(..., description="Human-readable summary of operation")
     payload: dict[str, object] = Field(default_factory=dict, description="Operation payload")
@@ -558,6 +558,16 @@ class WALSessionStore:
                 session.inspected_paths.update(str(p) for p in raw_inspected)
             paths_list = [str(p) for p in raw_paths] if isinstance(raw_paths, (list, tuple)) else []
             session.finalize_chunks(
+                paths=paths_list,
+                actor=record.actor,
+                applied_at=record.timestamp,
+            )
+            return
+
+        if record.op_type == "CHUNKS_UNFINALIZED":
+            raw_paths = record.payload.get("paths")
+            paths_list = [str(p) for p in raw_paths] if isinstance(raw_paths, (list, tuple)) else []
+            session.unfinalize_chunks(
                 paths=paths_list,
                 actor=record.actor,
                 applied_at=record.timestamp,

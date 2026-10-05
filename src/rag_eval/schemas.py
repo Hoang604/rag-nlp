@@ -66,30 +66,6 @@ def validate_ltree_path(path: str) -> str:
     return clean_path
 
 
-def parse_flexible_date(value: object) -> datetime.date:
-    """Chuyển đổi linh hoạt giá trị ngày tháng từ chuỗi hoặc date sang datetime.date."""
-    if isinstance(value, datetime.date):
-        return value
-    if isinstance(value, str):
-        cleaned = value.strip()
-        if not cleaned:
-            raise ValueError("Chuỗi ngày tháng không được rỗng.")
-        for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
-            try:
-                return (
-                    datetime.datetime.strptime(cleaned, fmt)
-                    .replace(tzinfo=datetime.UTC)
-                    .date()
-                )
-            except ValueError:
-                pass
-        try:
-            return datetime.date.fromisoformat(cleaned)
-        except ValueError as err:
-            raise ValueError(f"Không thể phân tích định dạng ngày từ '{value}': {err}") from err
-    raise TypeError(f"Kiểu dữ liệu ngày không hợp lệ: {type(value).__name__}")
-
-
 # ---------------------------------------------------------------------------
 # Database Entities (Ánh xạ 1:1 với Schema PostgreSQL)
 # ---------------------------------------------------------------------------

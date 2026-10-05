@@ -5,6 +5,7 @@ import {
   CreateSessionPayload,
   DeleteEdgePayload,
   FinalizeChunksResponse,
+  UnfinalizeChunksResponse,
   GenericSuccessResponse,
   HealthResponse,
   PromoteSessionPayload,
@@ -178,6 +179,19 @@ class ApiClient {
   ): Promise<FinalizeChunksResponse> {
     return this.request<FinalizeChunksResponse>(
       `/staging/${encodeURIComponent(docSlug)}/finalize`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ paths }),
+      }
+    );
+  }
+
+  async unfinalizeChunks(
+    docSlug: string,
+    paths: string[]
+  ): Promise<UnfinalizeChunksResponse> {
+    return this.request<UnfinalizeChunksResponse>(
+      `/staging/${encodeURIComponent(docSlug)}/unfinalize`,
       {
         method: 'POST',
         body: JSON.stringify({ paths }),

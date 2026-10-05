@@ -76,7 +76,7 @@ class StagingViolationData(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     violation_code: StagingViolationCode = Field(..., description="Mã lỗi máy đọc được.")
-    path: str = Field(..., description="Đường dẫn ltree của chunk vi phạm.")
+    path: str = Field(..., description="Đường dẫn phân cấp của chunk vi phạm.")
     doc_slug: str = Field(..., description="Mã định danh tài liệu.")
     message: str = Field(..., description="Mô tả chi tiết nguyên nhân vi phạm.")
     remediation_hint: str = Field(
@@ -147,14 +147,6 @@ class StagingChunkDelta(BaseModel):
         None,
         description="Siêu dữ liệu ngữ nghĩa cần cập nhật bổ sung vào chunk.",
     )
-    review_status: ChunkReviewStatus | None = Field(
-        None,
-        description="Trạng thái tiến độ rà soát của Agent đối với chunk: PENDING hoặc REVIEWED.",
-    )
-    finalization_state: FinalizationState | None = Field(
-        None,
-        description="Trạng thái hoàn thiện của chunk trong quy trình staging và review.",
-    )
     context_type: ContextType | None = Field(
         None,
         description="Phân loại ngữ nghĩa: SELF_CONTAINED (tự chứa) hoặc REQUIRES_EXTERNAL_CONTEXT (cần liên kết ngoài).",
@@ -181,10 +173,10 @@ class StagingDeltaReport(BaseModel):
 
 
 class ReparentPathMapping(BaseModel):
-    """Pairwise mapping from old ltree path to new ltree path."""
+    """Pairwise mapping from old path to new path."""
 
-    old_path: str = Field(..., description="Original ltree path before migration")
-    new_path: str = Field(..., description="Transformed ltree path after migration")
+    old_path: str = Field(..., description="Original hierarchical path before migration")
+    new_path: str = Field(..., description="Transformed hierarchical path after migration")
 
 
 class StgReparentResult(BaseModel):
@@ -254,7 +246,7 @@ class StagingGrepHit(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    path: str = Field(..., description="Hierarchical dot-separated ltree path")
+    path: str = Field(..., description="Đường dẫn phân cấp phân cách bằng dấu chấm (hierarchical dot-separated path)")
     field_matched: str = Field(..., description="'VERBATIM' | 'CONTEXT' | 'PATH' | 'METADATA'")
     match_snippet: str = Field(..., description="Concise snippet highlighting the matched term")
     verbatim_text: str = Field(..., description="Complete verbatim text of the chunk")
@@ -268,7 +260,7 @@ class StagingChunk(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    path: str = Field(..., description="Hierarchical dot-separated ltree path")
+    path: str = Field(..., description="Đường dẫn phân cấp phân cách bằng dấu chấm (hierarchical dot-separated path)")
     node_type: str = Field(
         default="PARAGRAPH",
         description="AST node type ('SECTION' | 'PARAGRAPH' | 'TABLE' | 'LIST' | 'CODE')",
@@ -306,11 +298,11 @@ class StagingEdgeFilter(BaseModel):
 
     source_path: str = Field(
         ...,
-        description="Đường dẫn ltree của chunk nguồn, ví dụ: 'doc_slug.sec_1.part_2.sub_a'.",
+        description="Đường dẫn phân cấp của chunk nguồn cần lọc xóa.",
     )
     target_path: str | None = Field(
         None,
-        description="Đường dẫn ltree của chunk đích nội bộ cần xóa (nếu có).",
+        description="Đường dẫn phân cấp của chunk đích nội bộ cần lọc xóa (nếu có).",
     )
     relation_type: RelationType | str | None = Field(
         None,
@@ -352,11 +344,11 @@ class StagingEdgeInput(BaseModel):
 
     source_path: str = Field(
         ...,
-        description="Đường dẫn phân cấp ltree của chunk nguồn phát sinh quan hệ.",
+        description="Đường dẫn phân cấp của chunk nguồn phát sinh quan hệ.",
     )
     target_path: str = Field(
         ...,
-        description="Đường dẫn phân cấp ltree của chunk đích trong cùng tài liệu hoặc tài liệu đã nạp.",
+        description="Đường dẫn phân cấp của chunk đích trong cùng tài liệu hoặc tài liệu đã nạp.",
     )
     relation_type: RelationType = Field(
         default=RelationType.REFERENCES,
@@ -397,11 +389,11 @@ class StagingEdge(BaseModel):
 
     source_path: str = Field(
         ...,
-        description="Đường dẫn phân cấp ltree của chunk nguồn phát sinh quan hệ.",
+        description="Đường dẫn phân cấp của chunk nguồn phát sinh quan hệ.",
     )
     target_path: str = Field(
         ...,
-        description="Đường dẫn phân cấp ltree của chunk đích trong cùng tài liệu hoặc tài liệu đã nạp.",
+        description="Đường dẫn phân cấp của chunk đích trong cùng tài liệu hoặc tài liệu đã nạp.",
     )
     relation_type: RelationType = Field(
         default=RelationType.REFERENCES,
@@ -582,7 +574,7 @@ class StgPollPendingResult(BaseModel):
 class ChunkFinalizeStatus(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    path: str = Field(..., description="Đường dẫn ltree của chunk")
+    path: str = Field(..., description="Đường dẫn phân cấp của chunk")
     review_status: ChunkReviewStatus = Field(..., description="Trạng thái rà soát (REVIEWED)")
     finalization_state: FinalizationState = Field(
         ..., description="Trạng thái hoàn thiện được tự động suy diễn"
@@ -604,6 +596,20 @@ class StgFinalizeResult(BaseModel):
     results: list[ChunkFinalizeStatus] = Field(
         default_factory=list,
         description="Chi tiết trạng thái được suy diễn tự động của từng chunk",
+    )
+
+
+class StgUnfinalizeResult(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    doc_slug: str = Field(..., description="Mã định danh slug của tài liệu")
+    status: str = Field("SUCCESS", description="Trạng thái thực thi")
+    unfinalized_count: int = Field(..., description="Số lượng chunk vừa được mở lại về PENDING")
+    pending_remaining: int = Field(..., description="Số lượng chunk còn lại chưa chốt")
+    paths: list[str] = Field(default_factory=list, description="Danh sách các đường dẫn đã mở lại")
+    results: list[ChunkFinalizeStatus] = Field(
+        default_factory=list,
+        description="Chi tiết trạng thái của từng chunk sau khi mở lại",
     )
 
 

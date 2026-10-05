@@ -28,6 +28,7 @@ from rag_eval.ingestion.staging.operations import (
     apply_chunk_deltas_to_session,
     finalize_chunks_in_session,
     reparent_subtree_in_session,
+    unfinalize_chunks_in_session,
     validate_and_attach_edges_to_session,
 )
 
@@ -52,15 +53,6 @@ class StagingDocumentSession(BaseModel):
     promoted_at: datetime.datetime | None = Field(None, description="Session promotion timestamp")
     raw_text: str | None = Field(default=None, description="Raw document source text")
     metadata: dict[str, object] = Field(default_factory=dict, description="Document metadata")
-
-    @property
-    def doc_metadata(self) -> dict[str, object]:
-        """Backward-compatibility alias for metadata."""
-        return self.metadata
-
-    @doc_metadata.setter
-    def doc_metadata(self, val: dict[str, object]) -> None:
-        self.metadata = val
     chunks: list[StagingChunk] = Field(default_factory=list, description="List of staged chunks")
     edges: list[StagingEdge] = Field(default_factory=list, description="List of staged graph edges")
     raw_ast_snapshot: list[dict[str, object]] | None = Field(
@@ -296,6 +288,19 @@ class StagingDocumentSession(BaseModel):
         applied_at: datetime.datetime | None = None,
     ) -> tuple[int, list[dict[str, object]]]:
         return finalize_chunks_in_session(
+            session=self,
+            paths=paths,
+            actor=actor,
+            applied_at=applied_at,
+        )
+
+    def unfinalize_chunks(
+        self,
+        paths: Sequence[str],
+        actor: str = "AGENT",
+        applied_at: datetime.datetime | None = None,
+    ) -> tuple[int, list[dict[str, object]]]:
+        return unfinalize_chunks_in_session(
             session=self,
             paths=paths,
             actor=actor,

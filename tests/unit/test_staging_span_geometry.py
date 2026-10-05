@@ -13,7 +13,6 @@ from rag_eval.exceptions import (
 )
 from rag_eval.ingestion.staging.manager import StagingManager
 from rag_eval.ingestion.staging.models import (
-    ChunkReviewStatus,
     ContextType,
     RelationType,
     StagingChunkDelta,
@@ -306,30 +305,40 @@ async def test_promotion_propagates_resolved_spans(tmp_path: Path) -> None:
         ],
     )
 
-    # 2. Update chunk context types and mark REVIEWED (source chunk has references, so REQUIRES_EXTERNAL_CONTEXT)
+    # 2. Update chunk context types
     mgr.patch_chunks(
         doc_slug="doc_promo_test",
         updated_chunks=[
             StagingChunkDelta(
                 path=src_chunk.path,
-                review_status=ChunkReviewStatus.REVIEWED,
                 context_type=ContextType.REQUIRES_EXTERNAL_CONTEXT,
+                justification="Tham chiếu đến đoạn định nghĩa.",
             ),
             StagingChunkDelta(
                 path=tgt_chunk.path,
-                review_status=ChunkReviewStatus.REVIEWED,
                 context_type=ContextType.SELF_CONTAINED,
+                justification="Đoạn văn tự chứa đầy đủ ngữ cảnh.",
             ),
             *[
                 StagingChunkDelta(
                     path=c.path,
-                    review_status=ChunkReviewStatus.REVIEWED,
                     context_type=ContextType.SELF_CONTAINED,
+                    justification="Đoạn văn tự chứa đầy đủ ngữ cảnh.",
                 )
                 for c in session.chunks
                 if c.path not in (src_chunk.path, tgt_chunk.path)
             ],
         ],
+    )
+
+    # 2b. Mark chunks inspected and finalize
+    curr_session, _ = mgr.replay_session("doc_promo_test")
+    curr_session.inspected_paths.update([c.path for c in curr_session.chunks])
+    mgr.save_session(curr_session)
+
+    mgr.finalize_chunks(
+        doc_slug="doc_promo_test",
+        paths=[c.path for c in curr_session.chunks],
     )
 
     # 3. Transition session to APPROVED

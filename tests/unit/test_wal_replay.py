@@ -5,8 +5,10 @@ from rag_eval.ingestion.staging.manager import StagingManager
 from rag_eval.ingestion.staging.models import (
     ChunkReviewStatus,
     ContextType,
+    FinalizationState,
     RelationType,
     StagingChunk,
+    StagingChunkDelta,
     StagingEdge,
 )
 from rag_eval.ingestion.wal import GenesisSnapshot, WALSessionStore
@@ -221,3 +223,43 @@ def test_edge_deduplication_preserves_distinct_target_edges(
     targets = {e.target_path for e in session.edges}
     assert f"{doc_slug}.sec_2" in targets
     assert f"{doc_slug}.sec_3" in targets
+
+
+def test_wal_replay_chunks_unfinalized_deterministic(
+    temp_staging_manager: StagingManager,
+) -> None:
+    """Verifies that CHUNKS_UNFINALIZED WAL entries are deterministically replayed."""
+    doc_slug = "wal_unfinalize_doc"
+    raw_text = "Section 1. Sample content."
+    session = temp_staging_manager.create_session_from_raw(
+        doc_slug=doc_slug,
+        title="WAL Unfinalize Doc",
+        raw_text=raw_text,
+    )
+    chunk_path = session.chunks[0].path
+    deltas = [
+        StagingChunkDelta(
+            path=chunk_path,
+            context_type=ContextType.SELF_CONTAINED,
+        )
+    ]
+    temp_staging_manager.patch_chunks(doc_slug=doc_slug, updated_chunks=deltas)
+    session = temp_staging_manager.load_session(doc_slug)
+    session.get_chunk(chunk_path)
+    temp_staging_manager.save_session(session)
+    temp_staging_manager.finalize_chunks(doc_slug=doc_slug, paths=[chunk_path])
+
+    session = temp_staging_manager.load_session(doc_slug)
+    assert session.chunks[0].review_status == ChunkReviewStatus.REVIEWED
+    assert session.chunks[0].finalization_state == FinalizationState.FINALIZED_SELF_CONTAINED
+
+    # Now unfinalize
+    temp_staging_manager.unfinalize_chunks(doc_slug=doc_slug, paths=[chunk_path])
+    session_after = temp_staging_manager.load_session(doc_slug)
+    assert session_after.chunks[0].review_status == ChunkReviewStatus.PENDING
+    assert session_after.chunks[0].finalization_state == FinalizationState.UNFINALIZED
+
+    # Replay WAL from disk and verify identical state
+    replayed, _ = temp_staging_manager.replay_session(doc_slug)
+    assert replayed.chunks[0].review_status == ChunkReviewStatus.PENDING
+    assert replayed.chunks[0].finalization_state == FinalizationState.UNFINALIZED

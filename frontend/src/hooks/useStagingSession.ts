@@ -205,6 +205,40 @@ export function useStagingSession(initialDocSlug?: string) {
     [activeDocSlug, loadTreeHierarchy, refreshSessions]
   );
 
+  // Mutation helper: unfinalize chunks
+  const unfinalizeChunks = useCallback(
+    async (paths: string[]) => {
+      if (!activeDocSlug) return false;
+      try {
+        await api.unfinalizeChunks(activeDocSlug, paths);
+        setSession((prev) => {
+          if (!prev) return prev;
+          const pathsSet = new Set(paths);
+          return {
+            ...prev,
+            chunks: prev.chunks.map((c) =>
+              pathsSet.has(c.path)
+                ? {
+                    ...c,
+                    review_status: 'PENDING' as const,
+                    finalization_state: 'UNFINALIZED',
+                  }
+                : c
+            ),
+          };
+        });
+        await loadTreeHierarchy(activeDocSlug);
+        void refreshSessions();
+        return true;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Lỗi mở lại chunk';
+        setError(msg);
+        return false;
+      }
+    },
+    [activeDocSlug, loadTreeHierarchy, refreshSessions]
+  );
+
   return {
     sessions,
     activeDocSlug,
@@ -220,6 +254,7 @@ export function useStagingSession(initialDocSlug?: string) {
     loadTreeHierarchy,
     patchChunks,
     finalizeChunks,
+    unfinalizeChunks,
     addEdge,
     deleteEdge,
     updateStatus,

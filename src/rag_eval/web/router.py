@@ -12,14 +12,15 @@ from rag_eval.db.connection import check_db_health
 from rag_eval.db.repositories import CorpusRepository
 from rag_eval.exceptions import CorpusDomainError
 from rag_eval.ingestion.staging import (
-    StagingChunkDelta,
     StagingEdge,
     StagingManager,
 )
 from rag_eval.ingestion.staging.models import ChunkReviewStatus
 from rag_eval.ingestion.staging.session import StagingDocumentSession
-from rag_eval.mcp.tools import CorpusMCPTools
-from rag_eval.schemas import SearchHitDTO, sanitize_ltree_label
+from rag_eval.retrieval.embedder import SentenceTransformerQueryEmbedder
+from rag_eval.retrieval.engine import RetrievalEngine
+from rag_eval.retrieval.reranker import CrossEncoderReranker
+from rag_eval.schemas import SearchHitDTO, VerbatimGrepQuery, sanitize_ltree_label
 from rag_eval.web.schemas import (
     BatchPatchRequest,
     BatchPatchResponse,
@@ -53,6 +54,8 @@ from rag_eval.web.schemas import (
     StagingSessionDetailResponse,
     StagingSessionSummaryResponse,
     StatusTransitionRequest,
+    UnfinalizeChunksRequest,
+    UnfinalizeChunksResponse,
     UnresolvedBacklogItemResponse,
     UnresolvedBacklogResponse,
     VerbatimGrepHitResponse,
@@ -97,22 +100,65 @@ async def _load_session_with_hydration(
     return await mgr.load_or_hydrate_session(doc_slug=doc_slug, pool=pool)
 
 
-def _get_search_tools(request: Request) -> CorpusMCPTools:
-    """Builds the retrieval tools once and keeps them on app state."""
-    cached = getattr(request.app.state, "search_tools", None)
-    if isinstance(cached, CorpusMCPTools):
-        return cached
+def _get_retrieval_engine(request: Request) -> RetrievalEngine:
+    """Retrieves or initializes the shared RetrievalEngine on app state."""
+    engine = getattr(request.app.state, "retrieval_engine", None)
+    if isinstance(engine, RetrievalEngine):
+        return engine
+    pool = _get_db_pool(request)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="Database is not connected.")
+    embedder = SentenceTransformerQueryEmbedder()
+    reranker = CrossEncoderReranker()
+    engine = RetrievalEngine(pool=pool, embedder=embedder, reranker=reranker)
+    request.app.state.retrieval_engine = engine
+    return engine
 
-    from rag_eval.mcp.tools import SentenceTransformerQueryEmbedder
-    from rag_eval.retrieval.reranker import CrossEncoderReranker
 
-    tools = CorpusMCPTools.build(
-        pool=_get_db_pool(request),
-        embedding_engine=SentenceTransformerQueryEmbedder(),
-        reranker=CrossEncoderReranker(),
-    )
-    request.app.state.search_tools = tools
-    return tools
+def _format_verbatim_grep_hits(
+    raw_hits: list[SearchHitDTO],
+    pattern: str,
+    is_regex: bool,
+    case_sensitive: bool,
+) -> list[VerbatimGrepHitResponse]:
+    """Helper trích xuất vị trí ký tự và định dạng snippet cho Web UI."""
+    hits: list[VerbatimGrepHitResponse] = []
+    for m in raw_hits:
+        offset = 0
+        match_len = len(pattern)
+        if is_regex:
+            flags = 0 if case_sensitive else re.IGNORECASE
+            try:
+                match_obj = re.search(pattern, m.verbatim_text, flags)
+                if match_obj:
+                    offset = match_obj.start()
+                    match_len = max(1, match_obj.end() - match_obj.start())
+            except re.error:
+                offset = 0
+        else:
+            if case_sensitive:
+                idx = m.verbatim_text.find(pattern)
+            else:
+                idx = m.verbatim_text.lower().find(pattern.lower())
+            offset = max(0, idx)
+
+        snippet_start = max(0, offset - 20)
+        snippet_end = min(len(m.verbatim_text), offset + match_len + 100)
+        snippet = m.verbatim_text[snippet_start:snippet_end]
+        hits.append(
+            VerbatimGrepHitResponse(
+                chunk_id=str(m.chunk_id),
+                doc_slug=m.doc_slug,
+                path=m.path,
+                start_line=m.start_line,
+                end_line=m.end_line,
+                char_offset=offset,
+                match_snippet=snippet,
+                verbatim_text=m.verbatim_text,
+                metadata=m.metadata,
+            )
+        )
+    return hits
 
 
 def _to_hit_responses(hits: list[SearchHitDTO]) -> list[SearchHitResponse]:
@@ -145,13 +191,14 @@ async def search_corpus(request: Request, payload: SearchRequest) -> SearchRespo
     if _get_db_pool(request) is None:
         raise HTTPException(status_code=503, detail="Database is not connected.")
 
-    tools = _get_search_tools(request)
+    engine = _get_retrieval_engine(request)
     started = time.perf_counter()
+    want_rerank = True if payload.rerank is None else payload.rerank
     try:
-        result = await tools.hybrid_search(
+        result = await engine.search(
             query=payload.query,
             limit=payload.limit,
-            rerank=payload.rerank,
+            rerank=want_rerank,
             doc_slugs=payload.doc_slugs or None,
             path_prefix=payload.path_prefix or None,
             only_resolved=payload.only_resolved,
@@ -370,22 +417,9 @@ async def batch_patch_chunks(
     """Applies surgical in-place chunk updates and removals to the staging session."""
     mgr = _get_staging_manager(request)
     await _load_session_with_hydration(request, doc_slug)
-    updated_stg_deltas = [
-        StagingChunkDelta(
-            path=c.path,
-            verbatim_text=c.verbatim_text,
-            contextualized_text=c.contextualized_text,
-            start_line=c.start_line,
-            end_line=c.end_line,
-            metadata=c.metadata,
-            review_status=c.review_status,
-            finalization_state=c.finalization_state,
-        )
-        for c in payload.updated_chunks
-    ]
     session = mgr.patch_chunks(
         doc_slug=doc_slug,
-        updated_chunks=updated_stg_deltas,
+        updated_chunks=payload.updated_chunks,
         removed_paths=payload.removed_paths,
     )
     return BatchPatchResponse(
@@ -416,6 +450,29 @@ async def finalize_staging_chunks(
         status="SUCCESS",
         doc_slug=doc_slug,
         finalized_count=count,
+        pending_remaining=pending_rem,
+    )
+
+
+@router.post("/staging/{doc_slug}/unfinalize", response_model=UnfinalizeChunksResponse)
+async def unfinalize_staging_chunks(
+    request: Request, doc_slug: str, payload: UnfinalizeChunksRequest
+) -> UnfinalizeChunksResponse:
+    """Reverts specified chunk paths to PENDING review status and UNFINALIZED state."""
+    mgr = _get_staging_manager(request)
+    await _load_session_with_hydration(request, doc_slug)
+    session, count, _ = mgr.unfinalize_chunks(
+        doc_slug=doc_slug, paths=payload.paths, actor="HUMAN:reviewer"
+    )
+    pending_rem = sum(
+        1
+        for c in session.chunks
+        if c.review_status == ChunkReviewStatus.PENDING
+    )
+    return UnfinalizeChunksResponse(
+        status="SUCCESS",
+        doc_slug=doc_slug,
+        unfinalized_count=count,
         pending_remaining=pending_rem,
     )
 
@@ -799,55 +856,30 @@ async def traverse_staging_graph(
 async def grep_corpus_verbatim(
     request: Request, payload: VerbatimGrepRequest
 ) -> VerbatimGrepResponse:
-    """Exact or trigram regex grep across promoted corpus chunks via verbatim_grep stored proc."""
-    tools = _get_search_tools(request)
-    result = await tools.verbatim_grep(
-        pattern=payload.pattern,
+    """Exact or regex grep across promoted corpus chunks via verbatim_grep repository call."""
+    pool = _get_db_pool(request)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="Database is not connected.")
+
+    repo = CorpusRepository(pool)
+    query_dto = VerbatimGrepQuery(
+        query_pattern=payload.pattern,
+        target_documents=None,
+        path_prefix=None,
+        only_resolved=False,
         is_regex=payload.is_regex,
         case_sensitive=payload.case_sensitive,
-        limit=payload.limit,
+        match_limit=payload.limit,
     )
-    hits: list[VerbatimGrepHitResponse] = []
-    for m in result.matches:
-        offset = 0
-        match_len = len(payload.pattern)
-        if payload.is_regex:
-            flags = 0 if payload.case_sensitive else re.IGNORECASE
-            try:
-                match_obj = re.search(payload.pattern, m.verbatim_text, flags)
-                if match_obj:
-                    offset = match_obj.start()
-                    match_len = max(1, match_obj.end() - match_obj.start())
-            except re.error:
-                offset = 0
-        else:
-            if payload.case_sensitive:
-                idx = m.verbatim_text.find(payload.pattern)
-            else:
-                idx = m.verbatim_text.lower().find(payload.pattern.lower())
-            offset = max(0, idx)
-
-        snippet_start = max(0, offset - 20)
-        snippet_end = min(len(m.verbatim_text), offset + match_len + 100)
-        snippet = m.verbatim_text[snippet_start:snippet_end]
-        hits.append(
-            VerbatimGrepHitResponse(
-                chunk_id=str(m.chunk_id),
-                doc_slug=m.doc_slug,
-                path=m.path,
-                start_line=m.start_line,
-                end_line=m.end_line,
-                char_offset=offset,
-                match_snippet=snippet,
-                verbatim_text=m.verbatim_text,
-                metadata=m.metadata,
-            )
-        )
+    raw_hits, total_matches = await repo.chunks.verbatim_grep(query_dto)
+    hits = _format_verbatim_grep_hits(
+        raw_hits, payload.pattern, payload.is_regex, payload.case_sensitive
+    )
     return VerbatimGrepResponse(
-        pattern=result.pattern,
-        is_regex=result.is_regex,
-        total_matches=result.total_matches,
-        returned=result.returned,
-        truncated=result.truncated,
+        pattern=payload.pattern,
+        is_regex=payload.is_regex,
+        total_matches=total_matches,
+        returned=len(hits),
+        truncated=(total_matches > len(hits)),
         matches=hits,
     )

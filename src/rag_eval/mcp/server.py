@@ -21,12 +21,14 @@ from rag_eval.exceptions import (
 from rag_eval.mcp.registry import register_mcp_tools
 from rag_eval.mcp.tools import (
     CorpusMCPTools,
-    CorpusReranker,
     CorpusRuntimeSensors,
     CorpusStagingTools,
+)
+from rag_eval.retrieval.embedder import (
     QueryEmbedder,
     SentenceTransformerQueryEmbedder,
 )
+from rag_eval.retrieval.reranker import CorpusReranker
 
 logger = logging.getLogger("rag_eval.mcp.server")
 
@@ -45,17 +47,23 @@ SERVER_VERSION = "3.0.0"
 STATIC_SERVER_INSTRUCTIONS = """# RAG CORPUS RETRIEVAL & STAGING PRINCIPLES
 
 ## 1. DATA MODEL
-- HIERARCHICAL STRUCTURE: `Document -> Segment -> Sub-segment...` represented via PostgreSQL ltree dot-separated paths.
-- LEAF NODE RETRIEVAL: Database indexes and retrieves chunks at leaf level with verbatim and contextualized text.
+- HIERARCHICAL STRUCTURE: `Document -> Segment -> Sub-segment...` represented via dot-separated hierarchical paths (e.g. `doc_slug.sec_1.para_2`).
+- LEAF NODE RETRIEVAL: System indexes and retrieves chunks at leaf level with verbatim and contextualized text.
 
 ## 2. DUAL RETRIEVAL STRATEGY
 When investigating questions or documents, emit parallel retrieval calls:
-- `hybrid_search`: Dense semantic vector search + Sparse BM25 keyword matching via Reciprocal Rank Fusion (RRF).
-- `verbatim_grep`: Deterministic exact string and POSIX regular expression matches via PostgreSQL trigram index.
+- `hybrid_search`: Combines semantic vector relevance and exact keyword matching.
+- `verbatim_grep`: Deterministic exact string and regular expression pattern matching.
 
 ## 3. STRICT CITATION & GROUNDING
-- Every conclusion must be grounded explicitly in retrieved chunks with path citations.
-- Tool responses are the single authoritative source of truth. If no chunks match the query, state absence clearly."""
+- Every conclusion must be grounded explicitly in retrieved chunks with hierarchical path citations.
+- Tool responses are the single authoritative source of truth. If no chunks match the query, state absence clearly.
+
+## 4. STAGING REVIEW & INGESTION CONTRACT
+- Mandatory inspection: Chunks must be inspected via `stg_get_chunk` or `stg_get_raw` before finalization.
+- Semantic classification: Chunks must be classified as `SELF_CONTAINED` or `REQUIRES_EXTERNAL_CONTEXT` via `stg_patch`.
+- Relational consistency: `SELF_CONTAINED` chunks must have zero outgoing relation edges; `REQUIRES_EXTERNAL_CONTEXT` chunks must have at least one outgoing relation edge attached via `stg_add_edges`.
+- Finalization gate: Chunks are finalized exclusively via `stg_finalize_chunks` once all invariants are satisfied."""
 
 
 def render_server_instructions(

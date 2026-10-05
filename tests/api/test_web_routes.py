@@ -7,8 +7,10 @@ from fastapi import FastAPI
 from rag_eval.ingestion.staging.manager import StagingManager
 from rag_eval.ingestion.staging.models import (
     ChunkReviewStatus,
+    ContextType,
     RelationType,
     StagingChunk,
+    StagingChunkDelta,
     StagingEdge,
 )
 from rag_eval.web.app import create_app
@@ -187,3 +189,60 @@ async def test_promotion_rejects_unreviewed_session(
         )
         # Must be rejected with 400
         assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_unfinalize_chunks_endpoint_and_path_validation(
+    test_app_and_manager: tuple[FastAPI, StagingManager],
+) -> None:
+    """Verifies that /staging/{doc_slug}/unfinalize successfully reverts reviewed chunks and rejects non-existent paths."""
+    app, mgr = test_app_and_manager
+    doc_slug = "unfinalize_test_doc"
+
+    session = mgr.create_session_from_raw(
+        doc_slug=doc_slug,
+        title="Unfinalize Test Doc",
+        raw_text="Paragraph 1\n\nParagraph 2",
+    )
+    assert len(session.chunks) == 2
+    chunk_1 = session.chunks[0].path
+    chunk_2 = session.chunks[1].path
+    deltas = [
+        StagingChunkDelta(path=chunk_1, context_type=ContextType.SELF_CONTAINED),
+        StagingChunkDelta(path=chunk_2, context_type=ContextType.SELF_CONTAINED),
+    ]
+    mgr.patch_chunks(doc_slug=doc_slug, updated_chunks=deltas)
+    session = mgr.load_session(doc_slug)
+    session.get_chunk(chunk_1)
+    session.get_chunk(chunk_2)
+    mgr.save_session(session)
+    mgr.finalize_chunks(doc_slug=doc_slug, paths=[chunk_1, chunk_2])
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        # 1. Unfinalize chunk 1
+        resp = await client.post(
+            f"/api/staging/{doc_slug}/unfinalize",
+            json={"paths": [chunk_1]},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "SUCCESS"
+        assert data["unfinalized_count"] == 1
+        assert data["pending_remaining"] == 1
+
+        # Verify session state
+        session = mgr.load_session(doc_slug)
+        c1 = next(c for c in session.chunks if c.path == chunk_1)
+        c2 = next(c for c in session.chunks if c.path == chunk_2)
+        assert c1.review_status == ChunkReviewStatus.PENDING
+        assert c2.review_status == ChunkReviewStatus.REVIEWED
+
+        # 2. Reject non-existent path
+        bad_resp = await client.post(
+            f"/api/staging/{doc_slug}/unfinalize",
+            json={"paths": [f"{doc_slug}.non_existent"]},
+        )
+        assert bad_resp.status_code == 400

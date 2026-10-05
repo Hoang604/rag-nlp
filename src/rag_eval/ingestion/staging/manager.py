@@ -247,8 +247,6 @@ class StagingManager:
                             start_line=item.start_line,
                             end_line=item.end_line,
                             metadata=item.metadata,
-                            review_status=item.review_status,
-                            finalization_state=item.finalization_state,
                             context_type=item.context_type,
                         )
                     )
@@ -569,6 +567,49 @@ class StagingManager:
             }
             for c in session.chunks
             if c.path in clean_paths and c.review_status == ChunkReviewStatus.REVIEWED
+        ]
+        return session, len(results), results
+
+    def unfinalize_chunks(
+        self,
+        doc_slug: str,
+        paths: Sequence[str],
+        actor: str = "AGENT",
+    ) -> tuple[StagingDocumentSession, int, list[dict[str, object]]]:
+        """Atomically reverts chunks to PENDING via WAL append with strict integrity checks."""
+        wal_store = self._get_wal_store(doc_slug)
+        if not wal_store.exists():
+            raise CorpusDomainError(
+                error_code=E_CORPUS_INTEGRITY_VIOLATION,
+                message=f"Staging session for document '{doc_slug}' does not exist at {wal_store.session_dir}",
+                data={"doc_slug": doc_slug},
+            )
+        session = self.load_session(doc_slug)
+        if session.status not in (StagingStatus.DRAFT, StagingStatus.AMENDMENT):
+            raise CorpusDomainError(
+                error_code=E_CORPUS_INTEGRITY_VIOLATION,
+                message=f"Không thể chỉnh sửa phiên staging ở trạng thái '{session.status.value}'. Phiên làm việc phải ở trạng thái DRAFT hoặc AMENDMENT.",
+                data={"doc_slug": doc_slug, "status": session.status.value},
+            )
+        clean_paths = [validate_ltree_path(p) for p in paths]
+        payload = {
+            "paths": clean_paths,
+        }
+        _, session = wal_store.append_record(
+            actor=actor,
+            op_type="CHUNKS_UNFINALIZED",
+            description=f"Unfinalized {len(clean_paths)} chunks.",
+            payload=payload,
+        )
+        results: list[dict[str, object]] = [
+            {
+                "path": c.path,
+                "review_status": c.review_status,
+                "finalization_state": c.finalization_state,
+                "context_type": c.context_type,
+            }
+            for c in session.chunks
+            if c.path in clean_paths and c.review_status == ChunkReviewStatus.PENDING
         ]
         return session, len(results), results
 

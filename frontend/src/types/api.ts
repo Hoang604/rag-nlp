@@ -31,6 +31,17 @@ export interface FinalizeChunksResponse {
   pending_remaining: number;
 }
 
+export interface UnfinalizeChunksPayload {
+  paths: string[];
+}
+
+export interface UnfinalizeChunksResponse {
+  status: string;
+  doc_slug: string;
+  unfinalized_count: number;
+  pending_remaining: number;
+}
+
 export interface CreateEdgePayload {
   source_path: string;
   target_path: string;

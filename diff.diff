@@ -1,0 +1,2610 @@
+diff --git a/frontend/src/App.tsx b/frontend/src/App.tsx
+index 3032ecc..a693b60 100644
+--- a/frontend/src/App.tsx
++++ b/frontend/src/App.tsx
+@@ -36,6 +36,7 @@ const AppContent: React.FC = () => {
+     loadActiveSession,
+     patchChunks,
+     finalizeChunks,
++    unfinalizeChunks,
+     addEdge,
+     deleteEdge,
+   } = useStagingSession();
+@@ -85,11 +86,7 @@ const AppContent: React.FC = () => {
+     const isCurrentlyReviewed = node.review_status === 'REVIEWED';
+     try {
+       if (isCurrentlyReviewed) {
+-        const chunksToReopen =
+-          session?.chunks
+-            ?.filter((c) => targetPaths.includes(c.path))
+-            ?.map((c) => ({ ...c, review_status: 'PENDING' as const })) || [];
+-        const ok = await patchChunks(chunksToReopen, []);
++        const ok = await unfinalizeChunks(targetPaths);
+         if (ok) {
+           success(
+             'Đã mở lại chunk',
+@@ -191,11 +188,7 @@ const AppContent: React.FC = () => {
+ 
+   const handleBatchReopen = async (paths: string[]) => {
+     try {
+-      const chunksToReopen =
+-        session?.chunks
+-          ?.filter((c) => paths.includes(c.path))
+-          ?.map((c) => ({ ...c, review_status: 'PENDING' as const })) || [];
+-      const ok = await patchChunks(chunksToReopen, []);
++      const ok = await unfinalizeChunks(paths);
+       if (ok) {
+         success('Đã mở lại', `Đã chuyển ${paths.length} mục sang Chờ rà soát.`);
+       }
+diff --git a/frontend/src/hooks/useStagingSession.ts b/frontend/src/hooks/useStagingSession.ts
+index ef5ce2d..a2cc0e1 100644
+--- a/frontend/src/hooks/useStagingSession.ts
++++ b/frontend/src/hooks/useStagingSession.ts
+@@ -205,6 +205,40 @@ export function useStagingSession(initialDocSlug?: string) {
+     [activeDocSlug, loadTreeHierarchy, refreshSessions]
+   );
+ 
++  // Mutation helper: unfinalize chunks
++  const unfinalizeChunks = useCallback(
++    async (paths: string[]) => {
++      if (!activeDocSlug) return false;
++      try {
++        await api.unfinalizeChunks(activeDocSlug, paths);
++        setSession((prev) => {
++          if (!prev) return prev;
++          const pathsSet = new Set(paths);
++          return {
++            ...prev,
++            chunks: prev.chunks.map((c) =>
++              pathsSet.has(c.path)
++                ? {
++                    ...c,
++                    review_status: 'PENDING' as const,
++                    finalization_state: 'UNFINALIZED',
++                  }
++                : c
++            ),
++          };
++        });
++        await loadTreeHierarchy(activeDocSlug);
++        void refreshSessions();
++        return true;
++      } catch (err) {
++        const msg = err instanceof Error ? err.message : 'Lỗi mở lại chunk';
++        setError(msg);
++        return false;
++      }
++    },
++    [activeDocSlug, loadTreeHierarchy, refreshSessions]
++  );
++
+   return {
+     sessions,
+     activeDocSlug,
+@@ -220,6 +254,7 @@ export function useStagingSession(initialDocSlug?: string) {
+     loadTreeHierarchy,
+     patchChunks,
+     finalizeChunks,
++    unfinalizeChunks,
+     addEdge,
+     deleteEdge,
+     updateStatus,
+diff --git a/frontend/src/services/api.ts b/frontend/src/services/api.ts
+index 8fdfb02..7a63044 100644
+--- a/frontend/src/services/api.ts
++++ b/frontend/src/services/api.ts
+@@ -5,6 +5,7 @@ import {
+   CreateSessionPayload,
+   DeleteEdgePayload,
+   FinalizeChunksResponse,
++  UnfinalizeChunksResponse,
+   GenericSuccessResponse,
+   HealthResponse,
+   PromoteSessionPayload,
+@@ -185,6 +186,19 @@ class ApiClient {
+     );
+   }
+ 
++  async unfinalizeChunks(
++    docSlug: string,
++    paths: string[]
++  ): Promise<UnfinalizeChunksResponse> {
++    return this.request<UnfinalizeChunksResponse>(
++      `/staging/${encodeURIComponent(docSlug)}/unfinalize`,
++      {
++        method: 'POST',
++        body: JSON.stringify({ paths }),
++      }
++    );
++  }
++
+   // 5. Relational Graph Edges
+   async listEdges(docSlug: string): Promise<StagingEdge[]> {
+     return this.request<StagingEdge[]>(
+diff --git a/frontend/src/types/api.ts b/frontend/src/types/api.ts
+index ffffc27..e34b3cb 100644
+--- a/frontend/src/types/api.ts
++++ b/frontend/src/types/api.ts
+@@ -31,6 +31,17 @@ export interface FinalizeChunksResponse {
+   pending_remaining: number;
+ }
+ 
++export interface UnfinalizeChunksPayload {
++  paths: string[];
++}
++
++export interface UnfinalizeChunksResponse {
++  status: string;
++  doc_slug: string;
++  unfinalized_count: number;
++  pending_remaining: number;
++}
++
+ export interface CreateEdgePayload {
+   source_path: string;
+   target_path: string;
+diff --git a/frontend/src/types/staging.ts b/frontend/src/types/staging.ts
+index c071a92..ba1cf2e 100644
+--- a/frontend/src/types/staging.ts
++++ b/frontend/src/types/staging.ts
+@@ -51,7 +51,6 @@ export interface StagingDocumentSession {
+   promoted_at?: string | null;
+   raw_text?: string | null;
+   metadata: Record<string, unknown>;
+-  doc_metadata?: Record<string, unknown>;
+   chunks: StagingChunk[];
+   edges: StagingEdge[];
+   raw_ast_snapshot?: Record<string, unknown>[] | null;
+diff --git a/src/rag_eval/ingestion/staging/manager.py b/src/rag_eval/ingestion/staging/manager.py
+index ea32c8f..77cfe5e 100644
+--- a/src/rag_eval/ingestion/staging/manager.py
++++ b/src/rag_eval/ingestion/staging/manager.py
+@@ -247,8 +247,6 @@ class StagingManager:
+                             start_line=item.start_line,
+                             end_line=item.end_line,
+                             metadata=item.metadata,
+-                            review_status=item.review_status,
+-                            finalization_state=item.finalization_state,
+                             context_type=item.context_type,
+                         )
+                     )
+@@ -572,6 +570,49 @@ class StagingManager:
+         ]
+         return session, len(results), results
+ 
++    def unfinalize_chunks(
++        self,
++        doc_slug: str,
++        paths: Sequence[str],
++        actor: str = "AGENT",
++    ) -> tuple[StagingDocumentSession, int, list[dict[str, object]]]:
++        """Atomically reverts chunks to PENDING via WAL append with strict integrity checks."""
++        wal_store = self._get_wal_store(doc_slug)
++        if not wal_store.exists():
++            raise CorpusDomainError(
++                error_code=E_CORPUS_INTEGRITY_VIOLATION,
++                message=f"Staging session for document '{doc_slug}' does not exist at {wal_store.session_dir}",
++                data={"doc_slug": doc_slug},
++            )
++        session = self.load_session(doc_slug)
++        if session.status not in (StagingStatus.DRAFT, StagingStatus.AMENDMENT):
++            raise CorpusDomainError(
++                error_code=E_CORPUS_INTEGRITY_VIOLATION,
++                message=f"Không thể chỉnh sửa phiên staging ở trạng thái '{session.status.value}'. Phiên làm việc phải ở trạng thái DRAFT hoặc AMENDMENT.",
++                data={"doc_slug": doc_slug, "status": session.status.value},
++            )
++        clean_paths = [validate_ltree_path(p) for p in paths]
++        payload = {
++            "paths": clean_paths,
++        }
++        _, session = wal_store.append_record(
++            actor=actor,
++            op_type="CHUNKS_UNFINALIZED",
++            description=f"Unfinalized {len(clean_paths)} chunks.",
++            payload=payload,
++        )
++        results: list[dict[str, object]] = [
++            {
++                "path": c.path,
++                "review_status": c.review_status,
++                "finalization_state": c.finalization_state,
++                "context_type": c.context_type,
++            }
++            for c in session.chunks
++            if c.path in clean_paths and c.review_status == ChunkReviewStatus.PENDING
++        ]
++        return session, len(results), results
++
+     def poll_pending_chunks(
+         self,
+         doc_slug: str,
+diff --git a/src/rag_eval/ingestion/staging/models.py b/src/rag_eval/ingestion/staging/models.py
+index 3e87e70..242102b 100644
+--- a/src/rag_eval/ingestion/staging/models.py
++++ b/src/rag_eval/ingestion/staging/models.py
+@@ -76,7 +76,7 @@ class StagingViolationData(BaseModel):
+     model_config = ConfigDict(extra="ignore")
+ 
+     violation_code: StagingViolationCode = Field(..., description="Mã lỗi máy đọc được.")
+-    path: str = Field(..., description="Đường dẫn ltree của chunk vi phạm.")
++    path: str = Field(..., description="Đường dẫn phân cấp của chunk vi phạm.")
+     doc_slug: str = Field(..., description="Mã định danh tài liệu.")
+     message: str = Field(..., description="Mô tả chi tiết nguyên nhân vi phạm.")
+     remediation_hint: str = Field(
+@@ -147,14 +147,6 @@ class StagingChunkDelta(BaseModel):
+         None,
+         description="Siêu dữ liệu ngữ nghĩa cần cập nhật bổ sung vào chunk.",
+     )
+-    review_status: ChunkReviewStatus | None = Field(
+-        None,
+-        description="Trạng thái tiến độ rà soát của Agent đối với chunk: PENDING hoặc REVIEWED.",
+-    )
+-    finalization_state: FinalizationState | None = Field(
+-        None,
+-        description="Trạng thái hoàn thiện của chunk trong quy trình staging và review.",
+-    )
+     context_type: ContextType | None = Field(
+         None,
+         description="Phân loại ngữ nghĩa: SELF_CONTAINED (tự chứa) hoặc REQUIRES_EXTERNAL_CONTEXT (cần liên kết ngoài).",
+@@ -181,10 +173,10 @@ class StagingDeltaReport(BaseModel):
+ 
+ 
+ class ReparentPathMapping(BaseModel):
+-    """Pairwise mapping from old ltree path to new ltree path."""
++    """Pairwise mapping from old path to new path."""
+ 
+-    old_path: str = Field(..., description="Original ltree path before migration")
+-    new_path: str = Field(..., description="Transformed ltree path after migration")
++    old_path: str = Field(..., description="Original hierarchical path before migration")
++    new_path: str = Field(..., description="Transformed hierarchical path after migration")
+ 
+ 
+ class StgReparentResult(BaseModel):
+@@ -254,7 +246,7 @@ class StagingGrepHit(BaseModel):
+ 
+     model_config = ConfigDict(extra="ignore")
+ 
+-    path: str = Field(..., description="Hierarchical dot-separated ltree path")
++    path: str = Field(..., description="Đường dẫn phân cấp phân cách bằng dấu chấm (hierarchical dot-separated path)")
+     field_matched: str = Field(..., description="'VERBATIM' | 'CONTEXT' | 'PATH' | 'METADATA'")
+     match_snippet: str = Field(..., description="Concise snippet highlighting the matched term")
+     verbatim_text: str = Field(..., description="Complete verbatim text of the chunk")
+@@ -268,7 +260,7 @@ class StagingChunk(BaseModel):
+ 
+     model_config = ConfigDict(extra="ignore")
+ 
+-    path: str = Field(..., description="Hierarchical dot-separated ltree path")
++    path: str = Field(..., description="Đường dẫn phân cấp phân cách bằng dấu chấm (hierarchical dot-separated path)")
+     node_type: str = Field(
+         default="PARAGRAPH",
+         description="AST node type ('SECTION' | 'PARAGRAPH' | 'TABLE' | 'LIST' | 'CODE')",
+@@ -306,11 +298,11 @@ class StagingEdgeFilter(BaseModel):
+ 
+     source_path: str = Field(
+         ...,
+-        description="Đường dẫn ltree của chunk nguồn, ví dụ: 'doc_slug.sec_1.part_2.sub_a'.",
++        description="Đường dẫn phân cấp của chunk nguồn cần lọc xóa.",
+     )
+     target_path: str | None = Field(
+         None,
+-        description="Đường dẫn ltree của chunk đích nội bộ cần xóa (nếu có).",
++        description="Đường dẫn phân cấp của chunk đích nội bộ cần lọc xóa (nếu có).",
+     )
+     relation_type: RelationType | str | None = Field(
+         None,
+@@ -352,11 +344,11 @@ class StagingEdgeInput(BaseModel):
+ 
+     source_path: str = Field(
+         ...,
+-        description="Đường dẫn phân cấp ltree của chunk nguồn phát sinh quan hệ.",
++        description="Đường dẫn phân cấp của chunk nguồn phát sinh quan hệ.",
+     )
+     target_path: str = Field(
+         ...,
+-        description="Đường dẫn phân cấp ltree của chunk đích trong cùng tài liệu hoặc tài liệu đã nạp.",
++        description="Đường dẫn phân cấp của chunk đích trong cùng tài liệu hoặc tài liệu đã nạp.",
+     )
+     relation_type: RelationType = Field(
+         default=RelationType.REFERENCES,
+@@ -397,11 +389,11 @@ class StagingEdge(BaseModel):
+ 
+     source_path: str = Field(
+         ...,
+-        description="Đường dẫn phân cấp ltree của chunk nguồn phát sinh quan hệ.",
++        description="Đường dẫn phân cấp của chunk nguồn phát sinh quan hệ.",
+     )
+     target_path: str = Field(
+         ...,
+-        description="Đường dẫn phân cấp ltree của chunk đích trong cùng tài liệu hoặc tài liệu đã nạp.",
++        description="Đường dẫn phân cấp của chunk đích trong cùng tài liệu hoặc tài liệu đã nạp.",
+     )
+     relation_type: RelationType = Field(
+         default=RelationType.REFERENCES,
+@@ -582,7 +574,7 @@ class StgPollPendingResult(BaseModel):
+ class ChunkFinalizeStatus(BaseModel):
+     model_config = ConfigDict(extra="ignore")
+ 
+-    path: str = Field(..., description="Đường dẫn ltree của chunk")
++    path: str = Field(..., description="Đường dẫn phân cấp của chunk")
+     review_status: ChunkReviewStatus = Field(..., description="Trạng thái rà soát (REVIEWED)")
+     finalization_state: FinalizationState = Field(
+         ..., description="Trạng thái hoàn thiện được tự động suy diễn"
+@@ -607,6 +599,20 @@ class StgFinalizeResult(BaseModel):
+     )
+ 
+ 
++class StgUnfinalizeResult(BaseModel):
++    model_config = ConfigDict(extra="ignore")
++
++    doc_slug: str = Field(..., description="Mã định danh slug của tài liệu")
++    status: str = Field("SUCCESS", description="Trạng thái thực thi")
++    unfinalized_count: int = Field(..., description="Số lượng chunk vừa được mở lại về PENDING")
++    pending_remaining: int = Field(..., description="Số lượng chunk còn lại chưa chốt")
++    paths: list[str] = Field(default_factory=list, description="Danh sách các đường dẫn đã mở lại")
++    results: list[ChunkFinalizeStatus] = Field(
++        default_factory=list,
++        description="Chi tiết trạng thái của từng chunk sau khi mở lại",
++    )
++
++
+ class StgReopenResult(BaseModel):
+     model_config = ConfigDict(extra="ignore")
+ 
+diff --git a/src/rag_eval/ingestion/staging/operations.py b/src/rag_eval/ingestion/staging/operations.py
+index a39a974..1d8941f 100644
+--- a/src/rag_eval/ingestion/staging/operations.py
++++ b/src/rag_eval/ingestion/staging/operations.py
+@@ -94,8 +94,8 @@ def apply_chunk_deltas_to_session(
+                     start_line=delta.start_line or 1,
+                     end_line=delta.end_line or 1,
+                     metadata=dict(delta.metadata or {}),
+-                    review_status=delta.review_status or ChunkReviewStatus.PENDING,
+-                    finalization_state=delta.finalization_state or FinalizationState.UNFINALIZED,
++                    review_status=ChunkReviewStatus.PENDING,
++                    finalization_state=FinalizationState.UNFINALIZED,
+                     context_type=delta.context_type,
+                 )
+                 if delta.justification:
+@@ -112,9 +112,14 @@ def apply_chunk_deltas_to_session(
+ 
+         if delta.verbatim_text is not None:
+             old_verbatim = chunk.verbatim_text
+-            chunk.verbatim_text = delta.verbatim_text
+-            chunk.char_length = len(delta.verbatim_text)
+-            fields_modified_set.add("verbatim_text")
++            if delta.verbatim_text != old_verbatim:
++                chunk.verbatim_text = delta.verbatim_text
++                chunk.char_length = len(delta.verbatim_text)
++                chunk.review_status = ChunkReviewStatus.PENDING
++                chunk.finalization_state = FinalizationState.UNFINALIZED
++                session.inspected_paths.discard(clean_p)
++                fields_modified_set.add("verbatim_text")
++                fields_modified_set.add("review_status")
+ 
+             if delta.contextualized_text is None:
+                 if old_verbatim and old_verbatim in chunk.contextualized_text:
+@@ -152,14 +157,6 @@ def apply_chunk_deltas_to_session(
+             chunk.metadata = merged_dict
+             fields_modified_set.add("metadata")
+ 
+-        if delta.review_status is not None:
+-            chunk.review_status = delta.review_status
+-            fields_modified_set.add("review_status")
+-
+-        if delta.finalization_state is not None:
+-            chunk.finalization_state = delta.finalization_state
+-            fields_modified_set.add("finalization_state")
+-
+         if delta.context_type is not None:
+             chunk.context_type = delta.context_type
+             fields_modified_set.add("context_type")
+@@ -304,6 +301,15 @@ def finalize_chunks_in_session(
+ 
+     target_paths = {validate_ltree_path(p) for p in paths}
+     chunk_map = {c.path: c for c in session.chunks}
++
++    missing_paths = [p for p in sorted(target_paths) if p not in chunk_map]
++    if missing_paths:
++        raise CorpusDomainError(
++            error_code=E_INVALID_DOCUMENT_HIERARCHY,
++            message=f"Các chunk sau không tồn tại trong phiên làm việc: {missing_paths}",
++            data={"doc_slug": session.doc_slug, "missing_paths": missing_paths},
++        )
++
+     edges_by_source: dict[str, list[StagingEdge]] = {}
+     for edge in session.edges:
+         edges_by_source.setdefault(edge.source_path, []).append(edge)
+@@ -311,57 +317,56 @@ def finalize_chunks_in_session(
+     finalized_count = 0
+     results: list[dict[str, object]] = []
+     for p in sorted(target_paths):
+-        if p in chunk_map:
+-            target_chunk = chunk_map[p]
++        target_chunk = chunk_map[p]
++
++        if not session.is_chunk_inspected(p):
++            raise_staging_violation(
++                violation_code=StagingViolationCode.UNINSPECTED_CHUNK,
++                path=p,
++                doc_slug=session.doc_slug,
++                message=f"Chunk '{p}' chưa từng được đọc qua stg_get_chunk hoặc stg_get_raw trong phiên làm việc.",
++                remediation_hint="Nghĩa vụ thẩm định: Bạn phải đọc và kiểm tra trực tiếp nội dung văn bản của chunk qua stg_get_chunk hoặc stg_get_raw trước khi được phép chốt nghiệm thu.",
++            )
++
++        if target_chunk.context_type is None:
++            raise_staging_violation(
++                violation_code=StagingViolationCode.UNCLASSIFIED_CHUNK,
++                path=p,
++                doc_slug=session.doc_slug,
++                message=f"Chunk '{p}' chưa được phân loại context_type qua stg_patch trước khi finalize.",
++                remediation_hint="Nghĩa vụ thẩm định: Hãy đối soát nội dung chunk để xác định tính tự chứa hay có căn cứ phụ thuộc, sau đó sử dụng stg_patch để thiết lập context_type kèm giải trình thực tế trước khi nghiệm thu.",
++            )
+ 
+-            if not session.is_chunk_inspected(p):
++        chunk_edges = edges_by_source.get(p, [])
++        if target_chunk.context_type == ContextType.SELF_CONTAINED:
++            if chunk_edges:
+                 raise_staging_violation(
+-                    violation_code=StagingViolationCode.UNINSPECTED_CHUNK,
++                    violation_code=StagingViolationCode.INVALID_RELATION_ON_SELF_CONTAINED,
+                     path=p,
+                     doc_slug=session.doc_slug,
+-                    message=f"Chunk '{p}' chưa từng được đọc qua stg_get_chunk hoặc stg_get_raw trong phiên làm việc.",
+-                    remediation_hint="Nghĩa vụ thẩm định: Bạn phải đọc và kiểm tra trực tiếp nội dung văn bản của chunk qua stg_get_chunk hoặc stg_get_raw trước khi được phép chốt nghiệm thu.",
++                    message=f"Chunk '{p}' được phân loại SELF_CONTAINED nhưng lại tồn tại {len(chunk_edges)} cạnh quan hệ xuất phát từ nó.",
++                    remediation_hint="Xung đột trạng thái: Chunk được khai báo SELF_CONTAINED nhưng lại có cạnh phụ thuộc xuất phát từ nó. Hãy kiểm tra lại: (1) Nếu chunk thực sự độc lập, hãy xóa các cạnh thừa bằng stg_remove_edge; (2) Nếu chunk có phụ thuộc, dùng stg_patch cập nhật context_type thành REQUIRES_EXTERNAL_CONTEXT.",
+                 )
+-
+-            if target_chunk.context_type is None:
++            target_chunk.finalization_state = FinalizationState.FINALIZED_SELF_CONTAINED
++        elif target_chunk.context_type == ContextType.REQUIRES_EXTERNAL_CONTEXT:
++            if not chunk_edges:
+                 raise_staging_violation(
+-                    violation_code=StagingViolationCode.UNCLASSIFIED_CHUNK,
++                    violation_code=StagingViolationCode.MISSING_RELATION_EDGE,
+                     path=p,
+                     doc_slug=session.doc_slug,
+-                    message=f"Chunk '{p}' chưa được phân loại context_type qua stg_patch trước khi finalize.",
+-                    remediation_hint="Nghĩa vụ thẩm định: Hãy đối soát nội dung chunk để xác định tính tự chứa hay có căn cứ phụ thuộc, sau đó sử dụng stg_patch để thiết lập context_type kèm giải trình thực tế trước khi nghiệm thu.",
++                    message=f"Chunk '{p}' được gắn nhãn REQUIRES_EXTERNAL_CONTEXT nhưng chưa có cạnh quan hệ nào được liên kết.",
++                    remediation_hint="Xung đột trạng thái: Chunk được gắn nhãn REQUIRES_EXTERNAL_CONTEXT nhưng đồ thị chưa có cạnh liên kết. Đối soát: (1) Nếu chunk thực sự có viện dẫn, hãy tra cứu nút đích và tạo cạnh bằng stg_add_edges; (2) Nếu đã phân loại nhầm, dùng stg_patch để đính chính lại context_type thành SELF_CONTAINED kèm lý do.",
+                 )
++            target_chunk.finalization_state = FinalizationState.FINALIZED_FULLY_LINKED
+ 
+-            chunk_edges = edges_by_source.get(p, [])
+-            if target_chunk.context_type == ContextType.SELF_CONTAINED:
+-                if chunk_edges:
+-                    raise_staging_violation(
+-                        violation_code=StagingViolationCode.INVALID_RELATION_ON_SELF_CONTAINED,
+-                        path=p,
+-                        doc_slug=session.doc_slug,
+-                        message=f"Chunk '{p}' được phân loại SELF_CONTAINED nhưng lại tồn tại {len(chunk_edges)} cạnh quan hệ xuất phát từ nó.",
+-                        remediation_hint="Xung đột trạng thái: Chunk được khai báo SELF_CONTAINED nhưng lại có cạnh phụ thuộc xuất phát từ nó. Hãy kiểm tra lại: (1) Nếu chunk thực sự độc lập, hãy xóa các cạnh thừa bằng stg_remove_edge; (2) Nếu chunk có phụ thuộc, dùng stg_patch cập nhật context_type thành REQUIRES_EXTERNAL_CONTEXT.",
+-                    )
+-                target_chunk.finalization_state = FinalizationState.FINALIZED_SELF_CONTAINED
+-            elif target_chunk.context_type == ContextType.REQUIRES_EXTERNAL_CONTEXT:
+-                if not chunk_edges:
+-                    raise_staging_violation(
+-                        violation_code=StagingViolationCode.MISSING_RELATION_EDGE,
+-                        path=p,
+-                        doc_slug=session.doc_slug,
+-                        message=f"Chunk '{p}' được gắn nhãn REQUIRES_EXTERNAL_CONTEXT nhưng chưa có cạnh quan hệ nào được liên kết.",
+-                        remediation_hint="Xung đột trạng thái: Chunk được gắn nhãn REQUIRES_EXTERNAL_CONTEXT nhưng đồ thị chưa có cạnh liên kết. Đối soát: (1) Nếu chunk thực sự có viện dẫn, hãy tra cứu nút đích và tạo cạnh bằng stg_add_edges; (2) Nếu đã phân loại nhầm, dùng stg_patch để đính chính lại context_type thành SELF_CONTAINED kèm lý do.",
+-                    )
+-                target_chunk.finalization_state = FinalizationState.FINALIZED_FULLY_LINKED
+-
+-            target_chunk.review_status = ChunkReviewStatus.REVIEWED
+-            finalized_count += 1
+-            results.append({
+-                "path": target_chunk.path,
+-                "review_status": target_chunk.review_status,
+-                "finalization_state": target_chunk.finalization_state,
+-                "context_type": target_chunk.context_type,
+-            })
++        target_chunk.review_status = ChunkReviewStatus.REVIEWED
++        finalized_count += 1
++        results.append({
++            "path": target_chunk.path,
++            "review_status": target_chunk.review_status,
++            "finalization_state": target_chunk.finalization_state,
++            "context_type": target_chunk.context_type,
++        })
+ 
+     now = applied_at or datetime.datetime.now(datetime.UTC)
+     session.updated_at = now
+@@ -377,6 +382,60 @@ def finalize_chunks_in_session(
+     return finalized_count, results
+ 
+ 
++def unfinalize_chunks_in_session(
++    session: StagingDocumentSession,
++    paths: Sequence[str],
++    actor: str = "AGENT",
++    applied_at: datetime.datetime | None = None,
++) -> tuple[int, list[dict[str, object]]]:
++    """Reverts designated chunk paths to PENDING review status and UNFINALIZED state."""
++    if session.status not in (StagingStatus.DRAFT, StagingStatus.AMENDMENT):
++        raise CorpusDomainError(
++            error_code=E_CORPUS_INTEGRITY_VIOLATION,
++            message=f"Không thể chỉnh sửa phiên staging ở trạng thái '{session.status.value}'.",
++            data={"doc_slug": session.doc_slug, "status": session.status.value},
++        )
++
++    target_paths = {validate_ltree_path(p) for p in paths}
++    chunk_map = {c.path: c for c in session.chunks}
++
++    missing_paths = [p for p in sorted(target_paths) if p not in chunk_map]
++    if missing_paths:
++        raise CorpusDomainError(
++            error_code=E_INVALID_DOCUMENT_HIERARCHY,
++            message=f"Các chunk sau không tồn tại trong phiên làm việc: {missing_paths}",
++            data={"doc_slug": session.doc_slug, "missing_paths": missing_paths},
++        )
++
++    unfinalized_count = 0
++    results: list[dict[str, object]] = []
++    for p in sorted(target_paths):
++        target_chunk = chunk_map[p]
++        target_chunk.review_status = ChunkReviewStatus.PENDING
++        target_chunk.finalization_state = FinalizationState.UNFINALIZED
++        session.inspected_paths.discard(p)
++        unfinalized_count += 1
++        results.append({
++            "path": target_chunk.path,
++            "review_status": target_chunk.review_status,
++            "finalization_state": target_chunk.finalization_state,
++            "context_type": target_chunk.context_type,
++        })
++
++    now = applied_at or datetime.datetime.now(datetime.UTC)
++    session.updated_at = now
++    session.mutation_history.append(
++        StagingMutationRecord(
++            actor=actor,
++            action_type="CHUNKS_UNFINALIZED",
++            description=f"Unfinalized {unfinalized_count} chunks.",
++            timestamp=now,
++            diff_payload={"paths": sorted(target_paths), "unfinalized_count": unfinalized_count},
++        )
++    )
++    return unfinalized_count, results
++
++
+ def validate_and_attach_edges_to_session(
+     session: StagingDocumentSession,
+     edges: Sequence[StagingEdge | StagingEdgeInput | dict[str, object]],
+diff --git a/src/rag_eval/ingestion/staging/session.py b/src/rag_eval/ingestion/staging/session.py
+index a9272c7..a6d8a6b 100644
+--- a/src/rag_eval/ingestion/staging/session.py
++++ b/src/rag_eval/ingestion/staging/session.py
+@@ -28,6 +28,7 @@ from rag_eval.ingestion.staging.operations import (
+     apply_chunk_deltas_to_session,
+     finalize_chunks_in_session,
+     reparent_subtree_in_session,
++    unfinalize_chunks_in_session,
+     validate_and_attach_edges_to_session,
+ )
+ 
+@@ -52,15 +53,6 @@ class StagingDocumentSession(BaseModel):
+     promoted_at: datetime.datetime | None = Field(None, description="Session promotion timestamp")
+     raw_text: str | None = Field(default=None, description="Raw document source text")
+     metadata: dict[str, object] = Field(default_factory=dict, description="Document metadata")
+-
+-    @property
+-    def doc_metadata(self) -> dict[str, object]:
+-        """Backward-compatibility alias for metadata."""
+-        return self.metadata
+-
+-    @doc_metadata.setter
+-    def doc_metadata(self, val: dict[str, object]) -> None:
+-        self.metadata = val
+     chunks: list[StagingChunk] = Field(default_factory=list, description="List of staged chunks")
+     edges: list[StagingEdge] = Field(default_factory=list, description="List of staged graph edges")
+     raw_ast_snapshot: list[dict[str, object]] | None = Field(
+@@ -301,3 +293,16 @@ class StagingDocumentSession(BaseModel):
+             actor=actor,
+             applied_at=applied_at,
+         )
++
++    def unfinalize_chunks(
++        self,
++        paths: Sequence[str],
++        actor: str = "AGENT",
++        applied_at: datetime.datetime | None = None,
++    ) -> tuple[int, list[dict[str, object]]]:
++        return unfinalize_chunks_in_session(
++            session=self,
++            paths=paths,
++            actor=actor,
++            applied_at=applied_at,
++        )
+diff --git a/src/rag_eval/ingestion/wal.py b/src/rag_eval/ingestion/wal.py
+index 3582eca..dd425ad 100644
+--- a/src/rag_eval/ingestion/wal.py
++++ b/src/rag_eval/ingestion/wal.py
+@@ -98,7 +98,7 @@ class WALRecord(BaseModel):
+     actor: str = Field(..., description="'SYSTEM' | 'AGENT' | 'HUMAN:<username>'")
+     op_type: str = Field(
+         ...,
+-        description="'GENESIS' | 'CHUNK_PATCHED' | 'EDGES_ATTACHED' | 'EDGE_REMOVED' | 'SUBTREE_REPARENTED' | 'STATUS_TRANSITION' | 'CHUNKS_FINALIZED' | 'PROMOTED_TO_PRODUCTION'",
++        description="'GENESIS' | 'CHUNK_PATCHED' | 'EDGES_ATTACHED' | 'EDGE_REMOVED' | 'SUBTREE_REPARENTED' | 'STATUS_TRANSITION' | 'CHUNKS_FINALIZED' | 'CHUNKS_UNFINALIZED' | 'PROMOTED_TO_PRODUCTION'",
+     )
+     description: str = Field(..., description="Human-readable summary of operation")
+     payload: dict[str, object] = Field(default_factory=dict, description="Operation payload")
+@@ -564,6 +564,16 @@ class WALSessionStore:
+             )
+             return
+ 
++        if record.op_type == "CHUNKS_UNFINALIZED":
++            raw_paths = record.payload.get("paths")
++            paths_list = [str(p) for p in raw_paths] if isinstance(raw_paths, (list, tuple)) else []
++            session.unfinalize_chunks(
++                paths=paths_list,
++                actor=record.actor,
++                applied_at=record.timestamp,
++            )
++            return
++
+         if record.op_type == "PROMOTED_TO_PRODUCTION":
+             session.status = StagingStatus.PROMOTED
+             session.promoted_at = record.timestamp
+diff --git a/src/rag_eval/mcp/registry.py b/src/rag_eval/mcp/registry.py
+index f25e6d4..7cb91d4 100644
+--- a/src/rag_eval/mcp/registry.py
++++ b/src/rag_eval/mcp/registry.py
+@@ -36,6 +36,7 @@ from rag_eval.mcp.tools import (
+     StgRemoveEdgeResult,
+     StgReopenResult,
+     StgReparentResult,
++    StgUnfinalizeResult,
+     VerbatimGrepResult,
+ )
+ 
+@@ -60,8 +61,8 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
+     @server.tool(
+         name="hybrid_search",
+         description=(
+-            "Truy xuất các chunk nội dung thông qua kết hợp xếp hạng ngữ nghĩa (Dense Vector) "
+-            "và đối sánh từ khóa (Sparse Full-Text Search RRF)."
++            "Truy xuất các chunk nội dung thông qua kết hợp xếp hạng ngữ nghĩa "
++            "và đối sánh từ khóa."
+         ),
+     )
+     async def hybrid_search(
+@@ -93,7 +94,7 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
+             bool,
+             Field(
+                 default=False,
+-                description="Bật hoặc tắt bước xếp hạng lại bằng cross-encoder. Mặc định tắt.",
++                description="Bật hoặc tắt bước xếp hạng lại kết quả tìm kiếm. Mặc định tắt.",
+             ),
+         ] = False,
+     ) -> HybridSearchResult:
+@@ -108,7 +109,7 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
+         name="verbatim_grep",
+         description=(
+             "Tìm kiếm chính xác tuyệt đối theo chuỗi nguyên văn hoặc biểu thức chính quy POSIX "
+-            "trên toàn bộ kho tài liệu. Tối ưu hóa bằng chỉ mục Trigram GIN làm điểm neo."
++            "trên toàn bộ kho tài liệu."
+         ),
+     )
+     async def verbatim_grep(
+@@ -152,25 +153,17 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
+     @server.tool(
+         name="hierarchical_navigate",
+         description=(
+-            "Duyệt cấu trúc cây phân cấp tài liệu xoay quanh một nút/chunk được chỉ định thông qua toán tử ltree. "
++            "Duyệt cấu trúc cây phân cấp tài liệu xoay quanh một nút/chunk được chỉ định. "
+             "Duyệt các hướng: CHILDREN, PARENT_CHAIN, SIBLINGS."
+         ),
+     )
+     async def hierarchical_navigate(
+         path: Annotated[
+-            str | None,
+-            Field(
+-                default=None,
+-                description="Đường dẫn cây phân cấp ltree của nút mục tiêu. Cung cấp 'path' hoặc 'chunk_id'.",
+-            ),
+-        ] = None,
+-        chunk_id: Annotated[
+-            str | None,
++            str,
+             Field(
+-                default=None,
+-                description="Mã định danh UUID tùy chọn của chunk cần duyệt mở rộng (dùng khi không có path).",
++                description="Đường dẫn phân cấp của nút mục tiêu.",
+             ),
+-        ] = None,
++        ],
+         direction: Annotated[
+             HierarchicalDirection,
+             Field(
+@@ -180,8 +173,7 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
+         ] = HierarchicalDirection.CHILDREN,
+     ) -> HierarchicalNavigateResult:
+         return await tool_impl.hierarchical_navigate(
+-            path=path or None,
+-            chunk_id=chunk_id or None,
++            path=path,
+             direction=direction,
+         )
+ 
+@@ -193,7 +185,7 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
+         source_path: Annotated[
+             str,
+             Field(
+-                description="Đường dẫn cây phân cấp ltree của nút gốc bắt đầu duyệt.",
++                description="Đường dẫn phân cấp của nút gốc bắt đầu duyệt.",
+             ),
+         ],
+         direction: Annotated[
+@@ -242,7 +234,7 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
+             str,
+             Field(
+                 default="",
+-                description="Tiền tố đường dẫn ltree tùy chọn để lọc danh sách xem trước.",
++                description="Tiền tố đường dẫn phân cấp tùy chọn để lọc danh sách xem trước.",
+             ),
+         ] = "",
+         limit: Annotated[
+@@ -272,7 +264,11 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
+ 
+     @server.tool(
+         name="stg_get_chunk",
+-        description="Đọc toàn bộ nội dung nguyên văn, ngữ cảnh tổng hợp, câu dẫn đề và siêu dữ liệu của một chunk từ vùng đệm staging theo đường dẫn ltree.",
++        description=(
++            "Đọc toàn bộ nội dung nguyên văn, ngữ cảnh tổng hợp, câu dẫn đề và siêu dữ liệu của một chunk "
++            "từ vùng đệm staging theo đường dẫn phân cấp. Việc đọc chunk này sẽ đồng thời ghi nhận dấu vết nhận thức "
++            "(inspected), làm tiền đề bắt buộc trước khi có thể chốt nghiệm thu (finalize)."
++        ),
+     )
+     async def stg_get_chunk(
+         doc_slug: Annotated[
+@@ -284,7 +280,7 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
+         path: Annotated[
+             str,
+             Field(
+-                description="Đường dẫn phân cấp ltree chính xác của chunk cần đọc toàn văn.",
++                description="Đường dẫn phân cấp chính xác của chunk cần đọc toàn văn.",
+             ),
+         ],
+     ) -> StgGetChunkResult:
+@@ -401,7 +397,7 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
+             list[str] | None,
+             Field(
+                 default=None,
+-                description="Danh sách các đường dẫn ltree của các chunk cần xóa khỏi phiên làm việc.",
++                description="Danh sách các đường dẫn phân cấp của các chunk cần xóa khỏi phiên làm việc.",
+             ),
+         ] = None,
+         cascade_breadcrumbs: Annotated[
+@@ -456,13 +452,13 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
+         old_path_prefix: Annotated[
+             str,
+             Field(
+-                description="Đường dẫn ltree cũ cần di chuyển.",
++                description="Đường dẫn phân cấp cũ cần di chuyển.",
+             ),
+         ],
+         new_path_prefix: Annotated[
+             str,
+             Field(
+-                description="Đường dẫn ltree đích mới.",
++                description="Đường dẫn phân cấp đích mới.",
+             ),
+         ],
+         dry_run: Annotated[
+@@ -520,7 +516,7 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
+             str,
+             Field(
+                 default="",
+-                description="Tiền tố đường dẫn ltree tùy chọn để giới hạn phạm vi quét.",
++                description="Tiền tố đường dẫn phân cấp tùy chọn để giới hạn phạm vi quét.",
+             ),
+         ] = "",
+     ) -> StgPollPendingResult:
+@@ -532,7 +528,11 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
+ 
+     @server.tool(
+         name="stg_finalize_chunks",
+-        description="Đánh dấu danh sách các chunk sang trạng thái đã rà soát (review_status = 'REVIEWED').",
++        description=(
++            "Chốt nghiệm thu các chunk trong phiên staging sang trạng thái REVIEWED. "
++            "Yêu cầu 3 điều kiện tiên quyết: chunk đã được đọc kiểm tra (inspected) qua stg_get_chunk/stg_get_raw, "
++            "đã phân loại context_type qua stg_patch, và nhất quán cạnh quan hệ đồ thị."
++        ),
+     )
+     async def stg_finalize_chunks(
+         doc_slug: Annotated[
+@@ -544,7 +544,7 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
+         paths: Annotated[
+             list[str],
+             Field(
+-                description="Danh sách đường dẫn ltree của các chunk cần chốt hoàn tất.",
++                description="Danh sách đường dẫn phân cấp của các chunk cần chốt hoàn tất.",
+             ),
+         ],
+     ) -> StgFinalizeResult:
+@@ -553,9 +553,35 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
+             paths=paths,
+         )
+ 
++    @server.tool(
++        name="stg_unfinalize_chunks",
++        description=(
++            "Mở lại các chunk đã được nghiệm thu trong phiên staging về trạng thái PENDING và UNFINALIZED để chỉnh sửa hoặc bổ sung liên kết. "
++            "Hành động này cũng đồng thời hủy trạng thái đã đọc kiểm tra (inspected) của các chunk này."
++        ),
++    )
++    async def stg_unfinalize_chunks(
++        doc_slug: Annotated[
++            str,
++            Field(
++                description="Mã định danh doc_slug của phiên làm việc trong vùng đệm staging.",
++            ),
++        ],
++        paths: Annotated[
++            list[str],
++            Field(
++                description="Danh sách đường dẫn phân cấp của các chunk cần mở lại.",
++            ),
++        ],
++    ) -> StgUnfinalizeResult:
++        return await tool_impl.stg_unfinalize_chunks(
++            doc_slug=doc_slug,
++            paths=paths,
++        )
++
+     @server.tool(
+         name="stg_list_sessions",
+-        description="Liệt kê danh sách tóm tắt toàn bộ các phiên làm việc đang có trong vùng đệm staging (.cache/stg).",
++        description="Liệt kê danh sách tóm tắt toàn bộ các phiên làm việc đang có trong vùng đệm staging.",
+     )
+     async def stg_list_sessions(
+         status: Annotated[
+@@ -597,7 +623,7 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
+ 
+     @server.tool(
+         name="stg_reopen_session",
+-        description="Mở lại phiên làm việc của một tài liệu đã promote vào PostgreSQL sang trạng thái AMENDMENT.",
++        description="Mở lại phiên làm việc của một tài liệu đã lưu chính thức sang trạng thái AMENDMENT.",
+     )
+     async def stg_reopen_session(
+         doc_slug: Annotated[
+@@ -610,7 +636,7 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
+             str,
+             Field(
+                 default="",
+-                description="Lý do hoặc ghi chú mở lại phiên làm việc để phục vụ kiểm toán WAL.",
++                description="Lý do hoặc ghi chú mở lại phiên làm việc để phục vụ kiểm toán.",
+             ),
+         ] = "",
+     ) -> StgReopenResult:
+@@ -621,7 +647,12 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
+ 
+     @server.tool(
+         name="stg_remove_edge",
+-        description="Xóa bỏ một hoặc nhiều cạnh quan hệ đồ thị khỏi phiên làm việc staging.",
++        description=(
++            "Xóa bỏ một hoặc nhiều cạnh quan hệ đồ thị khỏi phiên làm việc staging theo 2 chế độ: "
++            "xóa đơn lẻ khi truyền cả 3 trường (source_path, target_path, relation_type) hoặc "
++            "xóa hàng loạt khi chỉ lọc theo source_path/relation_type (yêu cầu clear_all_targets=True) "
++            "hoặc danh sách edges."
++        ),
+     )
+     async def stg_remove_edge(
+         doc_slug: Annotated[
+@@ -634,14 +665,14 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
+             str,
+             Field(
+                 default="",
+-                description="Đường dẫn ltree của chunk nguồn.",
++                description="Đường dẫn phân cấp của chunk nguồn.",
+             ),
+         ] = "",
+         target_path: Annotated[
+             str | None,
+             Field(
+                 default=None,
+-                description="Đường dẫn ltree của chunk đích nội bộ cần xóa.",
++                description="Đường dẫn phân cấp của chunk đích nội bộ cần xóa.",
+             ),
+         ] = None,
+         relation_type: Annotated[
+diff --git a/src/rag_eval/mcp/server.py b/src/rag_eval/mcp/server.py
+index 4088406..05a3ec4 100644
+--- a/src/rag_eval/mcp/server.py
++++ b/src/rag_eval/mcp/server.py
+@@ -21,12 +21,14 @@ from rag_eval.exceptions import (
+ from rag_eval.mcp.registry import register_mcp_tools
+ from rag_eval.mcp.tools import (
+     CorpusMCPTools,
+-    CorpusReranker,
+     CorpusRuntimeSensors,
+     CorpusStagingTools,
++)
++from rag_eval.retrieval.embedder import (
+     QueryEmbedder,
+     SentenceTransformerQueryEmbedder,
+ )
++from rag_eval.retrieval.reranker import CorpusReranker
+ 
+ logger = logging.getLogger("rag_eval.mcp.server")
+ 
+@@ -45,17 +47,23 @@ SERVER_VERSION = "3.0.0"
+ STATIC_SERVER_INSTRUCTIONS = """# RAG CORPUS RETRIEVAL & STAGING PRINCIPLES
+ 
+ ## 1. DATA MODEL
+-- HIERARCHICAL STRUCTURE: `Document -> Segment -> Sub-segment...` represented via PostgreSQL ltree dot-separated paths.
+-- LEAF NODE RETRIEVAL: Database indexes and retrieves chunks at leaf level with verbatim and contextualized text.
++- HIERARCHICAL STRUCTURE: `Document -> Segment -> Sub-segment...` represented via dot-separated hierarchical paths (e.g. `doc_slug.sec_1.para_2`).
++- LEAF NODE RETRIEVAL: System indexes and retrieves chunks at leaf level with verbatim and contextualized text.
+ 
+ ## 2. DUAL RETRIEVAL STRATEGY
+ When investigating questions or documents, emit parallel retrieval calls:
+-- `hybrid_search`: Dense semantic vector search + Sparse BM25 keyword matching via Reciprocal Rank Fusion (RRF).
+-- `verbatim_grep`: Deterministic exact string and POSIX regular expression matches via PostgreSQL trigram index.
++- `hybrid_search`: Combines semantic vector relevance and exact keyword matching.
++- `verbatim_grep`: Deterministic exact string and regular expression pattern matching.
+ 
+ ## 3. STRICT CITATION & GROUNDING
+-- Every conclusion must be grounded explicitly in retrieved chunks with path citations.
+-- Tool responses are the single authoritative source of truth. If no chunks match the query, state absence clearly."""
++- Every conclusion must be grounded explicitly in retrieved chunks with hierarchical path citations.
++- Tool responses are the single authoritative source of truth. If no chunks match the query, state absence clearly.
++
++## 4. STAGING REVIEW & INGESTION CONTRACT
++- Mandatory inspection: Chunks must be inspected via `stg_get_chunk` or `stg_get_raw` before finalization.
++- Semantic classification: Chunks must be classified as `SELF_CONTAINED` or `REQUIRES_EXTERNAL_CONTEXT` via `stg_patch`.
++- Relational consistency: `SELF_CONTAINED` chunks must have zero outgoing relation edges; `REQUIRES_EXTERNAL_CONTEXT` chunks must have at least one outgoing relation edge attached via `stg_add_edges`.
++- Finalization gate: Chunks are finalized exclusively via `stg_finalize_chunks` once all invariants are satisfied."""
+ 
+ 
+ def render_server_instructions(
+diff --git a/src/rag_eval/mcp/tools/__init__.py b/src/rag_eval/mcp/tools/__init__.py
+index c31875f..caabf1f 100644
+--- a/src/rag_eval/mcp/tools/__init__.py
++++ b/src/rag_eval/mcp/tools/__init__.py
+@@ -2,8 +2,6 @@ from __future__ import annotations
+ 
+ from collections.abc import Sequence
+ 
+-import asyncpg
+-
+ from rag_eval.ingestion.staging import (
+     StagingChunk,
+     StagingChunkDelta,
+@@ -12,7 +10,6 @@ from rag_eval.ingestion.staging import (
+     StagingEdgeInput,
+     StgReparentResult,
+ )
+-from rag_eval.ingestion.staging.manager import StagingManager
+ from rag_eval.ingestion.staging.models import (
+     ChunkFinalizeStatus,
+     ChunkProgressStats,
+@@ -32,15 +29,16 @@ from rag_eval.ingestion.staging.models import (
+     StgPreviewResult,
+     StgRemoveEdgeResult,
+     StgReopenResult,
+-)
+-from rag_eval.mcp.tools.embedder import (
+-    QueryEmbedder,
+-    SentenceTransformerQueryEmbedder,
++    StgUnfinalizeResult,
+ )
+ from rag_eval.mcp.tools.sensors import (
+     HIERARCHICAL_DIRECTION_DESCRIPTION,
+     HIERARCHICAL_DIRECTION_DOCS,
+     RERANK_POOL,
++    AgentBacklogItem,
++    AgentGraphTraversalStep,
++    AgentHierarchyNode,
++    AgentSearchHit,
+     ChunkBacklogResult,
+     CorpusRuntimeSensors,
+     GraphDirection,
+@@ -50,13 +48,12 @@ from rag_eval.mcp.tools.sensors import (
+     VerbatimGrepResult,
+ )
+ from rag_eval.mcp.tools.staging import CorpusStagingTools
+-from rag_eval.retrieval.reranker import CorpusReranker
+-from rag_eval.schemas import (
+-    GraphTraversalStepDTO,
+-    HierarchicalDirection,
+-    HierarchyNodeDTO,
+-    SearchHitDTO,
++from rag_eval.retrieval.embedder import (
++    QueryEmbedder,
++    SentenceTransformerQueryEmbedder,
+ )
++from rag_eval.retrieval.reranker import CorpusReranker
++from rag_eval.schemas import HierarchicalDirection
+ 
+ 
+ class CorpusMCPTools:
+@@ -70,27 +67,6 @@ class CorpusMCPTools:
+         self._sensors = sensors
+         self._staging = staging
+ 
+-    @classmethod
+-    def build(
+-        cls,
+-        pool: asyncpg.Pool | None = None,
+-        staging_manager: StagingManager | None = None,
+-        embedding_engine: QueryEmbedder | None = None,
+-        reranker: CorpusReranker | None = None,
+-        rerank_by_default: bool = False,
+-    ) -> CorpusMCPTools:
+-        manager = staging_manager or StagingManager()
+-        return cls(
+-            sensors=CorpusRuntimeSensors(
+-                pool=pool,
+-                embedding_engine=embedding_engine,
+-                staging_manager=manager,
+-                reranker=reranker,
+-                rerank_by_default=rerank_by_default,
+-            ),
+-            staging=CorpusStagingTools(staging_manager=manager, pool=pool),
+-        )
+-
+     @property
+     def sensors(self) -> CorpusRuntimeSensors:
+         return self._sensors
+@@ -138,12 +114,11 @@ class CorpusMCPTools:
+ 
+     async def hierarchical_navigate(
+         self,
+-        path: str | None = None,
+-        chunk_id: str | None = None,
++        path: str,
+         direction: HierarchicalDirection = HierarchicalDirection.CHILDREN,
+     ) -> HierarchicalNavigateResult:
+         return await self._sensors.hierarchical_navigate(
+-            path=path, chunk_id=chunk_id, direction=direction
++            path=path, direction=direction
+         )
+ 
+     async def graph_traverse(
+@@ -272,6 +247,16 @@ class CorpusMCPTools:
+             paths=paths,
+         )
+ 
++    async def stg_unfinalize_chunks(
++        self,
++        doc_slug: str,
++        paths: list[str],
++    ) -> StgUnfinalizeResult:
++        return await self._staging.stg_unfinalize_chunks(
++            doc_slug=doc_slug,
++            paths=paths,
++        )
++
+     async def stg_commit(self, doc_slug: str) -> StgCommitResult:
+         return await self._staging.stg_commit(doc_slug=doc_slug)
+ 
+@@ -313,6 +298,10 @@ __all__ = [
+     "HIERARCHICAL_DIRECTION_DESCRIPTION",
+     "HIERARCHICAL_DIRECTION_DOCS",
+     "RERANK_POOL",
++    "AgentBacklogItem",
++    "AgentGraphTraversalStep",
++    "AgentHierarchyNode",
++    "AgentSearchHit",
+     "ChunkBacklogResult",
+     "ChunkFinalizeStatus",
+     "ChunkProgressStats",
+@@ -321,15 +310,12 @@ __all__ = [
+     "CorpusRuntimeSensors",
+     "CorpusStagingTools",
+     "GraphDirection",
+-    "GraphTraversalStepDTO",
+     "GraphTraverseResult",
+     "HierarchicalDirection",
+     "HierarchicalNavigateResult",
+-    "HierarchyNodeDTO",
+     "HybridSearchResult",
+     "QueryEmbedder",
+     "RelationTypeFilter",
+-    "SearchHitDTO",
+     "SentenceTransformerQueryEmbedder",
+     "StagingChunk",
+     "StagingChunkDelta",
+@@ -351,5 +337,6 @@ __all__ = [
+     "StgRemoveEdgeResult",
+     "StgReopenResult",
+     "StgReparentResult",
++    "StgUnfinalizeResult",
+     "VerbatimGrepResult",
+ ]
+diff --git a/src/rag_eval/mcp/tools/embedder.py b/src/rag_eval/mcp/tools/embedder.py
+deleted file mode 100644
+index 81b3696..0000000
+--- a/src/rag_eval/mcp/tools/embedder.py
++++ /dev/null
+@@ -1,38 +0,0 @@
+-from __future__ import annotations
+-
+-import asyncio
+-from typing import Protocol, final
+-
+-from rag_eval.ingestion.loader import (
+-    DEFAULT_EMBEDDING_MODEL,
+-    compute_chunk_embeddings,
+-)
+-
+-
+-class QueryEmbedder(Protocol):
+-    """Encodes a search query into a dense vector for hybrid_search."""
+-
+-    async def embed_query(self, query: str) -> list[float] | None: ...
+-
+-
+-@final
+-class SentenceTransformerQueryEmbedder:
+-    """Default embedder using Qwen3-Embedding-0.6B with 512-dim MRL truncation.
+-
+-    Documents and queries are embedded using Qwen/Qwen3-Embedding-0.6B with
+-    truncate_dim=512 and L2 normalization for cosine similarity search.
+-    """
+-
+-    def __init__(self, model_name: str = DEFAULT_EMBEDDING_MODEL) -> None:
+-        self._model_name = model_name
+-
+-    async def embed_query(self, query: str) -> list[float] | None:
+-        vectors = await asyncio.to_thread(
+-            compute_chunk_embeddings,
+-            [query],
+-            model_name=self._model_name,
+-            is_query=True,
+-        )
+-        if not vectors:
+-            return None
+-        return vectors[0]
+diff --git a/src/rag_eval/mcp/tools/sensors.py b/src/rag_eval/mcp/tools/sensors.py
+index 34c01e7..dd539b2 100644
+--- a/src/rag_eval/mcp/tools/sensors.py
++++ b/src/rag_eval/mcp/tools/sensors.py
+@@ -6,7 +6,7 @@ import uuid
+ from typing import Final, Literal
+ 
+ import asyncpg
+-from pydantic import BaseModel, ConfigDict, Field, computed_field
++from pydantic import BaseModel, ConfigDict, Field
+ 
+ from rag_eval.db.connection import get_db_pool
+ from rag_eval.db.repositories import CorpusRepository
+@@ -15,16 +15,12 @@ from rag_eval.exceptions import (
+     E_INVALID_DOCUMENT_HIERARCHY,
+     CorpusDomainError,
+ )
+-from rag_eval.ingestion.staging.manager import StagingManager
+-from rag_eval.mcp.tools.embedder import QueryEmbedder
++from rag_eval.retrieval.confidence import compute_search_confidence
++from rag_eval.retrieval.embedder import QueryEmbedder
+ from rag_eval.retrieval.reranker import CorpusReranker
+ from rag_eval.schemas import (
+-    GraphTraversalStepDTO,
+     HierarchicalDirection,
+-    HierarchyNodeDTO,
+     HybridSearchQuery,
+-    SearchHitDTO,
+-    UnresolvedRefBacklogDTO,
+     VerbatimGrepQuery,
+     validate_ltree_path,
+ )
+@@ -44,39 +40,36 @@ HIERARCHICAL_DIRECTION_DESCRIPTION: Final = (
+     + "; ".join(f"'{k.value}': {v}" for k, v in HIERARCHICAL_DIRECTION_DOCS.items())
+ )
+ 
+-LOW_SIMILARITY: Final[float] = 0.86
+-LOW_RERANK: Final[float] = -1.0
+ RERANK_POOL: Final[int] = 10
+ 
+ 
+-class HybridSearchResult(BaseModel):
++# ---------------------------------------------------------------------------
++# Canonical Agent-First Models & Result Containers
++# ---------------------------------------------------------------------------
++
++
++class AgentSearchHit(BaseModel):
+     model_config = ConfigDict(extra="ignore")
+ 
+-    total_hits: int
+-    hits: list[SearchHitDTO]
+-    dense_is_informative: bool = True
+-    expanded_query: str = ""
++    doc_slug: str
++    doc_title: str
++    path: str
++    start_line: int
++    end_line: int
++    verbatim_text: str
++    contextualized_text: str
++    context_type: str
++    is_all_refs_resolved: bool
++    metadata: dict[str, object] = Field(default_factory=dict)
+ 
+-    @computed_field  # type: ignore[prop-decorator]
+-    @property
+-    def confidence(self) -> str:
+-        """Reports how much the caller should trust these hits."""
+-        if not self.hits:
+-            return "none"
+-        max_dense = max(h.dense_similarity for h in self.hits)
+-        has_sparse = any((h.sparse_rank is not None and h.sparse_rank < 999) for h in self.hits)
+-        scores = [h.rerank_score for h in self.hits if h.rerank_score is not None]
+ 
+-        if scores and max(scores) < LOW_RERANK:
+-            return "low"
++class HybridSearchResult(BaseModel):
++    model_config = ConfigDict(extra="ignore")
+ 
+-        if max_dense >= 0.82:
+-            return "high"
+-        if max_dense >= 0.70:
+-            return "medium" if not has_sparse else "high"
+-        if not has_sparse and max_dense < LOW_SIMILARITY:
+-            return "none"
+-        return "medium" if has_sparse else "low"
++    total_hits: int
++    hits: list[AgentSearchHit]
++    confidence: str
++    expanded_query: str = ""
+ 
+ 
+ class VerbatimGrepResult(BaseModel):
+@@ -87,27 +80,65 @@ class VerbatimGrepResult(BaseModel):
+     total_matches: int
+     returned: int
+     truncated: bool
+-    matches: list[SearchHitDTO]
++    matches: list[AgentSearchHit]
++
++
++class AgentHierarchyNode(BaseModel):
++    model_config = ConfigDict(extra="ignore")
++
++    path: str
++    doc_slug: str
++    start_line: int = Field(..., ge=1, description="Số dòng bắt đầu trong tài liệu")
++    end_line: int = Field(..., ge=1, description="Số dòng kết thúc trong tài liệu")
++    verbatim_text: str
++    contextualized_text: str
++    metadata: dict[str, object] = Field(default_factory=dict)
++    relative_depth: int = 0
+ 
+ 
+ class HierarchicalNavigateResult(BaseModel):
+     model_config = ConfigDict(extra="ignore")
+ 
+-    anchor_path: str = Field(..., description="Đường dẫn ltree của nút gốc làm mốc duyệt")
++    anchor_path: str = Field(..., description="Đường dẫn phân cấp của nút gốc làm mốc duyệt")
+     direction: str = Field(..., description="Hướng duyệt đã thực hiện")
+     total_nodes: int = Field(..., description="Tổng số nút trả về")
+-    nodes: list[HierarchyNodeDTO] = Field(
++    nodes: list[AgentHierarchyNode] = Field(
+         default_factory=list,
+         description="Danh sách phẳng các nút được sắp xếp theo đúng thứ tự đọc của tài liệu",
+     )
+ 
+ 
++class AgentGraphTraversalStep(BaseModel):
++    model_config = ConfigDict(extra="ignore")
++
++    source_path: str
++    target_path: str
++    relation_type: str
++    depth: int
++    target_text: str = ""
++
++
+ class GraphTraverseResult(BaseModel):
+     model_config = ConfigDict(extra="ignore")
+ 
+     source_path: str
+     total_paths: int
+-    paths: list[GraphTraversalStepDTO]
++    paths: list[AgentGraphTraversalStep]
++
++
++class AgentBacklogItem(BaseModel):
++    model_config = ConfigDict(extra="ignore")
++
++    doc_slug: str
++    path: str
++    target_path: str | None = None
++    context_type: str = "REQUIRES_EXTERNAL_CONTEXT"
++    is_all_refs_resolved: bool = False
++    verbatim_text: str = ""
++    contextualized_text: str = ""
++    char_start: int | None = None
++    char_end: int | None = None
++    metadata: dict[str, object] = Field(default_factory=dict)
+ 
+ 
+ class ChunkBacklogResult(BaseModel):
+@@ -115,7 +146,12 @@ class ChunkBacklogResult(BaseModel):
+ 
+     total_unfinalized: int
+     returned: int
+-    items: list[UnresolvedRefBacklogDTO]
++    items: list[AgentBacklogItem]
++
++
++# ---------------------------------------------------------------------------
++# Corpus Runtime Sensors Implementation
++# ---------------------------------------------------------------------------
+ 
+ 
+ class CorpusRuntimeSensors:
+@@ -126,7 +162,6 @@ class CorpusRuntimeSensors:
+         pool: asyncpg.Pool | None = None,
+         embedding_engine: QueryEmbedder | None = None,
+         reranker: CorpusReranker | None = None,
+-        staging_manager: StagingManager | None = None,
+         rerank_by_default: bool = False,
+     ) -> None:
+         self._pool = pool
+@@ -207,10 +242,27 @@ class CorpusRuntimeSensors:
+             else:
+                 hits = hits[:limit]
+ 
++            confidence = compute_search_confidence(hits)
++            agent_hits = [
++                AgentSearchHit(
++                    doc_slug=h.doc_slug,
++                    doc_title=h.doc_title,
++                    path=h.path,
++                    start_line=h.start_line,
++                    end_line=h.end_line,
++                    verbatim_text=h.verbatim_text,
++                    contextualized_text=h.contextualized_text,
++                    context_type=str(h.context_type),
++                    is_all_refs_resolved=h.is_all_refs_resolved,
++                    metadata=dict(h.metadata),
++                )
++                for h in hits
++            ]
++
+             return HybridSearchResult(
+-                total_hits=len(hits),
+-                hits=hits,
+-                dense_is_informative=True,
++                total_hits=len(agent_hits),
++                hits=agent_hits,
++                confidence=confidence,
+                 expanded_query=query,
+             )
+         except (OSError, RuntimeError, CorpusDomainError, TypeError, ValueError) as exc:
+@@ -246,13 +298,29 @@ class CorpusRuntimeSensors:
+         try:
+             hits, total = await repo.chunks.verbatim_grep(query_dto)
+ 
++            agent_hits = [
++                AgentSearchHit(
++                    doc_slug=h.doc_slug,
++                    doc_title=h.doc_title,
++                    path=h.path,
++                    start_line=h.start_line,
++                    end_line=h.end_line,
++                    verbatim_text=h.verbatim_text,
++                    contextualized_text=h.contextualized_text,
++                    context_type=str(h.context_type),
++                    is_all_refs_resolved=h.is_all_refs_resolved,
++                    metadata=dict(h.metadata),
++                )
++                for h in hits
++            ]
++
+             return VerbatimGrepResult(
+                 pattern=pattern,
+                 is_regex=is_regex,
+                 total_matches=total,
+-                returned=len(hits),
+-                truncated=(total > len(hits)),
+-                matches=hits,
++                returned=len(agent_hits),
++                truncated=(total > len(agent_hits)),
++                matches=agent_hits,
+             )
+         except (OSError, RuntimeError, CorpusDomainError, TypeError, ValueError) as exc:
+             logger.error("verbatim_grep failed: %s", exc)
+@@ -263,35 +331,17 @@ class CorpusRuntimeSensors:
+ 
+     async def hierarchical_navigate(
+         self,
+-        path: str | None = None,
+-        chunk_id: str | None = None,
++        path: str,
+         direction: HierarchicalDirection = HierarchicalDirection.CHILDREN,
+     ) -> HierarchicalNavigateResult:
+         """Navigates hierarchical document tree via ChunkRepository."""
+         repo = await self._get_repo()
+-
+-        origin_chunk = None
+-        if chunk_id:
+-            try:
+-                origin_chunk = await repo.chunks.get_by_id(uuid.UUID(chunk_id))
+-            except ValueError as err:
+-                raise CorpusDomainError(
+-                    error_code=E_INVALID_DOCUMENT_HIERARCHY,
+-                    message=f"Định danh chunk_id '{chunk_id}' không phải là UUID hợp lệ.",
+-                ) from err
+-        elif path:
+-            clean_path = validate_ltree_path(path)
+-            origin_chunk = await repo.chunks.get_by_path(clean_path)
+-        else:
+-            raise CorpusDomainError(
+-                error_code=E_INVALID_DOCUMENT_HIERARCHY,
+-                message="Bắt buộc phải cung cấp 'path' (chuỗi ltree) hoặc 'chunk_id' (UUID) để duyệt cây phân cấp.",
+-            )
+-
++        clean_path = validate_ltree_path(path)
++        origin_chunk = await repo.chunks.get_by_path(clean_path)
+         if not origin_chunk:
+             raise CorpusDomainError(
+                 error_code=E_INVALID_DOCUMENT_HIERARCHY,
+-                message=f"Không tìm thấy chunk tương ứng với chunk_id='{chunk_id}', path='{path}'.",
++                message=f"Không tìm thấy chunk tương ứng với path='{clean_path}'.",
+             )
+ 
+         dir_val = direction.value
+@@ -299,11 +349,25 @@ class CorpusRuntimeSensors:
+             origin_chunk.document_id, origin_chunk.path, dir_val
+         )
+ 
++        agent_nodes = [
++            AgentHierarchyNode(
++                path=n.path,
++                doc_slug=n.doc_slug,
++                start_line=n.start_line,
++                end_line=n.end_line,
++                verbatim_text=n.verbatim_text,
++                contextualized_text=n.contextualized_text,
++                metadata=dict(n.metadata),
++                relative_depth=n.relative_depth,
++            )
++            for n in nodes_dto
++        ]
++
+         return HierarchicalNavigateResult(
+             anchor_path=origin_chunk.path,
+             direction=dir_val,
+-            total_nodes=len(nodes_dto),
+-            nodes=nodes_dto,
++            total_nodes=len(agent_nodes),
++            nodes=agent_nodes,
+         )
+ 
+     async def graph_traverse(
+@@ -330,10 +394,37 @@ class CorpusRuntimeSensors:
+             filter_relations=filter_relations,
+         )
+ 
++        needed_ids = {s.source_chunk_id for s in steps_dto if s.depth > 1}
++        id_to_path: dict[uuid.UUID, str] = {chunk.id: clean_path}
++        if needed_ids:
++            resolved = await repo.chunks.resolve_ids_batch(list(needed_ids))
++            id_to_path.update(resolved)
++
++        agent_steps: list[AgentGraphTraversalStep] = []
++        for s in steps_dto:
++            src_path = id_to_path.get(s.source_chunk_id)
++            if src_path is None:
++                raise CorpusDomainError(
++                    error_code=E_INVALID_DOCUMENT_HIERARCHY,
++                    message=(
++                        f"Không thể phân giải đường dẫn nút nguồn (UUID: {s.source_chunk_id}) "
++                        f"tại bước nhảy độ sâu {s.depth} cho đích '{s.target_path}'."
++                    ),
++                )
++            agent_steps.append(
++                AgentGraphTraversalStep(
++                    source_path=src_path,
++                    target_path=s.target_path,
++                    relation_type=s.relation_type,
++                    depth=s.depth,
++                    target_text=s.target_text,
++                )
++            )
++
+         return GraphTraverseResult(
+-            source_path=source_path,
+-            total_paths=len(steps_dto),
+-            paths=list(steps_dto),
++            source_path=clean_path,
++            total_paths=len(agent_steps),
++            paths=agent_steps,
+         )
+ 
+     async def corpus_backlog_poll(
+@@ -345,8 +436,24 @@ class CorpusRuntimeSensors:
+         repo = await self._get_repo()
+         rows = await repo.context_refs.get_unresolved_backlog(doc_slug=doc_slug, limit=limit)
+ 
++        agent_items = [
++            AgentBacklogItem(
++                doc_slug=b.doc_slug,
++                path=b.path,
++                target_path=b.target_path,
++                context_type=str(b.context_type),
++                is_all_refs_resolved=b.is_all_refs_resolved,
++                verbatim_text=b.verbatim_text,
++                contextualized_text=b.contextualized_text,
++                char_start=b.char_start,
++                char_end=b.char_end,
++                metadata=dict(b.metadata),
++            )
++            for b in rows
++        ]
++
+         return ChunkBacklogResult(
+-            total_unfinalized=len(rows),
+-            returned=len(rows),
+-            items=list(rows),
++            total_unfinalized=len(agent_items),
++            returned=len(agent_items),
++            items=agent_items,
+         )
+diff --git a/src/rag_eval/mcp/tools/staging.py b/src/rag_eval/mcp/tools/staging.py
+index eba26c3..d0a3497 100644
+--- a/src/rag_eval/mcp/tools/staging.py
++++ b/src/rag_eval/mcp/tools/staging.py
+@@ -39,6 +39,7 @@ from rag_eval.ingestion.staging.models import (
+     StgRemoveEdgeResult,
+     StgReopenResult,
+     StgReparentResult,
++    StgUnfinalizeResult,
+     get_staging_poll_limit,
+ )
+ from rag_eval.ingestion.staging.session import StagingDocumentSession
+@@ -49,7 +50,7 @@ from rag_eval.schemas import (
+ 
+ 
+ class CorpusStagingTools:
+-    """Encapsulates local staging session operations on disk (.cache/stg) with transparent database hydration."""
++    """Encapsulates local staging session operations on disk with transparent database hydration."""
+ 
+     def __init__(
+         self,
+@@ -291,7 +292,7 @@ class CorpusStagingTools:
+             total_chunks=len(session.chunks),
+             total_edges=len(session.edges),
+             committed_at=now.isoformat(),
+-            message=f"Phiên làm việc cho tài liệu '{doc_slug}' đã được chuyển sang trạng thái AGENT_COMMITTED. Dữ liệu được ghi vào WAL và sẵn sàng cho rà soát, lưu trữ.",
++            message=f"Phiên làm việc cho tài liệu '{doc_slug}' đã được chuyển sang trạng thái AGENT_COMMITTED. Dữ liệu đã được ghi nhận và sẵn sàng cho rà soát, lưu trữ.",
+         )
+ 
+     async def stg_poll_pending_chunks(
+@@ -342,6 +343,31 @@ class CorpusStagingTools:
+             results=results,
+         )
+ 
++    async def stg_unfinalize_chunks(
++        self,
++        doc_slug: str,
++        paths: list[str],
++    ) -> StgUnfinalizeResult:
++        await self._ensure_session(doc_slug)
++        session, unfinalized_count, raw_results = self._staging.unfinalize_chunks(
++            doc_slug=doc_slug, paths=paths, actor="AGENT"
++        )
++        pending_remaining = sum(
++            1 for c in session.chunks if c.review_status == ChunkReviewStatus.PENDING
++        )
++        results = [
++            ChunkFinalizeStatus.model_validate(r)
++            for r in raw_results
++        ]
++        return StgUnfinalizeResult(
++            doc_slug=doc_slug,
++            status="SUCCESS",
++            unfinalized_count=unfinalized_count,
++            pending_remaining=pending_remaining,
++            paths=paths,
++            results=results,
++        )
++
+     async def stg_list_sessions(
+         self, status: StagingStatusFilter | None = None
+     ) -> StgListSessionsResult:
+diff --git a/src/rag_eval/retrieval/__init__.py b/src/rag_eval/retrieval/__init__.py
+index e69de29..83e8310 100644
+--- a/src/rag_eval/retrieval/__init__.py
++++ b/src/rag_eval/retrieval/__init__.py
+@@ -0,0 +1,19 @@
++from __future__ import annotations
++
++from rag_eval.retrieval.confidence import compute_search_confidence
++from rag_eval.retrieval.embedder import (
++    QueryEmbedder,
++    SentenceTransformerQueryEmbedder,
++)
++from rag_eval.retrieval.engine import RetrievalEngine, SearchPipelineResult
++from rag_eval.retrieval.reranker import CorpusReranker, CrossEncoderReranker
++
++__all__ = [
++    "CorpusReranker",
++    "CrossEncoderReranker",
++    "QueryEmbedder",
++    "RetrievalEngine",
++    "SearchPipelineResult",
++    "SentenceTransformerQueryEmbedder",
++    "compute_search_confidence",
++]
+diff --git a/src/rag_eval/schemas.py b/src/rag_eval/schemas.py
+index 1e80433..9d13431 100644
+--- a/src/rag_eval/schemas.py
++++ b/src/rag_eval/schemas.py
+@@ -66,30 +66,6 @@ def validate_ltree_path(path: str) -> str:
+     return clean_path
+ 
+ 
+-def parse_flexible_date(value: object) -> datetime.date:
+-    """Chuyển đổi linh hoạt giá trị ngày tháng từ chuỗi hoặc date sang datetime.date."""
+-    if isinstance(value, datetime.date):
+-        return value
+-    if isinstance(value, str):
+-        cleaned = value.strip()
+-        if not cleaned:
+-            raise ValueError("Chuỗi ngày tháng không được rỗng.")
+-        for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
+-            try:
+-                return (
+-                    datetime.datetime.strptime(cleaned, fmt)
+-                    .replace(tzinfo=datetime.UTC)
+-                    .date()
+-                )
+-            except ValueError:
+-                pass
+-        try:
+-            return datetime.date.fromisoformat(cleaned)
+-        except ValueError as err:
+-            raise ValueError(f"Không thể phân tích định dạng ngày từ '{value}': {err}") from err
+-    raise TypeError(f"Kiểu dữ liệu ngày không hợp lệ: {type(value).__name__}")
+-
+-
+ # ---------------------------------------------------------------------------
+ # Database Entities (Ánh xạ 1:1 với Schema PostgreSQL)
+ # ---------------------------------------------------------------------------
+diff --git a/src/rag_eval/web/app.py b/src/rag_eval/web/app.py
+index 2a0e421..64ac107 100644
+--- a/src/rag_eval/web/app.py
++++ b/src/rag_eval/web/app.py
+@@ -41,27 +41,23 @@ def create_app(
+                 logger.warning("Database pool initialization deferred/offline: %s", exc)
+                 app.state.pool = None
+ 
+-        app.state.search_tools = None
++        app.state.retrieval_engine = None
+         if app.state.pool is not None:
+             try:
+-                from rag_eval.mcp.tools import (
+-                    CorpusMCPTools,
+-                    SentenceTransformerQueryEmbedder,
+-                )
++                from rag_eval.retrieval.embedder import SentenceTransformerQueryEmbedder
++                from rag_eval.retrieval.engine import RetrievalEngine
++                from rag_eval.retrieval.reranker import CrossEncoderReranker
+ 
+                 embedder = SentenceTransformerQueryEmbedder()
+                 await embedder.embed_query("khởi động")
+ 
+-                from rag_eval.retrieval.reranker import CrossEncoderReranker
+-
+                 reranker = CrossEncoderReranker(max_length=256)
+                 await reranker.warm()
+ 
+-                app.state.search_tools = CorpusMCPTools.build(
++                app.state.retrieval_engine = RetrievalEngine(
+                     pool=app.state.pool,
+-                    embedding_engine=embedder,
++                    embedder=embedder,
+                     reranker=reranker,
+-                    rerank_by_default=True,
+                 )
+                 logger.info("Retrieval engine warm.")
+             except (RuntimeError, OSError, ImportError, ValueError) as exc:
+diff --git a/src/rag_eval/web/router.py b/src/rag_eval/web/router.py
+index 0e04c71..610ef39 100644
+--- a/src/rag_eval/web/router.py
++++ b/src/rag_eval/web/router.py
+@@ -12,14 +12,15 @@ from rag_eval.db.connection import check_db_health
+ from rag_eval.db.repositories import CorpusRepository
+ from rag_eval.exceptions import CorpusDomainError
+ from rag_eval.ingestion.staging import (
+-    StagingChunkDelta,
+     StagingEdge,
+     StagingManager,
+ )
+ from rag_eval.ingestion.staging.models import ChunkReviewStatus
+ from rag_eval.ingestion.staging.session import StagingDocumentSession
+-from rag_eval.mcp.tools import CorpusMCPTools
+-from rag_eval.schemas import SearchHitDTO, sanitize_ltree_label
++from rag_eval.retrieval.embedder import SentenceTransformerQueryEmbedder
++from rag_eval.retrieval.engine import RetrievalEngine
++from rag_eval.retrieval.reranker import CrossEncoderReranker
++from rag_eval.schemas import SearchHitDTO, VerbatimGrepQuery, sanitize_ltree_label
+ from rag_eval.web.schemas import (
+     BatchPatchRequest,
+     BatchPatchResponse,
+@@ -53,6 +54,8 @@ from rag_eval.web.schemas import (
+     StagingSessionDetailResponse,
+     StagingSessionSummaryResponse,
+     StatusTransitionRequest,
++    UnfinalizeChunksRequest,
++    UnfinalizeChunksResponse,
+     UnresolvedBacklogItemResponse,
+     UnresolvedBacklogResponse,
+     VerbatimGrepHitResponse,
+@@ -97,22 +100,65 @@ async def _load_session_with_hydration(
+     return await mgr.load_or_hydrate_session(doc_slug=doc_slug, pool=pool)
+ 
+ 
+-def _get_search_tools(request: Request) -> CorpusMCPTools:
+-    """Builds the retrieval tools once and keeps them on app state."""
+-    cached = getattr(request.app.state, "search_tools", None)
+-    if isinstance(cached, CorpusMCPTools):
+-        return cached
+-
+-    from rag_eval.mcp.tools import SentenceTransformerQueryEmbedder
+-    from rag_eval.retrieval.reranker import CrossEncoderReranker
++def _get_retrieval_engine(request: Request) -> RetrievalEngine:
++    """Retrieves or initializes the shared RetrievalEngine on app state."""
++    engine = getattr(request.app.state, "retrieval_engine", None)
++    if isinstance(engine, RetrievalEngine):
++        return engine
++    pool = _get_db_pool(request)
++    if pool is None:
++        raise HTTPException(status_code=503, detail="Database is not connected.")
++    embedder = SentenceTransformerQueryEmbedder()
++    reranker = CrossEncoderReranker()
++    engine = RetrievalEngine(pool=pool, embedder=embedder, reranker=reranker)
++    request.app.state.retrieval_engine = engine
++    return engine
++
++
++def _format_verbatim_grep_hits(
++    raw_hits: list[SearchHitDTO],
++    pattern: str,
++    is_regex: bool,
++    case_sensitive: bool,
++) -> list[VerbatimGrepHitResponse]:
++    """Helper trích xuất vị trí ký tự và định dạng snippet cho Web UI."""
++    hits: list[VerbatimGrepHitResponse] = []
++    for m in raw_hits:
++        offset = 0
++        match_len = len(pattern)
++        if is_regex:
++            flags = 0 if case_sensitive else re.IGNORECASE
++            try:
++                match_obj = re.search(pattern, m.verbatim_text, flags)
++                if match_obj:
++                    offset = match_obj.start()
++                    match_len = max(1, match_obj.end() - match_obj.start())
++            except re.error:
++                offset = 0
++        else:
++            if case_sensitive:
++                idx = m.verbatim_text.find(pattern)
++            else:
++                idx = m.verbatim_text.lower().find(pattern.lower())
++            offset = max(0, idx)
+ 
+-    tools = CorpusMCPTools.build(
+-        pool=_get_db_pool(request),
+-        embedding_engine=SentenceTransformerQueryEmbedder(),
+-        reranker=CrossEncoderReranker(),
+-    )
+-    request.app.state.search_tools = tools
+-    return tools
++        snippet_start = max(0, offset - 20)
++        snippet_end = min(len(m.verbatim_text), offset + match_len + 100)
++        snippet = m.verbatim_text[snippet_start:snippet_end]
++        hits.append(
++            VerbatimGrepHitResponse(
++                chunk_id=str(m.chunk_id),
++                doc_slug=m.doc_slug,
++                path=m.path,
++                start_line=m.start_line,
++                end_line=m.end_line,
++                char_offset=offset,
++                match_snippet=snippet,
++                verbatim_text=m.verbatim_text,
++                metadata=m.metadata,
++            )
++        )
++    return hits
+ 
+ 
+ def _to_hit_responses(hits: list[SearchHitDTO]) -> list[SearchHitResponse]:
+@@ -145,13 +191,14 @@ async def search_corpus(request: Request, payload: SearchRequest) -> SearchRespo
+     if _get_db_pool(request) is None:
+         raise HTTPException(status_code=503, detail="Database is not connected.")
+ 
+-    tools = _get_search_tools(request)
++    engine = _get_retrieval_engine(request)
+     started = time.perf_counter()
++    want_rerank = True if payload.rerank is None else payload.rerank
+     try:
+-        result = await tools.hybrid_search(
++        result = await engine.search(
+             query=payload.query,
+             limit=payload.limit,
+-            rerank=payload.rerank,
++            rerank=want_rerank,
+             doc_slugs=payload.doc_slugs or None,
+             path_prefix=payload.path_prefix or None,
+             only_resolved=payload.only_resolved,
+@@ -370,22 +417,9 @@ async def batch_patch_chunks(
+     """Applies surgical in-place chunk updates and removals to the staging session."""
+     mgr = _get_staging_manager(request)
+     await _load_session_with_hydration(request, doc_slug)
+-    updated_stg_deltas = [
+-        StagingChunkDelta(
+-            path=c.path,
+-            verbatim_text=c.verbatim_text,
+-            contextualized_text=c.contextualized_text,
+-            start_line=c.start_line,
+-            end_line=c.end_line,
+-            metadata=c.metadata,
+-            review_status=c.review_status,
+-            finalization_state=c.finalization_state,
+-        )
+-        for c in payload.updated_chunks
+-    ]
+     session = mgr.patch_chunks(
+         doc_slug=doc_slug,
+-        updated_chunks=updated_stg_deltas,
++        updated_chunks=payload.updated_chunks,
+         removed_paths=payload.removed_paths,
+     )
+     return BatchPatchResponse(
+@@ -420,6 +454,29 @@ async def finalize_staging_chunks(
+     )
+ 
+ 
++@router.post("/staging/{doc_slug}/unfinalize", response_model=UnfinalizeChunksResponse)
++async def unfinalize_staging_chunks(
++    request: Request, doc_slug: str, payload: UnfinalizeChunksRequest
++) -> UnfinalizeChunksResponse:
++    """Reverts specified chunk paths to PENDING review status and UNFINALIZED state."""
++    mgr = _get_staging_manager(request)
++    await _load_session_with_hydration(request, doc_slug)
++    session, count, _ = mgr.unfinalize_chunks(
++        doc_slug=doc_slug, paths=payload.paths, actor="HUMAN:reviewer"
++    )
++    pending_rem = sum(
++        1
++        for c in session.chunks
++        if c.review_status == ChunkReviewStatus.PENDING
++    )
++    return UnfinalizeChunksResponse(
++        status="SUCCESS",
++        doc_slug=doc_slug,
++        unfinalized_count=count,
++        pending_remaining=pending_rem,
++    )
++
++
+ @router.get("/staging/{doc_slug}/edges", response_model=list[StagingEdgeResponse])
+ async def list_staging_edges(
+     request: Request, doc_slug: str
+@@ -799,55 +856,30 @@ async def traverse_staging_graph(
+ async def grep_corpus_verbatim(
+     request: Request, payload: VerbatimGrepRequest
+ ) -> VerbatimGrepResponse:
+-    """Exact or trigram regex grep across promoted corpus chunks via verbatim_grep stored proc."""
+-    tools = _get_search_tools(request)
+-    result = await tools.verbatim_grep(
+-        pattern=payload.pattern,
++    """Exact or regex grep across promoted corpus chunks via verbatim_grep repository call."""
++    pool = _get_db_pool(request)
++    if pool is None:
++        raise HTTPException(status_code=503, detail="Database is not connected.")
++
++    repo = CorpusRepository(pool)
++    query_dto = VerbatimGrepQuery(
++        query_pattern=payload.pattern,
++        target_documents=None,
++        path_prefix=None,
++        only_resolved=False,
+         is_regex=payload.is_regex,
+         case_sensitive=payload.case_sensitive,
+-        limit=payload.limit,
++        match_limit=payload.limit,
++    )
++    raw_hits, total_matches = await repo.chunks.verbatim_grep(query_dto)
++    hits = _format_verbatim_grep_hits(
++        raw_hits, payload.pattern, payload.is_regex, payload.case_sensitive
+     )
+-    hits: list[VerbatimGrepHitResponse] = []
+-    for m in result.matches:
+-        offset = 0
+-        match_len = len(payload.pattern)
+-        if payload.is_regex:
+-            flags = 0 if payload.case_sensitive else re.IGNORECASE
+-            try:
+-                match_obj = re.search(payload.pattern, m.verbatim_text, flags)
+-                if match_obj:
+-                    offset = match_obj.start()
+-                    match_len = max(1, match_obj.end() - match_obj.start())
+-            except re.error:
+-                offset = 0
+-        else:
+-            if payload.case_sensitive:
+-                idx = m.verbatim_text.find(payload.pattern)
+-            else:
+-                idx = m.verbatim_text.lower().find(payload.pattern.lower())
+-            offset = max(0, idx)
+-
+-        snippet_start = max(0, offset - 20)
+-        snippet_end = min(len(m.verbatim_text), offset + match_len + 100)
+-        snippet = m.verbatim_text[snippet_start:snippet_end]
+-        hits.append(
+-            VerbatimGrepHitResponse(
+-                chunk_id=str(m.chunk_id),
+-                doc_slug=m.doc_slug,
+-                path=m.path,
+-                start_line=m.start_line,
+-                end_line=m.end_line,
+-                char_offset=offset,
+-                match_snippet=snippet,
+-                verbatim_text=m.verbatim_text,
+-                metadata=m.metadata,
+-            )
+-        )
+     return VerbatimGrepResponse(
+-        pattern=result.pattern,
+-        is_regex=result.is_regex,
+-        total_matches=result.total_matches,
+-        returned=result.returned,
+-        truncated=result.truncated,
++        pattern=payload.pattern,
++        is_regex=payload.is_regex,
++        total_matches=total_matches,
++        returned=len(hits),
++        truncated=(total_matches > len(hits)),
+         matches=hits,
+     )
+diff --git a/src/rag_eval/web/schemas.py b/src/rag_eval/web/schemas.py
+index 3cac910..bec21ff 100644
+--- a/src/rag_eval/web/schemas.py
++++ b/src/rag_eval/web/schemas.py
+@@ -5,13 +5,12 @@ import datetime
+ from pydantic import BaseModel, ConfigDict, Field
+ 
+ from rag_eval.ingestion.staging import (
+-    ChunkReviewStatus,
+     StagingChunk,
++    StagingChunkDelta,
+     StagingEdge,
+     StagingMutationRecord,
+     StagingStatus,
+ )
+-from rag_eval.schemas import FinalizationState
+ 
+ 
+ class StagingSessionSummaryResponse(BaseModel):
+@@ -150,33 +149,23 @@ class FinalizeChunksResponse(BaseModel):
+     pending_remaining: int = Field(..., description="Remaining pending chunks in session")
+ 
+ 
+-class ChunkPatchItem(BaseModel):
+-    """Single chunk payload for surgical in-place patch supporting partial delta fields."""
++class UnfinalizeChunksRequest(BaseModel):
++    """Request payload to revert chunks back to PENDING and UNFINALIZED."""
+ 
+     model_config = ConfigDict(extra="ignore")
+ 
+-    path: str = Field(..., description="Dot-separated ltree path")
+-    verbatim_text: str | None = Field(
+-        None, description="Raw verbatim text (optional for deltas)"
+-    )
+-    contextualized_text: str | None = Field(
+-        None, description="Synthesized contextual text (optional for deltas)"
+-    )
+-    start_line: int | None = Field(
+-        None, ge=1, description="Optional updated starting line number"
+-    )
+-    end_line: int | None = Field(
+-        None, ge=1, description="Optional updated ending line number"
+-    )
+-    metadata: dict[str, object] | None = Field(
+-        None, description="Dynamic chunk metadata to deep-merge (optional)"
+-    )
+-    review_status: ChunkReviewStatus | None = Field(
+-        None, description="Optional updated review status ('PENDING' | 'REVIEWED')"
+-    )
+-    finalization_state: FinalizationState | None = Field(
+-        None, description="Optional updated semantic finalization state"
+-    )
++    paths: list[str] = Field(..., min_length=1, description="List of chunk LTREE paths to unfinalize")
++
++
++class UnfinalizeChunksResponse(BaseModel):
++    """Response returned after unfinalizing chunks."""
++
++    model_config = ConfigDict(extra="ignore")
++
++    status: str = Field("SUCCESS", description="Operation status")
++    doc_slug: str = Field(..., description="Document slug identifier")
++    unfinalized_count: int = Field(..., description="Number of chunks successfully unfinalized")
++    pending_remaining: int = Field(..., description="Number of chunks currently pending review")
+ 
+ 
+ class BatchPatchRequest(BaseModel):
+@@ -184,7 +173,7 @@ class BatchPatchRequest(BaseModel):
+ 
+     model_config = ConfigDict(extra="ignore")
+ 
+-    updated_chunks: list[ChunkPatchItem] = Field(
++    updated_chunks: list[StagingChunkDelta] = Field(
+         default_factory=list, description="List of chunks to add or update"
+     )
+     removed_paths: list[str] = Field(
+diff --git a/tests/api/test_web_routes.py b/tests/api/test_web_routes.py
+index 716e8f7..aff278c 100644
+--- a/tests/api/test_web_routes.py
++++ b/tests/api/test_web_routes.py
+@@ -7,8 +7,10 @@ from fastapi import FastAPI
+ from rag_eval.ingestion.staging.manager import StagingManager
+ from rag_eval.ingestion.staging.models import (
+     ChunkReviewStatus,
++    ContextType,
+     RelationType,
+     StagingChunk,
++    StagingChunkDelta,
+     StagingEdge,
+ )
+ from rag_eval.web.app import create_app
+@@ -187,3 +189,60 @@ async def test_promotion_rejects_unreviewed_session(
+         )
+         # Must be rejected with 400
+         assert resp.status_code == 400
++
++
++@pytest.mark.asyncio
++async def test_unfinalize_chunks_endpoint_and_path_validation(
++    test_app_and_manager: tuple[FastAPI, StagingManager],
++) -> None:
++    """Verifies that /staging/{doc_slug}/unfinalize successfully reverts reviewed chunks and rejects non-existent paths."""
++    app, mgr = test_app_and_manager
++    doc_slug = "unfinalize_test_doc"
++
++    session = mgr.create_session_from_raw(
++        doc_slug=doc_slug,
++        title="Unfinalize Test Doc",
++        raw_text="Paragraph 1\n\nParagraph 2",
++    )
++    assert len(session.chunks) == 2
++    chunk_1 = session.chunks[0].path
++    chunk_2 = session.chunks[1].path
++    deltas = [
++        StagingChunkDelta(path=chunk_1, context_type=ContextType.SELF_CONTAINED),
++        StagingChunkDelta(path=chunk_2, context_type=ContextType.SELF_CONTAINED),
++    ]
++    mgr.patch_chunks(doc_slug=doc_slug, updated_chunks=deltas)
++    session = mgr.load_session(doc_slug)
++    session.get_chunk(chunk_1)
++    session.get_chunk(chunk_2)
++    mgr.save_session(session)
++    mgr.finalize_chunks(doc_slug=doc_slug, paths=[chunk_1, chunk_2])
++
++    async with httpx.AsyncClient(
++        transport=httpx.ASGITransport(app=app),
++        base_url="http://testserver",
++    ) as client:
++        # 1. Unfinalize chunk 1
++        resp = await client.post(
++            f"/api/staging/{doc_slug}/unfinalize",
++            json={"paths": [chunk_1]},
++        )
++        assert resp.status_code == 200
++        data = resp.json()
++        assert data["status"] == "SUCCESS"
++        assert data["unfinalized_count"] == 1
++        assert data["pending_remaining"] == 1
++
++        # Verify session state
++        session = mgr.load_session(doc_slug)
++        c1 = next(c for c in session.chunks if c.path == chunk_1)
++        c2 = next(c for c in session.chunks if c.path == chunk_2)
++        assert c1.review_status == ChunkReviewStatus.PENDING
++        assert c2.review_status == ChunkReviewStatus.REVIEWED
++
++        # 2. Reject non-existent path
++        bad_resp = await client.post(
++            f"/api/staging/{doc_slug}/unfinalize",
++            json={"paths": [f"{doc_slug}.non_existent"]},
++        )
++        assert bad_resp.status_code == 400
+diff --git a/tests/unit/test_mcp_protocol.py b/tests/unit/test_mcp_protocol.py
+index 030f11d..8f5620b 100644
+--- a/tests/unit/test_mcp_protocol.py
++++ b/tests/unit/test_mcp_protocol.py
+@@ -1,3 +1,7 @@
++import json
++import uuid
++from unittest.mock import AsyncMock
++
+ import pytest
+ 
+ from rag_eval.exceptions import (
+@@ -11,6 +15,15 @@ from rag_eval.mcp.server import (
+     CorpusMCPServer,
+     map_domain_error_to_jsonrpc,
+ )
++from rag_eval.mcp.tools.sensors import (
++    AgentBacklogItem,
++    AgentGraphTraversalStep,
++    AgentHierarchyNode,
++    AgentSearchHit,
++    CorpusRuntimeSensors,
++    GraphTraverseResult,
++)
++from rag_eval.schemas import ChunkEntity, ContextType, GraphTraversalStepDTO
+ 
+ 
+ def test_domain_error_to_jsonrpc_mapping() -> None:
+@@ -69,3 +82,233 @@ async def test_mcp_server_handle_unknown_method() -> None:
+     err = resp.get("error")
+     assert isinstance(err, dict)
+     assert err.get("code") == -32601
++
++
++@pytest.mark.asyncio
++async def test_mcp_tool_definitions_and_instructions_clean_of_infrastructure_buzzwords() -> None:
++    """Verifies all 19 tools and server instructions are free of database/infrastructure buzzwords."""
++    server = CorpusMCPServer()
++    instructions = await server.get_instructions()
++    tools = await server.get_tool_definitions()
++
++    forbidden_keywords = [
++        "Trigram GIN",
++        "PostgreSQL",
++        ".cache/stg",
++        "toán tử ltree",
++        "ltree",
++        "kiểm toán WAL",
++        "WAL",
++        "RRF",
++        "cross-encoder",
++    ]
++
++    for kw in forbidden_keywords:
++        assert kw not in instructions, f"Found forbidden keyword '{kw}' in server instructions"
++
++    for tool in tools:
++        t_name = str(tool["name"])
++        t_desc = str(tool.get("description", ""))
++        for kw in forbidden_keywords:
++            assert kw not in t_desc, f"Found forbidden keyword '{kw}' in description of tool '{t_name}'"
++
++        schema_json = json.dumps(tool.get("inputSchema", {}), ensure_ascii=False)
++        for kw in forbidden_keywords:
++            assert kw not in schema_json, f"Found forbidden keyword '{kw}' in inputSchema of tool '{t_name}'"
++
++
++@pytest.mark.asyncio
++async def test_hierarchical_navigate_input_schema_has_no_chunk_id() -> None:
++    """Verifies hierarchical_navigate accepts strictly 'path' and no 'chunk_id' parameter."""
++    server = CorpusMCPServer()
++    tools = await server.get_tool_definitions()
++    nav_tool = next((t for t in tools if t["name"] == "hierarchical_navigate"), None)
++    assert nav_tool is not None
++    schema = nav_tool["inputSchema"]
++    assert isinstance(schema, dict)
++    props = schema.get("properties", {})
++    assert "path" in props
++    assert "chunk_id" not in props
++
++
++@pytest.mark.asyncio
++async def test_stg_patch_input_schema_has_no_review_or_finalization_states() -> None:
++    """Verifies stg_patch input schema prohibits review_status and finalization_state backdoor."""
++    server = CorpusMCPServer()
++    tools = await server.get_tool_definitions()
++    patch_tool = next((t for t in tools if t["name"] == "stg_patch"), None)
++    assert patch_tool is not None
++    schema_str = json.dumps(patch_tool["inputSchema"])
++    assert "review_status" not in schema_str
++    assert "finalization_state" not in schema_str
++
++
++def test_sensor_dto_payload_invariants_no_internal_leakage() -> None:
++    """Verifies all Agent-First DTO models strictly hide database UUIDs and raw algorithm scores."""
++    # AgentSearchHit invariants
++    assert "chunk_id" not in AgentSearchHit.model_fields
++    assert "score" not in AgentSearchHit.model_fields
++    assert "dense_similarity" not in AgentSearchHit.model_fields
++    assert "rerank_score" not in AgentSearchHit.model_fields
++    assert "sparse_rank" not in AgentSearchHit.model_fields
++
++    hit = AgentSearchHit(
++        doc_slug="test_doc",
++        doc_title="Test Title",
++        path="test_doc.sec_1",
++        start_line=1,
++        end_line=10,
++        verbatim_text="Sample text",
++        contextualized_text="Sample text contextualized",
++        context_type="SELF_CONTAINED",
++        is_all_refs_resolved=True,
++    )
++    hit_dict = hit.model_dump()
++    assert "chunk_id" not in hit_dict
++
++    # AgentHierarchyNode invariants
++    assert "chunk_id" not in AgentHierarchyNode.model_fields
++    assert AgentHierarchyNode.model_fields["start_line"].is_required()
++    assert AgentHierarchyNode.model_fields["end_line"].is_required()
++
++    node = AgentHierarchyNode(
++        path="test_doc.sec_1",
++        doc_slug="test_doc",
++        start_line=1,
++        end_line=10,
++        verbatim_text="Node text",
++        contextualized_text="Node contextualized text",
++    )
++    assert "chunk_id" not in node.model_dump()
++
++    # AgentGraphTraversalStep invariants
++    assert "edge_id" not in AgentGraphTraversalStep.model_fields
++    assert "source_chunk_id" not in AgentGraphTraversalStep.model_fields
++    assert "target_chunk_id" not in AgentGraphTraversalStep.model_fields
++
++    step = AgentGraphTraversalStep(
++        source_path="test_doc.sec_1",
++        target_path="test_doc.sec_2",
++        relation_type="REFERENCES",
++        depth=1,
++    )
++    assert "edge_id" not in step.model_dump()
++
++    # AgentBacklogItem invariants
++    assert "ref_id" not in AgentBacklogItem.model_fields
++    assert "edge_id" not in AgentBacklogItem.model_fields
++    assert "chunk_id" not in AgentBacklogItem.model_fields
++    assert "target_chunk_id" not in AgentBacklogItem.model_fields
++
++    item = AgentBacklogItem(
++        doc_slug="test_doc",
++        path="test_doc.sec_1",
++    )
++    assert "chunk_id" not in item.model_dump()
++
++
++@pytest.mark.asyncio
++async def test_graph_traverse_multihop_source_path_resolution() -> None:
++    """Verifies graph_traverse resolves source_path correctly across depth > 1 without leaking UUIDs."""
++    mock_repo = AsyncMock()
++    sensors = CorpusRuntimeSensors()
++    sensors._get_repo = AsyncMock(return_value=mock_repo)
++
++    root_id = uuid.uuid4()
++    child_id = uuid.uuid4()
++
++    mock_chunk = ChunkEntity(
++        id=root_id,
++        document_id=uuid.uuid4(),
++        path="doc.sec_1",
++        verbatim_text="Root section",
++        contextualized_text="Root section",
++        start_line=1,
++        end_line=5,
++        context_type=ContextType.SELF_CONTAINED,
++        is_all_refs_resolved=True,
++    )
++
++    steps_dto = [
++        GraphTraversalStepDTO(
++            edge_id=uuid.uuid4(),
++            source_chunk_id=root_id,
++            target_chunk_id=child_id,
++            target_path="doc.sec_2",
++            relation_type="REFERENCES",
++            depth=1,
++            target_text="Target sec 2",
++        ),
++        GraphTraversalStepDTO(
++            edge_id=uuid.uuid4(),
++            source_chunk_id=child_id,
++            target_chunk_id=uuid.uuid4(),
++            target_path="doc.sec_3",
++            relation_type="SUPPORTS",
++            depth=2,
++            target_text="Target sec 3",
++        ),
++    ]
++
++    mock_repo.chunks.get_by_path = AsyncMock(return_value=mock_chunk)
++    mock_repo.graph.traverse = AsyncMock(return_value=steps_dto)
++    mock_repo.chunks.resolve_ids_batch = AsyncMock(return_value={child_id: "doc.sec_2"})
++
++    res = await sensors.graph_traverse(source_path="doc.sec_1", max_depth=2)
++
++    assert isinstance(res, GraphTraverseResult)
++    assert res.source_path == "doc.sec_1"
++    assert len(res.paths) == 2
++    assert res.paths[0].source_path == "doc.sec_1"
++    assert res.paths[0].target_path == "doc.sec_2"
++    assert res.paths[1].source_path == "doc.sec_2"
++    assert res.paths[1].target_path == "doc.sec_3"
++    dump_str = json.dumps(res.model_dump())
++    assert str(root_id) not in dump_str
++    assert str(child_id) not in dump_str
++
++
++@pytest.mark.asyncio
++async def test_graph_traverse_multihop_unresolvable_source_id_raises_error() -> None:
++    """Verifies graph_traverse strictly rejects unresolvable intermediate node IDs rather than faking fallback."""
++    mock_repo = AsyncMock()
++    sensors = CorpusRuntimeSensors()
++    sensors._get_repo = AsyncMock(return_value=mock_repo)
++
++    root_id = uuid.uuid4()
++    orphan_id = uuid.uuid4()
++
++    mock_chunk = ChunkEntity(
++        id=root_id,
++        document_id=uuid.uuid4(),
++        path="doc.sec_1",
++        verbatim_text="Root section",
++        contextualized_text="Root section",
++        start_line=1,
++        end_line=5,
++        context_type=ContextType.SELF_CONTAINED,
++        is_all_refs_resolved=True,
++    )
++
++    steps_dto = [
++        GraphTraversalStepDTO(
++            edge_id=uuid.uuid4(),
++            source_chunk_id=orphan_id,
++            target_chunk_id=uuid.uuid4(),
++            target_path="doc.sec_orphan",
++            relation_type="REFERENCES",
++            depth=2,
++            target_text="Orphan target",
++        ),
++    ]
++
++    mock_repo.chunks.get_by_path = AsyncMock(return_value=mock_chunk)
++    mock_repo.graph.traverse = AsyncMock(return_value=steps_dto)
++    # resolve_ids_batch does not return orphan_id (e.g. broken reference)
++    mock_repo.chunks.resolve_ids_batch = AsyncMock(return_value={})
++
++    with pytest.raises(CorpusDomainError) as exc_info:
++        await sensors.graph_traverse(source_path="doc.sec_1", max_depth=2)
++
++    assert exc_info.value.error_code == E_INVALID_DOCUMENT_HIERARCHY
++
+diff --git a/tests/unit/test_reranker_concurrency.py b/tests/unit/test_reranker_concurrency.py
+index 1d51829..16c8645 100644
+--- a/tests/unit/test_reranker_concurrency.py
++++ b/tests/unit/test_reranker_concurrency.py
+@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
+ 
+ import pytest
+ 
+-from rag_eval.mcp.tools.sensors import HybridSearchResult
++from rag_eval.retrieval.confidence import compute_search_confidence
+ from rag_eval.retrieval.reranker import CrossEncoderReranker, ThreadSafeScoreCache
+ from rag_eval.schemas import SearchHitDTO
+ 
+@@ -80,11 +80,7 @@ def test_confidence_calibration() -> None:
+         dense_rank=1,
+         sparse_rank=999,
+     )
+-    result_high = HybridSearchResult(
+-        total_hits=1,
+-        hits=[high_dense_hit],
+-    )
+-    assert result_high.confidence == "high"
++    assert compute_search_confidence([high_dense_hit]) == "high"
+ 
+     # Test Medium Confidence: dense similarity between 0.70 and 0.82
+     med_dense_hit = SearchHitDTO(
+@@ -103,11 +99,7 @@ def test_confidence_calibration() -> None:
+         dense_rank=2,
+         sparse_rank=999,
+     )
+-    result_med = HybridSearchResult(
+-        total_hits=1,
+-        hits=[med_dense_hit],
+-    )
+-    assert result_med.confidence == "medium"
++    assert compute_search_confidence([med_dense_hit]) == "medium"
+ 
+     # Test None Confidence: dense < 0.70 and sparse is 999
+     low_hit = SearchHitDTO(
+@@ -126,8 +118,4 @@ def test_confidence_calibration() -> None:
+         dense_rank=15,
+         sparse_rank=999,
+     )
+-    result_low = HybridSearchResult(
+-        total_hits=1,
+-        hits=[low_hit],
+-    )
+-    assert result_low.confidence == "none"
++    assert compute_search_confidence([low_hit]) == "none"
+diff --git a/tests/unit/test_staging_bounded_review.py b/tests/unit/test_staging_bounded_review.py
+index d77d939..cece917 100644
+--- a/tests/unit/test_staging_bounded_review.py
++++ b/tests/unit/test_staging_bounded_review.py
+@@ -6,6 +6,7 @@ import pytest
+ 
+ from rag_eval.exceptions import (
+     E_AST_GROUNDING_VALIDATION,
++    E_INVALID_DOCUMENT_HIERARCHY,
+     CorpusDomainError,
+ )
+ from rag_eval.ingestion.staging.manager import StagingManager
+@@ -263,3 +264,46 @@ async def test_stg_commit_transitions_session_to_agent_committed(tmp_path: Path)
+     assert commit_res.status == StagingStatus.AGENT_COMMITTED.value
+     committed_session = mgr.load_session("doc_commit")
+     assert committed_session.status == StagingStatus.AGENT_COMMITTED
++
++
++@pytest.mark.asyncio
++async def test_stg_unfinalize_chunks_reverts_state_and_evicts_inspection(tmp_path: Path) -> None:
++    """Verifies that stg_unfinalize_chunks reverts REVIEWED chunk to PENDING, resets finalization_state, and evicts inspected_paths."""
++    mgr, tools = _setup_test_session(tmp_path, "doc_unfinalize")
++    session = mgr.load_session("doc_unfinalize")
++    target_path = session.chunks[0].path
++
++    # First inspect, patch context_type, and finalize
++    await tools.stg_get_chunk(doc_slug="doc_unfinalize", path=target_path)
++    await tools.stg_patch(
++        doc_slug="doc_unfinalize",
++        updated_chunks=[
++            StagingChunkDelta(
++                path=target_path,
++                context_type=ContextType.SELF_CONTAINED,
++                justification="Self contained section",
++            )
++        ],
++    )
++    fin_res = await tools.stg_finalize_chunks(doc_slug="doc_unfinalize", paths=[target_path])
++    assert fin_res.finalized_count == 1
++
++    # Verify finalized in session
++    session = mgr.load_session("doc_unfinalize")
++    assert session.chunks[0].review_status == ChunkReviewStatus.REVIEWED
++    assert target_path in session.inspected_paths
++
++    # Now unfinalize
++    unfin_res = await tools.stg_unfinalize_chunks(doc_slug="doc_unfinalize", paths=[target_path])
++    assert unfin_res.status == "SUCCESS"
++    assert unfin_res.unfinalized_count == 1
++
++    session = mgr.load_session("doc_unfinalize")
++    assert session.chunks[0].review_status == ChunkReviewStatus.PENDING
++    assert session.chunks[0].finalization_state == FinalizationState.UNFINALIZED
++    assert target_path not in session.inspected_paths
++
++    # Attempting to unfinalize non-existent path raises E_INVALID_DOCUMENT_HIERARCHY
++    with pytest.raises(CorpusDomainError) as exc_info:
++        await tools.stg_unfinalize_chunks(doc_slug="doc_unfinalize", paths=["nonexistent.chunk"])
++    assert exc_info.value.error_code == E_INVALID_DOCUMENT_HIERARCHY
+diff --git a/tests/unit/test_staging_span_geometry.py b/tests/unit/test_staging_span_geometry.py
+index 9a2ce9a..ca72c72 100644
+--- a/tests/unit/test_staging_span_geometry.py
++++ b/tests/unit/test_staging_span_geometry.py
+@@ -13,7 +13,6 @@ from rag_eval.exceptions import (
+ )
+ from rag_eval.ingestion.staging.manager import StagingManager
+ from rag_eval.ingestion.staging.models import (
+-    ChunkReviewStatus,
+     ContextType,
+     RelationType,
+     StagingChunkDelta,
+@@ -306,25 +305,25 @@ async def test_promotion_propagates_resolved_spans(tmp_path: Path) -> None:
+         ],
+     )
+ 
+-    # 2. Update chunk context types and mark REVIEWED (source chunk has references, so REQUIRES_EXTERNAL_CONTEXT)
++    # 2. Update chunk context types
+     mgr.patch_chunks(
+         doc_slug="doc_promo_test",
+         updated_chunks=[
+             StagingChunkDelta(
+                 path=src_chunk.path,
+-                review_status=ChunkReviewStatus.REVIEWED,
+                 context_type=ContextType.REQUIRES_EXTERNAL_CONTEXT,
++                justification="Tham chiếu đến đoạn định nghĩa.",
+             ),
+             StagingChunkDelta(
+                 path=tgt_chunk.path,
+-                review_status=ChunkReviewStatus.REVIEWED,
+                 context_type=ContextType.SELF_CONTAINED,
++                justification="Đoạn văn tự chứa đầy đủ ngữ cảnh.",
+             ),
+             *[
+                 StagingChunkDelta(
+                     path=c.path,
+-                    review_status=ChunkReviewStatus.REVIEWED,
+                     context_type=ContextType.SELF_CONTAINED,
++                    justification="Đoạn văn tự chứa đầy đủ ngữ cảnh.",
+                 )
+                 for c in session.chunks
+                 if c.path not in (src_chunk.path, tgt_chunk.path)
+@@ -332,6 +331,16 @@ async def test_promotion_propagates_resolved_spans(tmp_path: Path) -> None:
+         ],
+     )
+ 
++    # 2b. Mark chunks inspected and finalize
++    curr_session, _ = mgr.replay_session("doc_promo_test")
++    curr_session.inspected_paths.update([c.path for c in curr_session.chunks])
++    mgr.save_session(curr_session)
++
++    mgr.finalize_chunks(
++        doc_slug="doc_promo_test",
++        paths=[c.path for c in curr_session.chunks],
++    )
++
+     # 3. Transition session to APPROVED
+     mgr.update_session_status(
+         doc_slug="doc_promo_test",
+diff --git a/tests/unit/test_wal_replay.py b/tests/unit/test_wal_replay.py
+index fb93fd3..c1dc711 100644
+--- a/tests/unit/test_wal_replay.py
++++ b/tests/unit/test_wal_replay.py
+@@ -5,8 +5,10 @@ from rag_eval.ingestion.staging.manager import StagingManager
+ from rag_eval.ingestion.staging.models import (
+     ChunkReviewStatus,
+     ContextType,
++    FinalizationState,
+     RelationType,
+     StagingChunk,
++    StagingChunkDelta,
+     StagingEdge,
+ )
+ from rag_eval.ingestion.wal import GenesisSnapshot, WALSessionStore
+@@ -221,3 +223,43 @@ def test_edge_deduplication_preserves_distinct_target_edges(
+     targets = {e.target_path for e in session.edges}
+     assert f"{doc_slug}.sec_2" in targets
+     assert f"{doc_slug}.sec_3" in targets
++
++
++def test_wal_replay_chunks_unfinalized_deterministic(
++    temp_staging_manager: StagingManager,
++) -> None:
++    """Verifies that CHUNKS_UNFINALIZED WAL entries are deterministically replayed."""
++    doc_slug = "wal_unfinalize_doc"
++    raw_text = "Section 1. Sample content."
++    session = temp_staging_manager.create_session_from_raw(
++        doc_slug=doc_slug,
++        title="WAL Unfinalize Doc",
++        raw_text=raw_text,
++    )
++    chunk_path = session.chunks[0].path
++    deltas = [
++        StagingChunkDelta(
++            path=chunk_path,
++            context_type=ContextType.SELF_CONTAINED,
++        )
++    ]
++    temp_staging_manager.patch_chunks(doc_slug=doc_slug, updated_chunks=deltas)
++    session = temp_staging_manager.load_session(doc_slug)
++    session.get_chunk(chunk_path)
++    temp_staging_manager.save_session(session)
++    temp_staging_manager.finalize_chunks(doc_slug=doc_slug, paths=[chunk_path])
++
++    session = temp_staging_manager.load_session(doc_slug)
++    assert session.chunks[0].review_status == ChunkReviewStatus.REVIEWED
++    assert session.chunks[0].finalization_state == FinalizationState.FINALIZED_SELF_CONTAINED
++
++    # Now unfinalize
++    temp_staging_manager.unfinalize_chunks(doc_slug=doc_slug, paths=[chunk_path])
++    session_after = temp_staging_manager.load_session(doc_slug)
++    assert session_after.chunks[0].review_status == ChunkReviewStatus.PENDING
++    assert session_after.chunks[0].finalization_state == FinalizationState.UNFINALIZED
++
++    # Replay WAL from disk and verify identical state
++    replayed, _ = temp_staging_manager.replay_session(doc_slug)
++    assert replayed.chunks[0].review_status == ChunkReviewStatus.PENDING
++    assert replayed.chunks[0].finalization_state == FinalizationState.UNFINALIZED

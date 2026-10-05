@@ -36,6 +36,7 @@ from rag_eval.mcp.tools import (
     StgRemoveEdgeResult,
     StgReopenResult,
     StgReparentResult,
+    StgUnfinalizeResult,
     VerbatimGrepResult,
 )
 
@@ -60,8 +61,8 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
     @server.tool(
         name="hybrid_search",
         description=(
-            "Truy xuất các chunk nội dung thông qua kết hợp xếp hạng ngữ nghĩa (Dense Vector) "
-            "và đối sánh từ khóa (Sparse Full-Text Search RRF)."
+            "Truy xuất các chunk nội dung thông qua kết hợp xếp hạng ngữ nghĩa "
+            "và đối sánh từ khóa."
         ),
     )
     async def hybrid_search(
@@ -93,7 +94,7 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
             bool,
             Field(
                 default=False,
-                description="Bật hoặc tắt bước xếp hạng lại bằng cross-encoder. Mặc định tắt.",
+                description="Bật hoặc tắt bước xếp hạng lại kết quả tìm kiếm. Mặc định tắt.",
             ),
         ] = False,
     ) -> HybridSearchResult:
@@ -108,7 +109,7 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
         name="verbatim_grep",
         description=(
             "Tìm kiếm chính xác tuyệt đối theo chuỗi nguyên văn hoặc biểu thức chính quy POSIX "
-            "trên toàn bộ kho tài liệu. Tối ưu hóa bằng chỉ mục Trigram GIN làm điểm neo."
+            "trên toàn bộ kho tài liệu."
         ),
     )
     async def verbatim_grep(
@@ -152,25 +153,17 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
     @server.tool(
         name="hierarchical_navigate",
         description=(
-            "Duyệt cấu trúc cây phân cấp tài liệu xoay quanh một nút/chunk được chỉ định thông qua toán tử ltree. "
+            "Duyệt cấu trúc cây phân cấp tài liệu xoay quanh một nút/chunk được chỉ định. "
             "Duyệt các hướng: CHILDREN, PARENT_CHAIN, SIBLINGS."
         ),
     )
     async def hierarchical_navigate(
         path: Annotated[
-            str | None,
+            str,
             Field(
-                default=None,
-                description="Đường dẫn cây phân cấp ltree của nút mục tiêu. Cung cấp 'path' hoặc 'chunk_id'.",
+                description="Đường dẫn phân cấp của nút mục tiêu.",
             ),
-        ] = None,
-        chunk_id: Annotated[
-            str | None,
-            Field(
-                default=None,
-                description="Mã định danh UUID tùy chọn của chunk cần duyệt mở rộng (dùng khi không có path).",
-            ),
-        ] = None,
+        ],
         direction: Annotated[
             HierarchicalDirection,
             Field(
@@ -180,8 +173,7 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
         ] = HierarchicalDirection.CHILDREN,
     ) -> HierarchicalNavigateResult:
         return await tool_impl.hierarchical_navigate(
-            path=path or None,
-            chunk_id=chunk_id or None,
+            path=path,
             direction=direction,
         )
 
@@ -193,7 +185,7 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
         source_path: Annotated[
             str,
             Field(
-                description="Đường dẫn cây phân cấp ltree của nút gốc bắt đầu duyệt.",
+                description="Đường dẫn phân cấp của nút gốc bắt đầu duyệt.",
             ),
         ],
         direction: Annotated[
@@ -242,7 +234,7 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
             str,
             Field(
                 default="",
-                description="Tiền tố đường dẫn ltree tùy chọn để lọc danh sách xem trước.",
+                description="Tiền tố đường dẫn phân cấp tùy chọn để lọc danh sách xem trước.",
             ),
         ] = "",
         limit: Annotated[
@@ -272,7 +264,11 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
 
     @server.tool(
         name="stg_get_chunk",
-        description="Đọc toàn bộ nội dung nguyên văn, ngữ cảnh tổng hợp, câu dẫn đề và siêu dữ liệu của một chunk từ vùng đệm staging theo đường dẫn ltree.",
+        description=(
+            "Đọc toàn bộ nội dung nguyên văn, ngữ cảnh tổng hợp, câu dẫn đề và siêu dữ liệu của một chunk "
+            "từ vùng đệm staging theo đường dẫn phân cấp. Việc đọc chunk này sẽ đồng thời ghi nhận dấu vết nhận thức "
+            "(inspected), làm tiền đề bắt buộc trước khi có thể chốt nghiệm thu (finalize)."
+        ),
     )
     async def stg_get_chunk(
         doc_slug: Annotated[
@@ -284,7 +280,7 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
         path: Annotated[
             str,
             Field(
-                description="Đường dẫn phân cấp ltree chính xác của chunk cần đọc toàn văn.",
+                description="Đường dẫn phân cấp chính xác của chunk cần đọc toàn văn.",
             ),
         ],
     ) -> StgGetChunkResult:
@@ -401,7 +397,7 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
             list[str] | None,
             Field(
                 default=None,
-                description="Danh sách các đường dẫn ltree của các chunk cần xóa khỏi phiên làm việc.",
+                description="Danh sách các đường dẫn phân cấp của các chunk cần xóa khỏi phiên làm việc.",
             ),
         ] = None,
         cascade_breadcrumbs: Annotated[
@@ -456,13 +452,13 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
         old_path_prefix: Annotated[
             str,
             Field(
-                description="Đường dẫn ltree cũ cần di chuyển.",
+                description="Đường dẫn phân cấp cũ cần di chuyển.",
             ),
         ],
         new_path_prefix: Annotated[
             str,
             Field(
-                description="Đường dẫn ltree đích mới.",
+                description="Đường dẫn phân cấp đích mới.",
             ),
         ],
         dry_run: Annotated[
@@ -520,7 +516,7 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
             str,
             Field(
                 default="",
-                description="Tiền tố đường dẫn ltree tùy chọn để giới hạn phạm vi quét.",
+                description="Tiền tố đường dẫn phân cấp tùy chọn để giới hạn phạm vi quét.",
             ),
         ] = "",
     ) -> StgPollPendingResult:
@@ -532,7 +528,11 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
 
     @server.tool(
         name="stg_finalize_chunks",
-        description="Đánh dấu danh sách các chunk sang trạng thái đã rà soát (review_status = 'REVIEWED').",
+        description=(
+            "Chốt nghiệm thu các chunk trong phiên staging sang trạng thái REVIEWED. "
+            "Yêu cầu 3 điều kiện tiên quyết: chunk đã được đọc kiểm tra (inspected) qua stg_get_chunk/stg_get_raw, "
+            "đã phân loại context_type qua stg_patch, và nhất quán cạnh quan hệ đồ thị."
+        ),
     )
     async def stg_finalize_chunks(
         doc_slug: Annotated[
@@ -544,7 +544,7 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
         paths: Annotated[
             list[str],
             Field(
-                description="Danh sách đường dẫn ltree của các chunk cần chốt hoàn tất.",
+                description="Danh sách đường dẫn phân cấp của các chunk cần chốt hoàn tất.",
             ),
         ],
     ) -> StgFinalizeResult:
@@ -554,8 +554,34 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
         )
 
     @server.tool(
+        name="stg_unfinalize_chunks",
+        description=(
+            "Mở lại các chunk đã được nghiệm thu trong phiên staging về trạng thái PENDING và UNFINALIZED để chỉnh sửa hoặc bổ sung liên kết. "
+            "Hành động này cũng đồng thời hủy trạng thái đã đọc kiểm tra (inspected) của các chunk này."
+        ),
+    )
+    async def stg_unfinalize_chunks(
+        doc_slug: Annotated[
+            str,
+            Field(
+                description="Mã định danh doc_slug của phiên làm việc trong vùng đệm staging.",
+            ),
+        ],
+        paths: Annotated[
+            list[str],
+            Field(
+                description="Danh sách đường dẫn phân cấp của các chunk cần mở lại.",
+            ),
+        ],
+    ) -> StgUnfinalizeResult:
+        return await tool_impl.stg_unfinalize_chunks(
+            doc_slug=doc_slug,
+            paths=paths,
+        )
+
+    @server.tool(
         name="stg_list_sessions",
-        description="Liệt kê danh sách tóm tắt toàn bộ các phiên làm việc đang có trong vùng đệm staging (.cache/stg).",
+        description="Liệt kê danh sách tóm tắt toàn bộ các phiên làm việc đang có trong vùng đệm staging.",
     )
     async def stg_list_sessions(
         status: Annotated[
@@ -597,7 +623,7 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
 
     @server.tool(
         name="stg_reopen_session",
-        description="Mở lại phiên làm việc của một tài liệu đã promote vào PostgreSQL sang trạng thái AMENDMENT.",
+        description="Mở lại phiên làm việc của một tài liệu đã lưu chính thức sang trạng thái AMENDMENT.",
     )
     async def stg_reopen_session(
         doc_slug: Annotated[
@@ -610,7 +636,7 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
             str,
             Field(
                 default="",
-                description="Lý do hoặc ghi chú mở lại phiên làm việc để phục vụ kiểm toán WAL.",
+                description="Lý do hoặc ghi chú mở lại phiên làm việc để phục vụ kiểm toán.",
             ),
         ] = "",
     ) -> StgReopenResult:
@@ -621,7 +647,12 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
 
     @server.tool(
         name="stg_remove_edge",
-        description="Xóa bỏ một hoặc nhiều cạnh quan hệ đồ thị khỏi phiên làm việc staging.",
+        description=(
+            "Xóa bỏ một hoặc nhiều cạnh quan hệ đồ thị khỏi phiên làm việc staging theo 2 chế độ: "
+            "xóa đơn lẻ khi truyền cả 3 trường (source_path, target_path, relation_type) hoặc "
+            "xóa hàng loạt khi chỉ lọc theo source_path/relation_type (yêu cầu clear_all_targets=True) "
+            "hoặc danh sách edges."
+        ),
     )
     async def stg_remove_edge(
         doc_slug: Annotated[
@@ -634,14 +665,14 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
             str,
             Field(
                 default="",
-                description="Đường dẫn ltree của chunk nguồn.",
+                description="Đường dẫn phân cấp của chunk nguồn.",
             ),
         ] = "",
         target_path: Annotated[
             str | None,
             Field(
                 default=None,
-                description="Đường dẫn ltree của chunk đích nội bộ cần xóa.",
+                description="Đường dẫn phân cấp của chunk đích nội bộ cần xóa.",
             ),
         ] = None,
         relation_type: Annotated[

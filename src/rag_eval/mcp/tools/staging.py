@@ -39,6 +39,7 @@ from rag_eval.ingestion.staging.models import (
     StgRemoveEdgeResult,
     StgReopenResult,
     StgReparentResult,
+    StgUnfinalizeResult,
     get_staging_poll_limit,
 )
 from rag_eval.ingestion.staging.session import StagingDocumentSession
@@ -49,7 +50,7 @@ from rag_eval.schemas import (
 
 
 class CorpusStagingTools:
-    """Encapsulates local staging session operations on disk (.cache/stg) with transparent database hydration."""
+    """Encapsulates local staging session operations on disk with transparent database hydration."""
 
     def __init__(
         self,
@@ -291,7 +292,7 @@ class CorpusStagingTools:
             total_chunks=len(session.chunks),
             total_edges=len(session.edges),
             committed_at=now.isoformat(),
-            message=f"Phiên làm việc cho tài liệu '{doc_slug}' đã được chuyển sang trạng thái AGENT_COMMITTED. Dữ liệu được ghi vào WAL và sẵn sàng cho rà soát, lưu trữ.",
+            message=f"Phiên làm việc cho tài liệu '{doc_slug}' đã được chuyển sang trạng thái AGENT_COMMITTED. Dữ liệu đã được ghi nhận và sẵn sàng cho rà soát, lưu trữ.",
         )
 
     async def stg_poll_pending_chunks(
@@ -337,6 +338,31 @@ class CorpusStagingTools:
             doc_slug=doc_slug,
             status="SUCCESS",
             finalized_count=finalized_count,
+            pending_remaining=pending_remaining,
+            paths=paths,
+            results=results,
+        )
+
+    async def stg_unfinalize_chunks(
+        self,
+        doc_slug: str,
+        paths: list[str],
+    ) -> StgUnfinalizeResult:
+        await self._ensure_session(doc_slug)
+        session, unfinalized_count, raw_results = self._staging.unfinalize_chunks(
+            doc_slug=doc_slug, paths=paths, actor="AGENT"
+        )
+        pending_remaining = sum(
+            1 for c in session.chunks if c.review_status == ChunkReviewStatus.PENDING
+        )
+        results = [
+            ChunkFinalizeStatus.model_validate(r)
+            for r in raw_results
+        ]
+        return StgUnfinalizeResult(
+            doc_slug=doc_slug,
+            status="SUCCESS",
+            unfinalized_count=unfinalized_count,
             pending_remaining=pending_remaining,
             paths=paths,
             results=results,

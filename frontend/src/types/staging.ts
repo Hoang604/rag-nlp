@@ -51,7 +51,6 @@ export interface StagingDocumentSession {
   promoted_at?: string | null;
   raw_text?: string | null;
   metadata: Record<string, unknown>;
-  doc_metadata?: Record<string, unknown>;
   chunks: StagingChunk[];
   edges: StagingEdge[];
   raw_ast_snapshot?: Record<string, unknown>[] | null;

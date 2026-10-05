@@ -10,7 +10,7 @@ from rag_eval.ingestion.loader import (
 
 
 class QueryEmbedder(Protocol):
-    """Encodes a search query into a dense vector for hybrid_search."""
+    """Encodes a search query into a dense vector for hybrid search."""
 
     async def embed_query(self, query: str) -> list[float] | None: ...
 

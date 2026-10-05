@@ -36,6 +36,7 @@ const AppContent: React.FC = () => {
     loadActiveSession,
     patchChunks,
     finalizeChunks,
+    unfinalizeChunks,
     addEdge,
     deleteEdge,
   } = useStagingSession();
@@ -85,11 +86,7 @@ const AppContent: React.FC = () => {
     const isCurrentlyReviewed = node.review_status === 'REVIEWED';
     try {
       if (isCurrentlyReviewed) {
-        const chunksToReopen =
-          session?.chunks
-            ?.filter((c) => targetPaths.includes(c.path))
-            ?.map((c) => ({ ...c, review_status: 'PENDING' as const })) || [];
-        const ok = await patchChunks(chunksToReopen, []);
+        const ok = await unfinalizeChunks(targetPaths);
         if (ok) {
           success(
             'Đã mở lại chunk',
@@ -191,11 +188,7 @@ const AppContent: React.FC = () => {
 
   const handleBatchReopen = async (paths: string[]) => {
     try {
-      const chunksToReopen =
-        session?.chunks
-          ?.filter((c) => paths.includes(c.path))
-          ?.map((c) => ({ ...c, review_status: 'PENDING' as const })) || [];
-      const ok = await patchChunks(chunksToReopen, []);
+      const ok = await unfinalizeChunks(paths);
       if (ok) {
         success('Đã mở lại', `Đã chuyển ${paths.length} mục sang Chờ rà soát.`);
       }

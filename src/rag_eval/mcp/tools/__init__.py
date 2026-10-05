@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-import asyncpg
-
 from rag_eval.ingestion.staging import (
     StagingChunk,
     StagingChunkDelta,
@@ -12,7 +10,6 @@ from rag_eval.ingestion.staging import (
     StagingEdgeInput,
     StgReparentResult,
 )
-from rag_eval.ingestion.staging.manager import StagingManager
 from rag_eval.ingestion.staging.models import (
     ChunkFinalizeStatus,
     ChunkProgressStats,
@@ -32,15 +29,16 @@ from rag_eval.ingestion.staging.models import (
     StgPreviewResult,
     StgRemoveEdgeResult,
     StgReopenResult,
-)
-from rag_eval.mcp.tools.embedder import (
-    QueryEmbedder,
-    SentenceTransformerQueryEmbedder,
+    StgUnfinalizeResult,
 )
 from rag_eval.mcp.tools.sensors import (
     HIERARCHICAL_DIRECTION_DESCRIPTION,
     HIERARCHICAL_DIRECTION_DOCS,
     RERANK_POOL,
+    AgentBacklogItem,
+    AgentGraphTraversalStep,
+    AgentHierarchyNode,
+    AgentSearchHit,
     ChunkBacklogResult,
     CorpusRuntimeSensors,
     GraphDirection,
@@ -50,13 +48,12 @@ from rag_eval.mcp.tools.sensors import (
     VerbatimGrepResult,
 )
 from rag_eval.mcp.tools.staging import CorpusStagingTools
-from rag_eval.retrieval.reranker import CorpusReranker
-from rag_eval.schemas import (
-    GraphTraversalStepDTO,
-    HierarchicalDirection,
-    HierarchyNodeDTO,
-    SearchHitDTO,
+from rag_eval.retrieval.embedder import (
+    QueryEmbedder,
+    SentenceTransformerQueryEmbedder,
 )
+from rag_eval.retrieval.reranker import CorpusReranker
+from rag_eval.schemas import HierarchicalDirection
 
 
 class CorpusMCPTools:
@@ -69,27 +66,6 @@ class CorpusMCPTools:
     ) -> None:
         self._sensors = sensors
         self._staging = staging
-
-    @classmethod
-    def build(
-        cls,
-        pool: asyncpg.Pool | None = None,
-        staging_manager: StagingManager | None = None,
-        embedding_engine: QueryEmbedder | None = None,
-        reranker: CorpusReranker | None = None,
-        rerank_by_default: bool = False,
-    ) -> CorpusMCPTools:
-        manager = staging_manager or StagingManager()
-        return cls(
-            sensors=CorpusRuntimeSensors(
-                pool=pool,
-                embedding_engine=embedding_engine,
-                staging_manager=manager,
-                reranker=reranker,
-                rerank_by_default=rerank_by_default,
-            ),
-            staging=CorpusStagingTools(staging_manager=manager, pool=pool),
-        )
 
     @property
     def sensors(self) -> CorpusRuntimeSensors:
@@ -138,12 +114,11 @@ class CorpusMCPTools:
 
     async def hierarchical_navigate(
         self,
-        path: str | None = None,
-        chunk_id: str | None = None,
+        path: str,
         direction: HierarchicalDirection = HierarchicalDirection.CHILDREN,
     ) -> HierarchicalNavigateResult:
         return await self._sensors.hierarchical_navigate(
-            path=path, chunk_id=chunk_id, direction=direction
+            path=path, direction=direction
         )
 
     async def graph_traverse(
@@ -272,6 +247,16 @@ class CorpusMCPTools:
             paths=paths,
         )
 
+    async def stg_unfinalize_chunks(
+        self,
+        doc_slug: str,
+        paths: list[str],
+    ) -> StgUnfinalizeResult:
+        return await self._staging.stg_unfinalize_chunks(
+            doc_slug=doc_slug,
+            paths=paths,
+        )
+
     async def stg_commit(self, doc_slug: str) -> StgCommitResult:
         return await self._staging.stg_commit(doc_slug=doc_slug)
 
@@ -313,6 +298,10 @@ __all__ = [
     "HIERARCHICAL_DIRECTION_DESCRIPTION",
     "HIERARCHICAL_DIRECTION_DOCS",
     "RERANK_POOL",
+    "AgentBacklogItem",
+    "AgentGraphTraversalStep",
+    "AgentHierarchyNode",
+    "AgentSearchHit",
     "ChunkBacklogResult",
     "ChunkFinalizeStatus",
     "ChunkProgressStats",
@@ -321,15 +310,12 @@ __all__ = [
     "CorpusRuntimeSensors",
     "CorpusStagingTools",
     "GraphDirection",
-    "GraphTraversalStepDTO",
     "GraphTraverseResult",
     "HierarchicalDirection",
     "HierarchicalNavigateResult",
-    "HierarchyNodeDTO",
     "HybridSearchResult",
     "QueryEmbedder",
     "RelationTypeFilter",
-    "SearchHitDTO",
     "SentenceTransformerQueryEmbedder",
     "StagingChunk",
     "StagingChunkDelta",
@@ -351,5 +337,6 @@ __all__ = [
     "StgRemoveEdgeResult",
     "StgReopenResult",
     "StgReparentResult",
+    "StgUnfinalizeResult",
     "VerbatimGrepResult",
 ]
