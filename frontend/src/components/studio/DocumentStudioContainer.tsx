@@ -5,10 +5,8 @@ import {
   PanelRightClose,
   PanelRightOpen,
 } from 'lucide-react';
-import { CreateEdgePayload } from '../../types/api';
 import { StagingDocumentSession } from '../../types/staging';
 import { DocumentTreeNode, DocumentTreeResponse } from '../../types/tree';
-import { EdgeEditorModal } from '../graph/EdgeEditorModal';
 import { DocumentReaderEditor } from './DocumentReaderEditor';
 import { NodeInspectorPanel } from './NodeInspectorPanel';
 import { TreeOutlineExplorer } from './TreeOutlineExplorer';
@@ -18,15 +16,7 @@ interface DocumentStudioContainerProps {
   treeData: DocumentTreeResponse | null;
   selectedPathProp?: string;
   onSelectPathProp?: (path: string) => void;
-  onEditChunk: (node: DocumentTreeNode) => void;
-  onDeleteChunk: (path: string) => void;
-  onAddChildChunk: (parentPath: string) => void;
-  onAddEdge: (edge: CreateEdgePayload) => Promise<boolean>;
-  onToggleFinalizeChunk?: (node: DocumentTreeNode) => Promise<boolean | void>;
   onRefreshSession?: () => void;
-  onBatchFinalizeChunks?: (paths: string[]) => Promise<void | boolean>;
-  onBatchReopenChunks?: (paths: string[]) => Promise<void | boolean>;
-  onBatchDeleteChunks?: (paths: string[]) => Promise<void | boolean>;
 }
 
 export const DocumentStudioContainer: React.FC<DocumentStudioContainerProps> = ({
@@ -34,15 +24,6 @@ export const DocumentStudioContainer: React.FC<DocumentStudioContainerProps> = (
   treeData,
   selectedPathProp,
   onSelectPathProp,
-  onEditChunk,
-  onDeleteChunk,
-  onAddChildChunk,
-  onAddEdge,
-  onToggleFinalizeChunk,
-  onRefreshSession,
-  onBatchFinalizeChunks,
-  onBatchReopenChunks,
-  onBatchDeleteChunks,
 }) => {
   const [selectedPath, setSelectedPath] = useState<string>(() => {
     return selectedPathProp || treeData?.root?.path || '';
@@ -75,9 +56,6 @@ export const DocumentStudioContainer: React.FC<DocumentStudioContainerProps> = (
     if (treeData?.root) traverse(treeData.root, 0);
     return set;
   });
-
-  const [isEdgeModalOpen, setIsEdgeModalOpen] = useState(false);
-  const [edgeModalSourcePath, setEdgeModalSourcePath] = useState<string | undefined>(undefined);
 
   const handleToggleCollapse = (path: string) => {
     setCollapsedPaths((prev) => {
@@ -142,9 +120,6 @@ export const DocumentStudioContainer: React.FC<DocumentStudioContainerProps> = (
             onToggleCollapse={handleToggleCollapse}
             onExpandAll={handleExpandAll}
             onCollapseAll={handleCollapseAll}
-            onBatchFinalize={onBatchFinalizeChunks}
-            onBatchReopen={onBatchReopenChunks}
-            onBatchDelete={onBatchDeleteChunks}
           />
         )}
       </div>
@@ -210,9 +185,6 @@ export const DocumentStudioContainer: React.FC<DocumentStudioContainerProps> = (
             rootNode={treeData?.root || null}
             selectedPath={selectedPath}
             onSelectPath={handleSelectPath}
-            onEditNode={onEditChunk}
-            onDeleteNode={onDeleteChunk}
-            onAddChildNode={onAddChildChunk}
             edges={session.edges}
           />
         </div>
@@ -228,29 +200,11 @@ export const DocumentStudioContainer: React.FC<DocumentStudioContainerProps> = (
           <NodeInspectorPanel
             selectedNode={selectedNode}
             onSelectPath={handleSelectPath}
-            onEditNode={onEditChunk}
-            onDeleteNode={onDeleteChunk}
-            onAddChildNode={onAddChildChunk}
-            onOpenAddEdge={(src) => {
-              setEdgeModalSourcePath(src);
-              setIsEdgeModalOpen(true);
-            }}
-            onToggleFinalize={onToggleFinalizeChunk}
             edges={session.edges}
             docSlug={session.doc_slug}
-            onRefreshSession={onRefreshSession}
-            candidateParentPaths={session.chunks.map((c) => c.path)}
           />
         )}
       </div>
-
-      {/* Add Edge Modal */}
-      <EdgeEditorModal
-        isOpen={isEdgeModalOpen}
-        onClose={() => setIsEdgeModalOpen(false)}
-        onAddEdge={onAddEdge}
-        initialSourcePath={edgeModalSourcePath}
-      />
     </div>
   );
 };

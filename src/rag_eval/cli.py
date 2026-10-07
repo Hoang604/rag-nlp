@@ -82,54 +82,43 @@ async def _rebuild_indexes() -> None:
 @app.command(name="promote")
 def promote(
     embed: Annotated[bool, typer.Option("--embed/--no-embed")] = True,
-    force: Annotated[
-        bool,
-        typer.Option(
-            "--force",
-            "-f",
-            help="Automatically finalize unreviewed chunks and transition DRAFT/AMENDMENT sessions to APPROVED before promotion.",
-        ),
-    ] = False,
 ) -> None:
-    """Promote every staged document into PostgreSQL, bypassing human review."""
+    """Promote agent-committed staging sessions into PostgreSQL."""
     import asyncio
 
     from rag_eval.ingestion.staging import StagingManager
-    from rag_eval.ingestion.staging.models import ChunkReviewStatus, StagingStatus
+    from rag_eval.ingestion.staging.models import StagingStatus
     from rag_eval.web.services import HumanPromotionEngine
 
     async def run() -> None:
         manager = StagingManager()
         engine = HumanPromotionEngine(staging_manager=manager)
-        eligible_sessions = [
+        all_unpromoted = [
             s for s in manager.list_sessions()
             if s.status != StagingStatus.PROMOTED
         ]
+        eligible_sessions = [
+            s for s in all_unpromoted
+            if s.status in (StagingStatus.AGENT_COMMITTED, StagingStatus.APPROVED)
+        ]
+        uncommitted = [
+            s for s in all_unpromoted
+            if s.status not in (StagingStatus.AGENT_COMMITTED, StagingStatus.APPROVED)
+        ]
+        if uncommitted:
+            for s in uncommitted:
+                console.print(
+                    f"[yellow]Skipping session '{s.doc_slug}': status '{s.status.value}' is not committed by agent.[/yellow]"
+                )
+
         if not eligible_sessions:
-            console.print("[yellow]No unpromoted staged documents found in .cache/stg.[/yellow]")
+            console.print("[yellow]No agent-committed staged documents found in .cache/stg ready for promotion.[/yellow]")
             return
 
         chunks = edges = 0
         promoted_slugs: list[str] = []
         for s_summary in eligible_sessions:
             slug = s_summary.doc_slug
-            if force:
-                session = manager.load_session(slug)
-                unreviewed = [c.path for c in session.chunks if c.review_status != ChunkReviewStatus.REVIEWED]
-                if unreviewed:
-                    session, _, _ = manager.finalize_chunks(
-                        doc_slug=slug,
-                        paths=unreviewed,
-                        actor="CLI:force_promote",
-                    )
-                if session.status in (StagingStatus.DRAFT, StagingStatus.AMENDMENT):
-                    manager.update_session_status(
-                        doc_slug=slug,
-                        status=StagingStatus.APPROVED,
-                        actor="CLI:force_promote",
-                        description="Force transitioned to APPROVED for automated promotion.",
-                    )
-
             result = await engine.promote_session(
                 doc_slug=slug, compute_embeddings=embed
             )

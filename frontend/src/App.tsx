@@ -3,9 +3,6 @@ import { Header } from './components/layout/Header';
 import { NavigationTabs, TabId } from './components/layout/NavigationTabs';
 import { DocumentStudioContainer } from './components/studio/DocumentStudioContainer';
 import { AuditHistoryDiff } from './components/diff/AuditHistoryDiff';
-import { SurgicalEditorDrawer } from './components/editor/SurgicalEditorDrawer';
-import { AddChunkModal } from './components/editor/AddChunkModal';
-import { DeleteConfirmModal } from './components/editor/DeleteConfirmModal';
 import { VisualGraphInspector } from './components/graph/VisualGraphInspector';
 import { DualViewContainer } from './components/dualview/DualViewContainer';
 import { PreFlightChecklist } from './components/checklist/PreFlightChecklist';
@@ -17,8 +14,6 @@ import { GlobalGrepModal } from './components/search/GlobalGrepModal';
 import { ToastProvider, useToast } from './components/toast/ToastContext';
 import { useStagingSession } from './hooks/useStagingSession';
 import { usePreFlightCheck } from './hooks/usePreFlightCheck';
-import { DocumentTreeNode } from './types/tree';
-import { StagingChunk } from './types/staging';
 import { api } from './services/api';
 
 const AppContent: React.FC = () => {
@@ -34,9 +29,6 @@ const AppContent: React.FC = () => {
     treeData,
     refreshSessions,
     loadActiveSession,
-    patchChunks,
-    finalizeChunks,
-    unfinalizeChunks,
     addEdge,
     deleteEdge,
   } = useStagingSession();
@@ -48,13 +40,8 @@ const AppContent: React.FC = () => {
     runValidation,
   } = usePreFlightCheck(activeDocSlug);
 
-  // Modal / Drawer state
+  // Modal / Selection state
   const [selectedStudioPath, setSelectedStudioPath] = useState<string>('');
-  const [selectedNode, setSelectedNode] = useState<DocumentTreeNode | null>(null);
-  const [isEditorOpen, setIsEditorOpen] = useState(false);
-  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
-  const [addParentPath, setAddParentPath] = useState('');
-  const [deleteTargetChunk, setDeleteTargetChunk] = useState<string | null>(null);
   const [isPromotionOpen, setIsPromotionOpen] = useState(false);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isBacklogOpen, setIsBacklogOpen] = useState(false);
@@ -71,79 +58,6 @@ const AppContent: React.FC = () => {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
-
-  // Chunk handlers
-  const handleToggleFinalizeChunk = async (node: DocumentTreeNode) => {
-    // DEF-INGEST-002: Include both the section node itself and all its descendant nodes
-    const collectAllPaths = (n: DocumentTreeNode): string[] => {
-      const paths = [n.path];
-      if (n.children && n.children.length > 0) {
-        n.children.forEach((c) => paths.push(...collectAllPaths(c)));
-      }
-      return paths;
-    };
-    const targetPaths = collectAllPaths(node);
-    const isCurrentlyReviewed = node.review_status === 'REVIEWED';
-    try {
-      if (isCurrentlyReviewed) {
-        const ok = await unfinalizeChunks(targetPaths);
-        if (ok) {
-          success(
-            'Đã mở lại chunk',
-            `Đã chuyển ${targetPaths.length} mục sang Chờ rà soát.`
-          );
-        }
-      } else {
-        const ok = await finalizeChunks(targetPaths);
-        if (ok) {
-          success(
-            'Rà soát chunk thành công',
-            `Đã cập nhật trạng thái đã rà soát cho ${targetPaths.length} mục.`
-          );
-        }
-      }
-    } catch (err) {
-      error('Lỗi cập nhật trạng thái', err instanceof Error ? err.message : 'Lỗi hệ thống');
-    }
-  };
-
-  const handleEditChunk = (node: DocumentTreeNode) => {
-    setSelectedNode(node);
-    setIsEditorOpen(true);
-  };
-
-  const handleDeleteChunkConfirm = async () => {
-    if (!deleteTargetChunk) return;
-    try {
-      await patchChunks([], [deleteTargetChunk]);
-      success('Đã xóa chunk', `Đã loại bỏ ${deleteTargetChunk} khỏi Staging.`);
-    } catch (err) {
-      error('Lỗi xóa chunk', err instanceof Error ? err.message : 'Lỗi hệ thống');
-    } finally {
-      setDeleteTargetChunk(null);
-    }
-  };
-
-  const handleAddChildChunk = (parentPath: string) => {
-    setAddParentPath(parentPath);
-    setIsAddModalOpen(true);
-  };
-
-  const handleSaveChunk = async (chunk: StagingChunk) => {
-    const ok = await patchChunks([chunk], []);
-    if (ok) {
-      success('Lưu thành công', `Đã cập nhật chunk ${chunk.path}.`);
-    }
-    return ok;
-  };
-
-  const handleAddChunkDirect = async (chunk: StagingChunk) => {
-    const ok = await patchChunks([chunk], []);
-    if (ok) {
-      success('Thêm thành công', `Đã tạo chunk mới ${chunk.path}.`);
-    }
-    return ok;
-  };
 
   const handleReopenSession = async () => {
     if (!activeDocSlug) return;
@@ -172,39 +86,6 @@ const AppContent: React.FC = () => {
       setActiveDocSlug('');
     } catch (err) {
       error('Lỗi khi xóa phiên', err instanceof Error ? err.message : String(err));
-    }
-  };
-
-  const handleBatchFinalize = async (paths: string[]) => {
-    try {
-      const ok = await finalizeChunks(paths);
-      if (ok) {
-        success('Rà soát hoàn tất', `Đã cập nhật đã rà soát cho ${paths.length} mục.`);
-      }
-    } catch (err) {
-      error('Lỗi rà soát hàng loạt', err instanceof Error ? err.message : String(err));
-    }
-  };
-
-  const handleBatchReopen = async (paths: string[]) => {
-    try {
-      const ok = await unfinalizeChunks(paths);
-      if (ok) {
-        success('Đã mở lại', `Đã chuyển ${paths.length} mục sang Chờ rà soát.`);
-      }
-    } catch (err) {
-      error('Lỗi mở lại', err instanceof Error ? err.message : String(err));
-    }
-  };
-
-  const handleBatchDelete = async (paths: string[]) => {
-    const confirmed = window.confirm(`Bạn có chắc chắn muốn xóa ${paths.length} mục đã chọn khỏi Staging?`);
-    if (!confirmed) return;
-    try {
-      await patchChunks([], paths);
-      success('Đã xóa', `Đã loại bỏ ${paths.length} mục khỏi Staging.`);
-    } catch (err) {
-      error('Lỗi xóa hàng loạt', err instanceof Error ? err.message : String(err));
     }
   };
 
@@ -245,7 +126,7 @@ const AppContent: React.FC = () => {
       {/* Main Subsystem Body */}
       <main className="relative flex-1 overflow-hidden">
         {activeTab === 'search' ? (
-          <DryRunSearchSimulator session={session} onEditChunk={handleEditChunk} />
+          <DryRunSearchSimulator session={session} />
         ) : !session ? (
           <div className="flex h-full items-center justify-center">
             <div className="text-center max-w-sm p-6">
@@ -269,26 +150,16 @@ const AppContent: React.FC = () => {
                 treeData={treeData}
                 selectedPathProp={selectedStudioPath}
                 onSelectPathProp={setSelectedStudioPath}
-                onEditChunk={handleEditChunk}
-                onDeleteChunk={(path) => setDeleteTargetChunk(path)}
-                onAddChildChunk={handleAddChildChunk}
-                onAddEdge={addEdge}
-                onToggleFinalizeChunk={handleToggleFinalizeChunk}
                 onRefreshSession={async () => {
                   await refreshSessions();
                   if (activeDocSlug) await loadActiveSession(activeDocSlug);
                 }}
-                onBatchFinalizeChunks={handleBatchFinalize}
-                onBatchReopenChunks={handleBatchReopen}
-                onBatchDeleteChunks={handleBatchDelete}
               />
             )}
 
             {activeTab === 'dualview' && (
               <DualViewContainer
                 session={session}
-                onEditChunk={handleEditChunk}
-                onToggleFinalizeChunk={handleToggleFinalizeChunk}
                 selectedPath={selectedStudioPath}
                 onSelectPath={setSelectedStudioPath}
               />
@@ -297,8 +168,6 @@ const AppContent: React.FC = () => {
             {activeTab === 'graph' && (
               <VisualGraphInspector
                 session={session}
-                onAddEdge={addEdge}
-                onDeleteEdge={deleteEdge}
                 onSelectNode={(path) => {
                   setSelectedStudioPath(path);
                   setActiveTab('studio');
@@ -333,28 +202,7 @@ const AppContent: React.FC = () => {
         )}
       </main>
 
-      {/* Modals and Drawers */}
-      <SurgicalEditorDrawer
-        isOpen={isEditorOpen}
-        onClose={() => setIsEditorOpen(false)}
-        selectedNode={selectedNode}
-        onSaveChunk={handleSaveChunk}
-      />
-
-      <AddChunkModal
-        isOpen={isAddModalOpen}
-        onClose={() => setIsAddModalOpen(false)}
-        onAdd={handleAddChunkDirect}
-        parentPath={addParentPath}
-      />
-
-      <DeleteConfirmModal
-        isOpen={deleteTargetChunk !== null}
-        onClose={() => setDeleteTargetChunk(null)}
-        onConfirm={handleDeleteChunkConfirm}
-        path={deleteTargetChunk || ''}
-      />
-
+      {/* Promotion Modal */}
       {session && (
         <PromotionModal
           isOpen={isPromotionOpen}

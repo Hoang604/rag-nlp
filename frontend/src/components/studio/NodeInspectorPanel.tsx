@@ -1,63 +1,36 @@
 import React, { useState } from 'react';
 import {
-  CheckCircle,
   Compass,
   Copy,
-  Edit3,
   FileCode,
   FileSpreadsheet,
   FileText,
-  FolderInput,
-  Plus,
   Share2,
   Sliders,
-  Trash2,
   X,
 } from 'lucide-react';
 import { useToast } from '../toast/ToastContext';
 import { StagingEdge } from '../../types/staging';
 import { DocumentTreeNode } from '../../types/tree';
-import { ReparentSubtreeResponse } from '../../types/api';
-import { api } from '../../services/api';
 import { getNodeTypeColor } from '../../utils/ltree';
 import { GraphTraversalModal } from '../graph/GraphTraversalModal';
-
 
 interface NodeInspectorPanelProps {
   selectedNode: DocumentTreeNode | null;
   onClose?: () => void;
-  onEditNode: (node: DocumentTreeNode) => void;
-  onDeleteNode: (path: string) => void;
-  onAddChildNode: (parentPath: string) => void;
-  onOpenAddEdge?: (sourcePath: string) => void;
-  onToggleFinalize?: (node: DocumentTreeNode) => void;
   onSelectPath?: (path: string) => void;
   edges: StagingEdge[];
   docSlug?: string;
-  onRefreshSession?: () => void;
-  candidateParentPaths?: string[];
 }
 
 export const NodeInspectorPanel: React.FC<NodeInspectorPanelProps> = ({
   selectedNode,
   onClose,
-  onEditNode,
-  onDeleteNode,
-  onAddChildNode,
-  onOpenAddEdge,
-  onToggleFinalize,
   onSelectPath,
   edges,
   docSlug,
-  onRefreshSession,
-  candidateParentPaths,
 }) => {
-  const { success, error } = useToast();
-  const [isReparentOpen, setIsReparentOpen] = useState(false);
-  const [newPathPrefix, setNewPathPrefix] = useState('');
-  const [reparentLoading, setReparentLoading] = useState(false);
-  const [dryRunResult, setDryRunResult] = useState<ReparentSubtreeResponse | null>(null);
-  const [reparentError, setReparentError] = useState<string | null>(null);
+  const { success } = useToast();
   const [isTraversalOpen, setIsTraversalOpen] = useState(false);
 
   if (!selectedNode) {
@@ -166,69 +139,6 @@ export const NodeInspectorPanel: React.FC<NodeInspectorPanelProps> = ({
           </div>
         </div>
 
-        {/* Action Buttons */}
-        <div className="flex items-center gap-2 flex-wrap">
-          {onToggleFinalize && (
-            <button
-              type="button"
-              onClick={() => onToggleFinalize(selectedNode)}
-              className={`flex items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold shadow transition ${
-                selectedNode.review_status === 'REVIEWED'
-                  ? 'bg-amber-900/60 text-amber-200 border border-amber-700/60 hover:bg-amber-800/80'
-                  : 'bg-emerald-700 text-white hover:bg-emerald-600'
-              }`}
-              title={
-                selectedNode.review_status === 'REVIEWED'
-                  ? 'Mở lại để rà soát tiếp'
-                  : 'Đánh dấu đã rà soát hoàn tất'
-              }
-            >
-              <CheckCircle className="h-3.5 w-3.5" />
-              <span>
-                {selectedNode.review_status === 'REVIEWED' ? 'Mở lại' : 'Đã rà soát'}
-              </span>
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={() => onEditNode(selectedNode)}
-            className="flex-1 flex items-center justify-center gap-1.5 rounded-lg bg-brand-600 px-3 py-2 text-xs font-semibold text-white shadow hover:bg-brand-500 transition"
-          >
-            <Edit3 className="h-3.5 w-3.5" />
-            <span>Sửa Chunk</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => onAddChildNode(selectedNode.path)}
-            className="flex items-center justify-center gap-1.5 rounded-lg bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-700 transition"
-          >
-            <Plus className="h-3.5 w-3.5" />
-            <span>Thêm Con</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setNewPathPrefix(selectedNode.path);
-              setDryRunResult(null);
-              setReparentError(null);
-              setIsReparentOpen(true);
-            }}
-            className="flex items-center justify-center gap-1.5 rounded-lg bg-indigo-950 px-3 py-2 text-xs font-semibold text-indigo-300 border border-indigo-700 hover:bg-indigo-900 transition"
-            title="Di chuyển toàn bộ nhánh cây AST (Subtree Reparenting)"
-          >
-            <FolderInput className="h-3.5 w-3.5" />
-            <span>Di Chuyển</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => onDeleteNode(selectedNode.path)}
-            className="rounded-lg bg-rose-950 p-2 text-rose-300 border border-rose-800 hover:bg-rose-900 transition"
-            title="Xóa mục này"
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-          </button>
-        </div>
-
         {/* Verbatim Text Section */}
         {selectedNode.verbatim_text && (
           <div>
@@ -335,27 +245,15 @@ export const NodeInspectorPanel: React.FC<NodeInspectorPanelProps> = ({
                 Quan Hệ Đồ Thị ({relatedEdges.length})
               </span>
             </div>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setIsTraversalOpen(true)}
-                className="text-[10px] font-semibold text-cyan-400 hover:underline flex items-center gap-0.5"
-                title="Duyệt đồ thị đa tầng BFS"
-              >
-                <Compass className="h-3 w-3" />
-                <span>Duyệt đa tầng</span>
-              </button>
-              {onOpenAddEdge && (
-                <button
-                  type="button"
-                  onClick={() => onOpenAddEdge(selectedNode.path)}
-                  className="text-[10px] font-semibold text-blue-400 hover:underline flex items-center gap-0.5"
-                >
-                  <Plus className="h-3 w-3" />
-                  <span>Nối quan hệ</span>
-                </button>
-              )}
-            </div>
+            <button
+              type="button"
+              onClick={() => setIsTraversalOpen(true)}
+              className="text-[10px] font-semibold text-cyan-400 hover:underline flex items-center gap-0.5"
+              title="Duyệt đồ thị đa tầng BFS"
+            >
+              <Compass className="h-3 w-3" />
+              <span>Duyệt đa tầng</span>
+            </button>
           </div>
 
           {relatedEdges.length === 0 ? (
@@ -414,165 +312,6 @@ export const NodeInspectorPanel: React.FC<NodeInspectorPanelProps> = ({
         )}
       </div>
 
-      {/* Reparent Subtree Modal */}
-      {isReparentOpen && docSlug && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-lg rounded-xl border border-slate-700 bg-slate-900 p-6 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <div className="flex items-center gap-2">
-                <FolderInput className="h-5 w-5 text-indigo-400" />
-                <h3 className="text-sm font-bold text-slate-100">
-                  Di Chuyển Phân Cấp Nhánh AST (Subtree Reparent)
-                </h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsReparentOpen(false)}
-                className="rounded p-1 text-slate-400 hover:bg-slate-800 hover:text-white"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            <div className="space-y-3 text-xs">
-              <div>
-                <label className="block text-slate-400 font-semibold mb-1">
-                  Đường dẫn nhánh hiện tại (Old Path Prefix):
-                </label>
-                <div className="font-mono rounded bg-slate-950 p-2.5 border border-slate-800 text-slate-200">
-                  {selectedNode.path}
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-slate-300 font-semibold mb-1">
-                  Chọn phân mục cha mới từ danh sách:
-                </label>
-                <select
-                  value={newPathPrefix}
-                  onChange={(e) => setNewPathPrefix(e.target.value)}
-                  className="w-full rounded border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-xs text-slate-100 focus:border-indigo-500 focus:outline-none mb-2"
-                >
-                  <option value="">-- Chọn mục cha hoặc nhập bên dưới --</option>
-                  {candidateParentPaths?.map((p) => (
-                    <option key={p} value={p}>
-                      {p}
-                    </option>
-                  ))}
-                </select>
-
-                <label className="block text-slate-400 text-[11px] font-semibold mb-1">
-                  Hoặc nhập đường dẫn nhánh đích tùy chỉnh (Custom Path):
-                </label>
-                <input
-                  type="text"
-                  value={newPathPrefix}
-                  onChange={(e) => setNewPathPrefix(e.target.value)}
-                  placeholder="Ví dụ: doc_slug.sec_2.sec_1"
-                  className="w-full rounded border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-xs text-slate-100 focus:border-indigo-500 focus:outline-none"
-                />
-              </div>
-
-              {reparentError && (
-                <div className="rounded bg-rose-950/80 p-2.5 text-rose-300 border border-rose-800 text-xs">
-                  {reparentError}
-                </div>
-              )}
-
-              {dryRunResult && (
-                <div className="rounded bg-indigo-950/60 p-3 border border-indigo-700 text-indigo-200 space-y-1 text-xs">
-                  <div className="font-bold flex items-center gap-1.5">
-                    <CheckCircle className="h-4 w-4 text-emerald-400" />
-                    <span>Kết quả chạy thử (Dry Run):</span>
-                  </div>
-                  <p>
-                    Số chunk chịu ảnh hưởng:{' '}
-                    <span className="font-bold font-mono text-white">
-                      {dryRunResult.affected_chunks_count}
-                    </span>
-                  </p>
-                  <p>
-                    Số quan hệ cạnh chịu ảnh hưởng:{' '}
-                    <span className="font-bold font-mono text-white">
-                      {dryRunResult.affected_edges_count}
-                    </span>
-                  </p>
-                  <p className="text-[11px] text-indigo-300">
-                    Đường dẫn mới:{' '}
-                    <span className="font-mono text-white">
-                      {dryRunResult.new_path_prefix}
-                    </span>
-                  </p>
-                </div>
-              )}
-            </div>
-
-            <div className="flex items-center justify-end gap-2 border-t border-slate-800 pt-3">
-              <button
-                type="button"
-                onClick={() => setIsReparentOpen(false)}
-                className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-700"
-              >
-                Hủy
-              </button>
-              <button
-                type="button"
-                disabled={reparentLoading || !newPathPrefix || newPathPrefix === selectedNode.path}
-                onClick={async () => {
-                  setReparentLoading(true);
-                  setReparentError(null);
-                  try {
-                    const res = await api.reparentSubtree(docSlug, {
-                      old_path_prefix: selectedNode.path,
-                      new_path_prefix: newPathPrefix,
-                      dry_run: true,
-                    });
-                    setDryRunResult(res);
-                  } catch (err) {
-                    setReparentError(err instanceof Error ? err.message : String(err));
-                  } finally {
-                    setReparentLoading(false);
-                  }
-                }}
-                className="rounded-lg border border-indigo-700 bg-indigo-950 px-3 py-1.5 text-xs font-semibold text-indigo-300 hover:bg-indigo-900 disabled:opacity-50"
-              >
-                {reparentLoading ? 'Đang kiểm tra...' : 'Chạy thử (Dry Run)'}
-              </button>
-              <button
-                type="button"
-                disabled={reparentLoading || !newPathPrefix || newPathPrefix === selectedNode.path}
-                onClick={async () => {
-                  setReparentLoading(true);
-                  setReparentError(null);
-                  try {
-                    await api.reparentSubtree(docSlug, {
-                      old_path_prefix: selectedNode.path,
-                      new_path_prefix: newPathPrefix,
-                      dry_run: false,
-                    });
-                    success(
-                      'Di chuyển nhánh thành công',
-                      `Đã chuyển ${selectedNode.path} sang ${newPathPrefix}`
-                    );
-                    setIsReparentOpen(false);
-                    onRefreshSession?.();
-                  } catch (err) {
-                    const msg = err instanceof Error ? err.message : String(err);
-                    setReparentError(msg);
-                    error('Di chuyển thất bại', msg);
-                  } finally {
-                    setReparentLoading(false);
-                  }
-                }}
-                className="rounded-lg bg-indigo-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-indigo-500 disabled:opacity-50 shadow"
-              >
-                Xác Nhận Di Chuyển
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Multi-Hop Traversal Modal */}
       {docSlug && selectedNode && (
         <GraphTraversalModal
@@ -586,4 +325,3 @@ export const NodeInspectorPanel: React.FC<NodeInspectorPanelProps> = ({
     </div>
   );
 };
-

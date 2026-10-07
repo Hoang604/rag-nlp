@@ -1,7 +1,6 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   AlertTriangle,
-  Edit3,
   Filter,
   FileSearch,
   Loader2,
@@ -11,11 +10,9 @@ import {
 import { api } from '../../services/api';
 import { CorpusDocument, SearchHit, SearchResponse } from '../../types/api';
 import { StagingDocumentSession } from '../../types/staging';
-import { DocumentTreeNode } from '../../types/tree';
 
 interface DryRunSearchSimulatorProps {
   session: StagingDocumentSession | null;
-  onEditChunk: (node: DocumentTreeNode) => void;
 }
 
 const EXAMPLE_QUERIES = [
@@ -26,8 +23,7 @@ const EXAMPLE_QUERIES = [
 ];
 
 export const DryRunSearchSimulator: React.FC<DryRunSearchSimulatorProps> = ({
-  session,
-  onEditChunk,
+  session: _session,
 }) => {
   const [query, setQuery] = useState('');
   const [matchLimit, setMatchLimit] = useState(5);
@@ -47,11 +43,6 @@ export const DryRunSearchSimulator: React.FC<DryRunSearchSimulatorProps> = ({
       .then(setDocs)
       .catch(() => setDocs([]));
   }, []);
-
-  const sessionPaths = useMemo(
-    () => new Set(session?.chunks.map((chunk) => chunk.path) ?? []),
-    [session]
-  );
 
   const runSearch = useCallback(
     async (text: string) => {
@@ -334,7 +325,6 @@ export const DryRunSearchSimulator: React.FC<DryRunSearchSimulatorProps> = ({
               </div>
             )}
             {hits.map((hit) => {
-              const editable = sessionPaths.has(hit.path);
               return (
                 <div
                   key={hit.path}
@@ -372,34 +362,6 @@ export const DryRunSearchSimulator: React.FC<DryRunSearchSimulatorProps> = ({
                         </span>
                       )}
                     </div>
-
-                    {editable && (
-                      <button
-                        type="button"
-                        title="Chỉnh sửa mục này"
-                        onClick={() => {
-                          const existing = session?.chunks.find((c) => c.path === hit.path);
-                          if (!existing) return;
-                          onEditChunk({
-                            path: existing.path,
-                            label: existing.path.split('.').slice(-2).join('.'),
-                            node_type: (existing.metadata?.node_type as string) || 'PARAGRAPH',
-                            verbatim_text: existing.verbatim_text,
-                            contextualized_text: existing.contextualized_text,
-                            start_line: existing.start_line || 1,
-                            end_line: existing.end_line || 1,
-                            review_status: existing.review_status,
-                            finalization_state: existing.finalization_state,
-                            metadata: existing.metadata || {},
-                            children: [],
-                          });
-                        }}
-                        className="flex items-center gap-1 rounded px-2 py-1 text-xs text-slate-400 transition hover:bg-slate-800 hover:text-white"
-                      >
-                        <Edit3 className="h-3.5 w-3.5" />
-                        <span>Sửa</span>
-                      </button>
-                    )}
                   </div>
 
                   <p className="mb-2 font-mono text-[10px] text-slate-500">

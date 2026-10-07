@@ -1,10 +1,7 @@
 import React, { memo, useEffect, useRef } from 'react';
 import {
-  Edit3,
   FileText,
-  Plus,
   Share2,
-  Trash2,
 } from 'lucide-react';
 import { StagingEdge } from '../../types/staging';
 import { DocumentTreeNode } from '../../types/tree';
@@ -15,9 +12,6 @@ interface DocumentReaderEditorProps {
   rootNode: DocumentTreeNode | null;
   selectedPath: string;
   onSelectPath: (path: string) => void;
-  onEditNode: (node: DocumentTreeNode) => void;
-  onDeleteNode: (path: string) => void;
-  onAddChildNode: (parentPath: string) => void;
   edges: StagingEdge[];
 }
 
@@ -25,9 +19,6 @@ interface RenderSectionProps {
   node: DocumentTreeNode;
   selectedPath: string;
   onSelectPath: (path: string) => void;
-  onEditNode: (node: DocumentTreeNode) => void;
-  onDeleteNode: (path: string) => void;
-  onAddChildNode: (parentPath: string) => void;
   edges: StagingEdge[];
   nodeRefs: React.MutableRefObject<Map<string, HTMLDivElement>>;
   depth: number;
@@ -38,9 +29,6 @@ const RenderSection: React.FC<RenderSectionProps> = memo(
     node,
     selectedPath,
     onSelectPath,
-    onEditNode,
-    onDeleteNode,
-    onAddChildNode,
     edges,
     nodeRefs,
     depth,
@@ -102,45 +90,7 @@ const RenderSection: React.FC<RenderSectionProps> = memo(
               {node.path}
             </span>
           </div>
-
-          {/* Quick Action Toolbar */}
-          <div className="flex items-center gap-1 opacity-70 group-hover:opacity-100 transition-opacity">
-            <button
-              type="button"
-              title="Thêm mục con"
-              onClick={(e) => {
-                e.stopPropagation();
-                onAddChildNode(node.path);
-              }}
-              className="rounded p-1 text-slate-400 hover:bg-slate-800 hover:text-brand-300 transition"
-            >
-              <Plus className="h-3.5 w-3.5" />
-            </button>
-            <button
-              type="button"
-              title="Sửa chunk"
-              onClick={(e) => {
-                e.stopPropagation();
-                onEditNode(node);
-              }}
-              className="rounded p-1 text-slate-400 hover:bg-slate-800 hover:text-brand-300 transition"
-            >
-              <Edit3 className="h-3.5 w-3.5" />
-            </button>
-            <button
-              type="button"
-              title="Xóa chunk"
-              onClick={(e) => {
-                e.stopPropagation();
-                onDeleteNode(node.path);
-              }}
-              className="rounded p-1 text-slate-400 hover:bg-rose-950 hover:text-rose-400 transition"
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-            </button>
-          </div>
         </div>
-
 
         {/* Verbatim text */}
         {node.verbatim_text && (
@@ -200,9 +150,6 @@ const RenderSection: React.FC<RenderSectionProps> = memo(
                   node={child}
                   selectedPath={selectedPath}
                   onSelectPath={onSelectPath}
-                  onEditNode={onEditNode}
-                  onDeleteNode={onDeleteNode}
-                  onAddChildNode={onAddChildNode}
                   edges={edges}
                   nodeRefs={nodeRefs}
                   depth={depth + 1}
@@ -221,9 +168,6 @@ export const DocumentReaderEditor: React.FC<DocumentReaderEditorProps> = ({
   rootNode,
   selectedPath,
   onSelectPath,
-  onEditNode,
-  onDeleteNode,
-  onAddChildNode,
   edges,
 }) => {
   const nodeRefs = useRef<Map<string, HTMLDivElement>>(new Map());
@@ -253,9 +197,6 @@ export const DocumentReaderEditor: React.FC<DocumentReaderEditorProps> = ({
           node={rootNode}
           selectedPath={selectedPath}
           onSelectPath={onSelectPath}
-          onEditNode={onEditNode}
-          onDeleteNode={onDeleteNode}
-          onAddChildNode={onAddChildNode}
           edges={edges}
           nodeRefs={nodeRefs}
           depth={0}

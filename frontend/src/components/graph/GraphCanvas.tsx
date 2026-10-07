@@ -3,7 +3,6 @@ import {
   Info,
   Maximize2,
   Minimize2,
-  Trash2,
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
@@ -11,7 +10,6 @@ import { StagingChunk, StagingDocumentSession, StagingEdge } from '../../types/s
 
 interface GraphCanvasProps {
   session: StagingDocumentSession;
-  onDeleteEdge: (edge: StagingEdge) => Promise<boolean>;
   onSelectNode?: (path: string) => void;
 }
 
@@ -31,7 +29,6 @@ interface GraphNodePos {
 
 export const GraphCanvas: React.FC<GraphCanvasProps> = ({
   session,
-  onDeleteEdge,
   onSelectNode,
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -608,7 +605,7 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
             </div>
           </div>
 
-          <div className="mt-4 flex items-center justify-between gap-2 pt-3 border-t border-slate-800">
+          <div className="mt-4 flex items-center justify-start gap-2 pt-3 border-t border-slate-800">
             <div className="flex items-center gap-1.5">
               <button
                 type="button"
@@ -631,18 +628,6 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
                 </button>
               )}
             </div>
-
-            <button
-              type="button"
-              onClick={async () => {
-                await onDeleteEdge(selectedEdge);
-                setSelectedEdge(null);
-              }}
-              className="flex items-center gap-1.5 rounded-lg bg-rose-950 px-3 py-1 text-xs font-semibold text-rose-300 border border-rose-800 hover:bg-rose-900 transition"
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-              <span>Xóa Cạnh Này</span>
-            </button>
           </div>
         </div>
       )}

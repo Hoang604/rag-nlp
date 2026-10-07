@@ -1,16 +1,14 @@
 import React from 'react';
-import { ArrowRight, Trash2 } from 'lucide-react';
+import { ArrowRight } from 'lucide-react';
 import { StagingEdge } from '../../types/staging';
 import { getRelationColor } from '../../utils/formatting';
 
 interface EdgeCardListProps {
   edges: StagingEdge[];
-  onDeleteEdge: (edge: StagingEdge) => void;
 }
 
 export const EdgeCardList: React.FC<EdgeCardListProps> = ({
   edges,
-  onDeleteEdge,
 }) => {
   if (!edges || edges.length === 0) {
     return (
@@ -51,14 +49,6 @@ export const EdgeCardList: React.FC<EdgeCardListProps> = ({
                 {edge.target_path}
               </div>
             </div>
-
-            <button
-              onClick={() => onDeleteEdge(edge)}
-              title="Xóa cạnh quan hệ này"
-              className="rounded p-1.5 text-slate-400 hover:bg-rose-950 hover:text-rose-400 transition"
-            >
-              <Trash2 className="h-4 w-4" />
-            </button>
           </div>
         );
       })}

@@ -1,23 +1,18 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { CheckCircle, Columns, Edit3, FileText, Filter, Search, Sparkles } from 'lucide-react';
+import { Columns, FileText, Filter, Search, Sparkles } from 'lucide-react';
 import { StagingDocumentSession } from '../../types/staging';
-import { DocumentTreeNode } from '../../types/tree';
 import { SourceTextViewer } from './SourceTextViewer';
 import { naturalPathCompare } from '../../utils/sorting';
 import { api } from '../../services/api';
 
 interface DualViewContainerProps {
   session: StagingDocumentSession;
-  onEditChunk: (node: DocumentTreeNode) => void;
-  onToggleFinalizeChunk?: (node: DocumentTreeNode) => Promise<boolean | void>;
   selectedPath?: string;
   onSelectPath?: (path: string) => void;
 }
 
 export const DualViewContainer: React.FC<DualViewContainerProps> = ({
   session,
-  onEditChunk,
-  onToggleFinalizeChunk,
   selectedPath,
   onSelectPath,
 }) => {
@@ -303,71 +298,6 @@ export const DualViewContainer: React.FC<DualViewContainerProps> = ({
                             : `Dòng ${chunk.start_line} - ${chunk.end_line}`}
                         </span>
                       )}
-                    </div>
-
-                    <div className="flex items-center gap-1.5">
-                      {onToggleFinalizeChunk && (
-                        <button
-                          type="button"
-                          title={
-                            chunk.review_status === 'REVIEWED'
-                              ? 'Mở lại để rà soát tiếp'
-                              : 'Đánh dấu đã rà soát hoàn tất'
-                          }
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            const chunkNodeType =
-                              (chunk.metadata?.node_type as string) ||
-                              (chunk as { node_type?: string }).node_type ||
-                              (chunk.metadata?.is_table ? 'TABLE' : 'PARAGRAPH');
-                            void onToggleFinalizeChunk({
-                              path: chunk.path,
-                              label: chunk.path,
-                              node_type: chunkNodeType,
-                              verbatim_text: chunk.verbatim_text,
-                              contextualized_text: chunk.contextualized_text,
-                              start_line: chunk.start_line || 1,
-                              end_line: chunk.end_line || 1,
-                              review_status: chunk.review_status,
-                              metadata: chunk.metadata || {},
-                              children: [],
-                            });
-                          }}
-                          className={`rounded p-1 transition ${
-                            chunk.review_status === 'REVIEWED'
-                              ? 'text-emerald-400 hover:bg-emerald-950 hover:text-emerald-300'
-                              : 'text-slate-400 hover:bg-slate-800 hover:text-emerald-400'
-                          }`}
-                        >
-                          <CheckCircle className="h-4 w-4" />
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        title="Chỉnh sửa chunk"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          const chunkNodeType =
-                            (chunk.metadata?.node_type as string) ||
-                            (chunk as { node_type?: string }).node_type ||
-                            (chunk.metadata?.is_table ? 'TABLE' : 'PARAGRAPH');
-                          onEditChunk({
-                            path: chunk.path,
-                            label: chunk.path,
-                            node_type: chunkNodeType,
-                            verbatim_text: chunk.verbatim_text,
-                            contextualized_text: chunk.contextualized_text,
-                            start_line: chunk.start_line || 1,
-                            end_line: chunk.end_line || 1,
-                            review_status: chunk.review_status,
-                            metadata: chunk.metadata || {},
-                            children: [],
-                          });
-                        }}
-                        className="rounded p-1 text-slate-400 hover:bg-slate-800 hover:text-brand-300 transition"
-                      >
-                        <Edit3 className="h-3.5 w-3.5" />
-                      </button>
                     </div>
                   </div>
 

@@ -4,34 +4,26 @@ import {
   Filter,
   Grid,
   Layers,
-  Plus,
   Search,
   Share2,
 } from 'lucide-react';
-import { CreateEdgePayload, DeleteEdgePayload } from '../../types/api';
-import { StagingDocumentSession, StagingEdge } from '../../types/staging';
+import { StagingDocumentSession } from '../../types/staging';
 import { EdgeCardList } from './EdgeCardList';
-import { EdgeEditorModal } from './EdgeEditorModal';
 import { GraphCanvas } from './GraphCanvas';
 import { GraphTraversalModal } from './GraphTraversalModal';
 
 interface VisualGraphInspectorProps {
   session: StagingDocumentSession;
-  onAddEdge: (edge: CreateEdgePayload) => Promise<boolean>;
-  onDeleteEdge: (payload: DeleteEdgePayload) => Promise<boolean>;
   onSelectNode?: (path: string) => void;
 }
 
 export const VisualGraphInspector: React.FC<VisualGraphInspectorProps> = ({
   session,
-  onAddEdge,
-  onDeleteEdge,
   onSelectNode,
 }) => {
   const [viewMode, setViewMode] = useState<'canvas' | 'list'>('canvas');
   const [filterRelation, setFilterRelation] = useState<string>('');
   const [searchPath, setSearchPath] = useState<string>('');
-  const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [isTraversalOpen, setIsTraversalOpen] = useState<boolean>(false);
 
   const filteredEdges = useMemo(() => {
@@ -45,14 +37,6 @@ export const VisualGraphInspector: React.FC<VisualGraphInspectorProps> = ({
       return matchRel && matchSearch;
     });
   }, [session.edges, filterRelation, searchPath]);
-
-  const handleDelete = async (edge: StagingEdge) => {
-    return await onDeleteEdge({
-      source_path: edge.source_path,
-      target_path: edge.target_path || null,
-      relation_type: edge.relation_type,
-    });
-  };
 
   return (
     <div className="flex h-full w-full flex-col overflow-hidden bg-slate-950">
@@ -117,16 +101,6 @@ export const VisualGraphInspector: React.FC<VisualGraphInspectorProps> = ({
             <Compass className="h-4 w-4" />
             <span>Duyệt Đa Tầng</span>
           </button>
-
-          {/* Add Edge Button */}
-          <button
-            type="button"
-            onClick={() => setIsModalOpen(true)}
-            className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3.5 py-1.5 text-xs font-semibold text-white shadow hover:bg-blue-500 transition"
-          >
-            <Plus className="h-4 w-4" />
-            <span>Thêm Quan Hệ</span>
-          </button>
         </div>
       </div>
 
@@ -171,22 +145,14 @@ export const VisualGraphInspector: React.FC<VisualGraphInspectorProps> = ({
         {viewMode === 'canvas' ? (
           <GraphCanvas
             session={{ ...session, edges: filteredEdges }}
-            onDeleteEdge={handleDelete}
             onSelectNode={onSelectNode}
           />
         ) : (
           <div className="h-full overflow-y-auto p-6">
-            <EdgeCardList edges={filteredEdges} onDeleteEdge={handleDelete} />
+            <EdgeCardList edges={filteredEdges} />
           </div>
         )}
       </div>
-
-      {/* Add Edge Modal */}
-      <EdgeEditorModal
-        isOpen={isModalOpen}
-        onClose={() => setIsModalOpen(false)}
-        onAddEdge={onAddEdge}
-      />
 
       {/* Multi-Hop Traversal Modal */}
       <GraphTraversalModal
