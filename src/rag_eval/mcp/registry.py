@@ -20,7 +20,6 @@ from rag_eval.mcp.tools import (
     HierarchicalDirection,
     HierarchicalNavigateResult,
     HybridSearchResult,
-    RelationTypeFilter,
     StagingStatusFilter,
     StgAddEdgesResult,
     StgCommitResult,
@@ -33,7 +32,7 @@ from rag_eval.mcp.tools import (
     StgPatchResult,
     StgPollPendingResult,
     StgPreviewResult,
-    StgRemoveEdgeResult,
+    StgRemoveEdgesResult,
     StgReopenResult,
     StgReparentResult,
     StgUnfinalizeResult,
@@ -320,21 +319,22 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
 
     @server.tool(
         name="stg_grep",
-        description="Tìm kiếm chuỗi ký tự hoặc biểu thức chính quy Regex quét qua toàn bộ các chunk trong vùng đệm staging.",
+        description="Tìm kiếm chuỗi ký tự hoặc biểu thức chính quy Regex quét qua các chunk trong vùng đệm staging (một tài liệu hoặc toàn bộ phiên).",
     )
     async def stg_grep(
-        doc_slug: Annotated[
-            str,
-            Field(
-                description="Mã định danh doc_slug của phiên làm việc trong vùng đệm staging.",
-            ),
-        ],
         pattern: Annotated[
             str,
             Field(
                 description="Cụm từ tìm kiếm hoặc biểu thức chính quy (Regex).",
             ),
         ],
+        doc_slug: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description="Mã định danh doc_slug tùy chọn (để trống nếu muốn quét toàn bộ các phiên staging).",
+            ),
+        ] = None,
         is_regex: Annotated[
             bool,
             Field(
@@ -367,8 +367,8 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
         ] = 50,
     ) -> StgGrepResult:
         return await tool_impl.stg_grep(
-            doc_slug=doc_slug,
             pattern=pattern,
+            doc_slug=doc_slug,
             is_regex=is_regex,
             case_sensitive=case_sensitive,
             search_in=search_in,
@@ -646,62 +646,25 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
         )
 
     @server.tool(
-        name="stg_remove_edge",
-        description=(
-            "Xóa bỏ một hoặc nhiều cạnh quan hệ đồ thị khỏi phiên làm việc staging theo 2 chế độ: "
-            "xóa đơn lẻ khi truyền cả 3 trường (source_path, target_path, relation_type) hoặc "
-            "xóa hàng loạt khi chỉ lọc theo source_path/relation_type (yêu cầu clear_all_targets=True) "
-            "hoặc danh sách edges."
-        ),
+        name="stg_remove_edges",
+        description="Xóa bỏ một hoặc nhiều cạnh quan hệ đồ thị khỏi phiên làm việc staging bằng danh sách bộ lọc StagingEdgeFilter.",
     )
-    async def stg_remove_edge(
+    async def stg_remove_edges(
         doc_slug: Annotated[
             str,
             Field(
                 description="Mã định danh doc_slug của phiên làm việc trong vùng đệm staging.",
             ),
         ],
-        source_path: Annotated[
-            str,
-            Field(
-                default="",
-                description="Đường dẫn phân cấp của chunk nguồn.",
-            ),
-        ] = "",
-        target_path: Annotated[
-            str | None,
-            Field(
-                default=None,
-                description="Đường dẫn phân cấp của chunk đích nội bộ cần xóa.",
-            ),
-        ] = None,
-        relation_type: Annotated[
-            RelationTypeFilter | None,
-            Field(
-                default=None,
-                description="Loại quan hệ cần xóa. Nếu để trống/None, sẽ xóa cạnh khớp nguồn và đích bất kể loại quan hệ.",
-            ),
-        ] = None,
-        clear_all_targets: Annotated[
-            bool,
-            Field(
-                default=False,
-                description="Xác nhận tường minh việc xóa toàn bộ mọi cạnh xuất phát từ source_path bất kể đích đến.",
-            ),
-        ] = False,
         edges: Annotated[
-            list[StagingEdgeFilter] | None,
+            list[StagingEdgeFilter],
             Field(
-                default=None,
                 description="Danh sách các bộ lọc cạnh cần xóa hàng loạt trong 1 lần gọi.",
             ),
-        ] = None,
-    ) -> StgRemoveEdgeResult:
-        return await tool_impl.stg_remove_edge(
+        ],
+    ) -> StgRemoveEdgesResult:
+        return await tool_impl.stg_remove_edges(
             doc_slug=doc_slug,
-            source_path=source_path,
-            target_path=target_path,
-            relation_type=relation_type or None,
-            clear_all_targets=clear_all_targets,
             edges=edges,
         )
+

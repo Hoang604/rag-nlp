@@ -503,13 +503,17 @@ class StagingGrepHitResponse(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
+    doc_slug: str
     path: str
     field_matched: str
     match_snippet: str
     verbatim_text: str
     contextualized_text: str
+    start_line: int = Field(..., ge=1)
+    end_line: int = Field(..., ge=1)
     char_length: int
     metadata: dict[str, object] = Field(default_factory=dict)
+
 
 
 class StagingGrepResponse(BaseModel):

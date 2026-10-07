@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from rag_eval.exceptions import (
     E_AST_GROUNDING_VALIDATION,
@@ -17,6 +18,7 @@ from rag_eval.ingestion.staging.models import (
     RelationType,
     StagingChunkDelta,
     StagingEdge,
+    StagingEdgeFilter,
     StagingStatus,
     StagingViolationCode,
 )
@@ -43,14 +45,57 @@ async def test_bounded_poll_pending_clamps_to_env_limit(
 ) -> None:
     """Verifies that stg_poll_pending_chunks strictly clamps requested limit by STAGING_POLL_LIMIT."""
     monkeypatch.setenv("STAGING_POLL_LIMIT", "2")
-    _, tools = _setup_test_session(
+    mgr, tools = _setup_test_session(
         tmp_path, "doc_poll", raw_text="# S1\n\nP1\n\n# S2\n\nP2\n\n# S3\n\nP3"
     )
 
     # Request limit=10 when configured ceiling is 2
     res = await tools.stg_poll_pending_chunks(doc_slug="doc_poll", limit=10)
     assert res.limit == 2
-    assert len(res.chunks) == 2
+    assert res.returned_chunks == 2
+    assert len(res.groups) > 0
+    total_in_groups = sum(len(g.chunks) for g in res.groups)
+    assert total_in_groups == 2
+
+    # Verify that queue polling never mutates inspected_paths
+    session = mgr.load_session("doc_poll")
+    assert len(session.inspected_paths) == 0
+
+
+@pytest.mark.asyncio
+async def test_poll_pending_grouped_hierarchy(tmp_path: Path) -> None:
+    """Verifies that pending leaf chunks are grouped under their immediate parent with non-mutating ancestor lookup."""
+    mgr, tools = _setup_test_session(
+        tmp_path, "doc_group", raw_text="# Section 1\n\nParagraph 1.\n\nParagraph 2."
+    )
+    res = await tools.stg_poll_pending_chunks(doc_slug="doc_group", limit=10)
+    assert res.returned_chunks >= 2
+    assert len(res.groups) >= 1
+    for grp in res.groups:
+        assert grp.parent_path is not None
+        assert grp.parent_context is not None
+        for chunk in grp.chunks:
+            assert chunk.path.startswith(grp.parent_path) or grp.parent_path == "doc_group"
+
+    session = mgr.load_session("doc_group")
+    assert len(session.inspected_paths) == 0
+
+
+@pytest.mark.asyncio
+async def test_stg_grep_returns_compact_snippets(tmp_path: Path) -> None:
+    """Verifies that stg_grep returns compact GrepHit snippets with bold markdown highlights."""
+    _, tools = _setup_test_session(
+        tmp_path, "doc_grep", raw_text="# Điều 1\n\nQuy định về quản lý an toàn thông tin."
+    )
+    res = await tools.stg_grep(pattern="quản lý", doc_slug="doc_grep", limit=5)
+    assert res.total_matches >= 1
+    assert len(res.hits) >= 1
+    hit = res.hits[0]
+    assert hit.doc_slug == "doc_grep"
+    assert "**quản lý**" in hit.snippet
+    assert hit.start_line >= 1
+    assert hit.end_line >= 1
+    assert not hasattr(hit, "verbatim_text")
 
 
 @pytest.mark.asyncio
@@ -307,3 +352,65 @@ async def test_stg_unfinalize_chunks_reverts_state_and_evicts_inspection(tmp_pat
     with pytest.raises(CorpusDomainError) as exc_info:
         await tools.stg_unfinalize_chunks(doc_slug="doc_unfinalize", paths=["nonexistent.chunk"])
     assert exc_info.value.error_code == E_INVALID_DOCUMENT_HIERARCHY
+
+
+@pytest.mark.asyncio
+async def test_stg_grep_global_sessions(tmp_path: Path) -> None:
+    """Verifies that passing doc_slug=None searches across all discovered active sessions (S-03)."""
+    mgr = StagingManager(staging_dir=tmp_path)
+    mgr.create_session_from_raw(
+        doc_slug="doc_alpha",
+        title="Document Alpha",
+        raw_text="# Section 1\n\nCommon term identifier alpha.",
+    )
+    mgr.create_session_from_raw(
+        doc_slug="doc_beta",
+        title="Document Beta",
+        raw_text="# Section 2\n\nCommon term identifier beta.",
+    )
+    tools = CorpusStagingTools(staging_manager=mgr)
+
+    res = await tools.stg_grep(pattern="Common term", doc_slug=None, limit=10)
+    assert res.doc_slug is None
+    assert res.total_matches >= 2
+    slugs = {h.doc_slug for h in res.hits}
+    assert "doc_alpha" in slugs
+    assert "doc_beta" in slugs
+
+
+@pytest.mark.asyncio
+async def test_stg_remove_edges_typed_filter(tmp_path: Path) -> None:
+    """Verifies that stg_remove_edges removes specified edges via typed list[StagingEdgeFilter] (S-04 / I-03)."""
+    mgr, tools = _setup_test_session(tmp_path, "doc_edge_rem", raw_text="# S1\n\nP1\n\n# S2\n\nP2")
+    session = mgr.load_session("doc_edge_rem")
+    p1 = session.chunks[0].path
+    p2 = session.chunks[1].path
+
+    mgr.add_edges(
+        "doc_edge_rem",
+        edges=[
+            StagingEdge(source_path=p1, target_path=p2, relation_type=RelationType.REFERENCES)
+        ],
+    )
+    reloaded = mgr.load_session("doc_edge_rem")
+    assert len(reloaded.edges) == 1
+
+    flt = StagingEdgeFilter(source_path=p1, target_path=p2)
+    res = await tools.stg_remove_edges(doc_slug="doc_edge_rem", edges=[flt])
+    assert res.status == "SUCCESS"
+    assert res.removed_count == 1
+    assert res.total_edges == 0
+
+    # Ensure StagingEdgeFilter forbids extra fields
+    with pytest.raises(ValidationError):
+        StagingEdgeFilter.model_validate({"source_path": p1, "extra_field": "bad"})
+
+
+def test_staging_chunk_delta_forbids_extra_and_status() -> None:
+    """Verifies that StagingChunkDelta rejects undeclared extra keys and status alterations (S-08 / I-05)."""
+    with pytest.raises(ValidationError):
+        StagingChunkDelta.model_validate({"path": "doc.sec_1", "review_status": "REVIEWED"})
+
+    with pytest.raises(ValidationError):
+        StagingChunkDelta.model_validate({"path": "doc.sec_1", "invalid_extra_key": "exploit"})
+

@@ -13,6 +13,9 @@ from rag_eval.ingestion.staging import (
 from rag_eval.ingestion.staging.models import (
     ChunkFinalizeStatus,
     ChunkProgressStats,
+    GrepHit,
+    PendingChunkGroup,
+    PendingChunkLeaf,
     RelationTypeFilter,
     StagingStatusFilter,
     StgAddEdgesResult,
@@ -27,7 +30,7 @@ from rag_eval.ingestion.staging.models import (
     StgPollPendingResult,
     StgPreviewHit,
     StgPreviewResult,
-    StgRemoveEdgeResult,
+    StgRemoveEdgesResult,
     StgReopenResult,
     StgUnfinalizeResult,
 )
@@ -171,16 +174,16 @@ class CorpusMCPTools:
 
     async def stg_grep(
         self,
-        doc_slug: str,
         pattern: str,
+        doc_slug: str | None = None,
         is_regex: bool = False,
         case_sensitive: bool = False,
         search_in: StgGrepScope = "ALL",
         limit: int = 50,
     ) -> StgGrepResult:
         return await self._staging.stg_grep(
-            doc_slug=doc_slug,
             pattern=pattern,
+            doc_slug=doc_slug,
             is_regex=is_regex,
             case_sensitive=case_sensitive,
             search_in=search_in,
@@ -272,21 +275,13 @@ class CorpusMCPTools:
     ) -> StgReopenResult:
         return await self._staging.stg_reopen_session(doc_slug=doc_slug, reason=reason)
 
-    async def stg_remove_edge(
+    async def stg_remove_edges(
         self,
         doc_slug: str,
-        source_path: str = "",
-        target_path: str | None = None,
-        relation_type: RelationTypeFilter | None = None,
-        clear_all_targets: bool = False,
-        edges: Sequence[StagingEdgeFilter | dict[str, object]] | None = None,
-    ) -> StgRemoveEdgeResult:
-        return await self._staging.stg_remove_edge(
+        edges: Sequence[StagingEdgeFilter | dict[str, object]],
+    ) -> StgRemoveEdgesResult:
+        return await self._staging.stg_remove_edges(
             doc_slug=doc_slug,
-            source_path=source_path,
-            target_path=target_path,
-            relation_type=relation_type,
-            clear_all_targets=clear_all_targets,
             edges=edges,
         )
 
@@ -311,9 +306,12 @@ __all__ = [
     "CorpusStagingTools",
     "GraphDirection",
     "GraphTraverseResult",
+    "GrepHit",
     "HierarchicalDirection",
     "HierarchicalNavigateResult",
     "HybridSearchResult",
+    "PendingChunkGroup",
+    "PendingChunkLeaf",
     "QueryEmbedder",
     "RelationTypeFilter",
     "SentenceTransformerQueryEmbedder",
@@ -334,7 +332,7 @@ __all__ = [
     "StgPollPendingResult",
     "StgPreviewHit",
     "StgPreviewResult",
-    "StgRemoveEdgeResult",
+    "StgRemoveEdgesResult",
     "StgReopenResult",
     "StgReparentResult",
     "StgUnfinalizeResult",

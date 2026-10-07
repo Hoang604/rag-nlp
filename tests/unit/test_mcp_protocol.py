@@ -1,6 +1,6 @@
 import json
 import uuid
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -65,6 +65,16 @@ def test_domain_error_to_jsonrpc_mapping() -> None:
     code_i, _, data_i = map_domain_error_to_jsonrpc(err_int)
     assert code_i == -32603
     assert data_i["domain_code"] == E_CORPUS_INTEGRITY_VIOLATION
+
+    # Negative protocol codes preserved
+    err_proto = CorpusDomainError(
+        error_code=-32602,
+        message="Protocol validation failed",
+    )
+    code_p, _, data_p = map_domain_error_to_jsonrpc(err_proto)
+    assert code_p == -32602
+    assert data_p["domain_code"] == -32602
+
 
 
 @pytest.mark.asyncio
@@ -311,4 +321,96 @@ async def test_graph_traverse_multihop_unresolvable_source_id_raises_error() -> 
         await sensors.graph_traverse(source_path="doc.sec_1", max_depth=2)
 
     assert exc_info.value.error_code == E_INVALID_DOCUMENT_HIERARCHY
+
+
+@pytest.mark.asyncio
+async def test_mcp_prefix_normalization() -> None:
+    """Verifies that requests with 'mcp_corpus_' prefix are cleanly resolved in handle_request_dict (S-09 / I-08)."""
+    server = CorpusMCPServer()
+    server.execute_tool = AsyncMock(return_value={"status": "OK"})  # type: ignore[method-assign]
+
+    req: dict[str, object] = {
+        "jsonrpc": "2.0",
+        "id": 42,
+        "method": "mcp_corpus_stg_validate",
+        "params": {"doc_slug": "test_doc"},
+    }
+    resp = await server.handle_request_dict(req)
+    assert resp is not None
+    assert resp.get("result") == {"status": "OK"}
+    server.execute_tool.assert_awaited_once_with("stg_validate", {"doc_slug": "test_doc"})
+
+
+@pytest.mark.asyncio
+async def test_hybrid_search_fallback_on_embedder_failure() -> None:
+    """Verifies that dense query embedder failure gracefully degrades to sparse BM25 (S-05 / I-04)."""
+    from rag_eval.retrieval.engine import RetrievalEngine
+    from rag_eval.schemas import SearchHitDTO
+
+    mock_pool = MagicMock()
+    mock_embedder = MagicMock()
+    mock_embedder.embed_query = AsyncMock(side_effect=RuntimeError("CUDA out of memory"))
+
+    engine = RetrievalEngine(pool=mock_pool, embedder=mock_embedder)
+
+    sample_hit = SearchHitDTO(
+        chunk_id=uuid.uuid4(),
+        doc_slug="doc_sec",
+        doc_title="Doc Sec",
+        path="doc_sec.sec_1",
+        start_line=1,
+        end_line=5,
+        verbatim_text="Sample text",
+        contextualized_text="Sample context",
+        context_type=ContextType.SELF_CONTAINED,
+        is_all_refs_resolved=True,
+        score=0.85,
+        dense_similarity=0.0,
+        sparse_rank=1,
+        metadata={},
+    )
+
+    with patch("rag_eval.retrieval.engine.CorpusRepository") as mock_repo_cls:
+        mock_repo = MagicMock()
+        mock_repo.chunks.hybrid_search = AsyncMock(return_value=[sample_hit])
+        mock_repo_cls.return_value = mock_repo
+
+        result = await engine.search(query="quy định an toàn", limit=5)
+        assert len(result.hits) == 1
+        assert result.hits[0].path == "doc_sec.sec_1"
+        assert result.confidence is not None
+
+
+def test_mcp_server_clean_teardown() -> None:
+    """Verifies that OS signal terminates process cleanly with exit code 0 (S-06 / I-06)."""
+    from rag_eval.mcp.server import run_mcp_server
+
+    with (
+        patch("signal.signal") as mock_signal,
+        patch("sys.exit") as mock_exit,
+        patch("rag_eval.db.connection.close_db_pool", new_callable=AsyncMock),
+        patch.object(CorpusMCPServer, "run"),
+    ):
+        from collections.abc import Callable
+
+        handlers: dict[int, Callable[[int, object], object]] = {}
+
+        def record_handler(sig: int, handler: Callable[[int, object], object]) -> None:
+            handlers[sig] = handler
+
+        mock_signal.side_effect = record_handler
+        mock_exit.side_effect = SystemExit(0)
+
+        run_mcp_server()
+
+        import signal as py_signal
+
+        assert py_signal.SIGTERM in handlers
+        sig_handler = handlers[py_signal.SIGTERM]
+
+        with pytest.raises(SystemExit) as exc_info:
+            sig_handler(py_signal.SIGTERM, None)
+        assert exc_info.value.code == 0
+
+
 

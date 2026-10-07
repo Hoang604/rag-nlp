@@ -18,12 +18,15 @@ from rag_eval.ingestion.staging.models import (
     DEFAULT_STAGING_DIR,
     ChunkReviewStatus,
     ContextType,
+    PendingChunkGroup,
+    PendingChunkLeaf,
     RelationType,
     StagingChunk,
     StagingChunkDelta,
     StagingEdge,
     StagingEdgeFilter,
     StagingEdgeInput,
+    StagingGrepHit,
     StagingSessionSummary,
     StagingStatus,
     StgReparentResult,
@@ -365,27 +368,6 @@ class StagingManager:
         removed_count = initial_count - len(session.edges)
         return session, removed_count
 
-    def remove_edge(
-        self,
-        doc_slug: str,
-        source_path: str,
-        target_path: str | None = None,
-        relation_type: str | None = None,
-        clear_all_targets: bool = False,
-        actor: str = "HUMAN:reviewer",
-    ) -> StagingDocumentSession:
-        """Removes a single relation edge or all edges from source_path if clear_all_targets is True."""
-        from rag_eval.ingestion.staging.models import StagingEdgeFilter
-
-        flt = StagingEdgeFilter(
-            source_path=source_path,
-            target_path=target_path,
-            relation_type=relation_type,
-            clear_all_targets=clear_all_targets,
-        )
-        session, _ = self.remove_edges(doc_slug=doc_slug, filters=[flt], actor=actor)
-        return session
-
     def reparent_node(
         self,
         doc_slug: str,
@@ -451,6 +433,30 @@ class StagingManager:
                 logger.warning("Skipping unreadable staging session directory %s: %s", sub_dir, exc)
 
         return summaries
+
+    def grep_all_sessions(
+        self,
+        pattern: str,
+        is_regex: bool = False,
+        case_sensitive: bool = False,
+        search_in: str = "ALL",
+        limit: int = 50,
+    ) -> list[StagingGrepHit]:
+        """Searches across all discovered staging sessions in the staging directory."""
+        all_hits: list[StagingGrepHit] = []
+        for summary in self.list_sessions():
+            session = self.load_session(summary.doc_slug)
+            hits = session.grep(
+                pattern=pattern,
+                is_regex=is_regex,
+                case_sensitive=case_sensitive,
+                search_in=search_in,
+                limit=limit - len(all_hits),
+            )
+            all_hits.extend(hits)
+            if len(all_hits) >= limit:
+                break
+        return all_hits[:limit]
 
     def update_session_status(
         self,
@@ -817,3 +823,68 @@ class StagingManager:
         )
         session.status = StagingStatus.PROMOTED
         return session
+
+
+def group_pending_chunks(
+    chunks: list[StagingChunk],
+    session: StagingDocumentSession,
+) -> list[PendingChunkGroup]:
+    """Groups sibling pending leaf chunks under their immediate ancestor heading.
+
+    Uses non-mutating session.lookup_chunk so that queue polling never marks chunks as inspected.
+    """
+    groups_map: dict[str, list[PendingChunkLeaf]] = {}
+    order: list[str] = []
+
+    for c in chunks:
+        if "." in c.path:
+            parent_path = c.path.rsplit(".", 1)[0]
+        else:
+            parent_path = session.doc_slug
+
+        if parent_path not in groups_map:
+            groups_map[parent_path] = []
+            order.append(parent_path)
+
+        justification_val: str | None = None
+        just_attr = getattr(c, "justification", None)
+        if isinstance(just_attr, str):
+            justification_val = just_attr
+        elif isinstance(c.metadata, dict) and "justification" in c.metadata:
+            justification_val = str(c.metadata["justification"])
+
+        leaf = PendingChunkLeaf(
+            path=c.path,
+            verbatim_text=c.verbatim_text,
+            start_line=c.start_line,
+            end_line=c.end_line,
+            context_type=c.context_type,
+            justification=justification_val,
+        )
+        groups_map[parent_path].append(leaf)
+
+    result: list[PendingChunkGroup] = []
+    for parent_path in order:
+        if parent_path == session.doc_slug:
+            parent_context = session.title or session.doc_slug
+        else:
+            parent_chunk = session.lookup_chunk(parent_path)
+            if parent_chunk is not None:
+                parent_context = (
+                    parent_chunk.contextualized_text
+                    or parent_chunk.verbatim_text
+                    or parent_path
+                )
+            else:
+                parent_context = parent_path
+
+        result.append(
+            PendingChunkGroup(
+                parent_path=parent_path,
+                parent_context=parent_context,
+                chunks=groups_map[parent_path],
+            )
+        )
+
+    return result
+

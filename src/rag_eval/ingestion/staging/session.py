@@ -33,6 +33,37 @@ from rag_eval.ingestion.staging.operations import (
 )
 
 
+def render_grep_snippet(
+    text: str,
+    pattern: str | re.Pattern[str],
+    case_sensitive: bool = False,
+    radius: int = 30,
+) -> tuple[bool, str]:
+    """Extracts bounded text slice and bolds matched terms with markdown **...**."""
+    if isinstance(pattern, re.Pattern):
+        m = pattern.search(text)
+        if not m:
+            return False, ""
+        s_start = max(0, m.start() - radius)
+        s_end = min(len(text), m.end() + radius)
+        prefix = text[s_start : m.start()].replace("\n", " ").lstrip()
+        matched = m.group(0)
+        suffix = text[m.end() : s_end].replace("\n", " ").rstrip()
+        return True, f"{prefix}**{matched}**{suffix}"
+    else:
+        target = text if case_sensitive else text.lower()
+        q = pattern if case_sensitive else pattern.lower()
+        idx = target.find(q)
+        if idx < 0:
+            return False, ""
+        s_start = max(0, idx - radius)
+        s_end = min(len(text), idx + len(pattern) + radius)
+        prefix = text[s_start:idx].replace("\n", " ").lstrip()
+        matched = text[idx : idx + len(pattern)]
+        suffix = text[idx + len(pattern) : s_end].replace("\n", " ").rstrip()
+        return True, f"{prefix}**{matched}**{suffix}"
+
+
 class StagingDocumentSession(BaseModel):
     """Represents an in-memory staging document session."""
 
@@ -72,6 +103,14 @@ class StagingDocumentSession(BaseModel):
     def is_chunk_inspected(self, path: str) -> bool:
         """Returns True if the specified chunk path was inspected during this session."""
         return path.strip() in self.inspected_paths
+
+    def lookup_chunk(self, path: str) -> StagingChunk | None:
+        """Non-mutating chunk lookup by dot-separated ltree path; does not record inspection."""
+        clean_path = path.strip()
+        for chunk in self.chunks:
+            if chunk.path == clean_path:
+                return chunk
+        return None
 
     def get_chunk(self, path: str) -> StagingChunk | None:
         """Looks up a single staged chunk by dot-separated ltree path."""
@@ -164,28 +203,9 @@ class StagingDocumentSession(BaseModel):
                 ) from exc
 
         hits: list[StagingGrepHit] = []
-
-        def _check_match(text: str) -> tuple[bool, str]:
-            if not text:
-                return False, ""
-            if compiled_regex is not None:
-                m = compiled_regex.search(text)
-                if m:
-                    s_start = max(0, m.start() - 30)
-                    s_end = min(len(text), m.end() + 30)
-                    snippet = text[s_start:s_end].replace("\n", " ").strip()
-                    return True, snippet
-                return False, ""
-            else:
-                target_str = text if case_sensitive else text.lower()
-                query_str = clean_pattern if case_sensitive else clean_pattern.lower()
-                idx = target_str.find(query_str)
-                if idx >= 0:
-                    s_start = max(0, idx - 30)
-                    s_end = min(len(text), idx + len(clean_pattern) + 30)
-                    snippet = text[s_start:s_end].replace("\n", " ").strip()
-                    return True, snippet
-                return False, ""
+        pat: str | re.Pattern[str] = (
+            compiled_regex if is_regex and compiled_regex is not None else clean_pattern
+        )
 
         for chunk in self.chunks:
             if len(hits) >= limit:
@@ -195,26 +215,34 @@ class StagingDocumentSession(BaseModel):
             snippet: str = ""
 
             if search_mode in ("ALL", "PATH"):
-                matched, snip = _check_match(chunk.path)
+                matched, snip = render_grep_snippet(
+                    chunk.path, pat, case_sensitive=case_sensitive, radius=30
+                )
                 if matched:
                     matched_field = "PATH"
                     snippet = f"Path: {chunk.path}"
 
             if not matched_field and search_mode in ("ALL", "VERBATIM"):
-                matched, snip = _check_match(chunk.verbatim_text)
+                matched, snip = render_grep_snippet(
+                    chunk.verbatim_text, pat, case_sensitive=case_sensitive, radius=30
+                )
                 if matched:
                     matched_field = "VERBATIM"
                     snippet = snip
 
             if not matched_field and search_mode in ("ALL", "CONTEXT"):
-                matched, snip = _check_match(chunk.contextualized_text)
+                matched, snip = render_grep_snippet(
+                    chunk.contextualized_text, pat, case_sensitive=case_sensitive, radius=30
+                )
                 if matched:
                     matched_field = "CONTEXT"
                     snippet = snip
 
             if not matched_field and search_mode in ("ALL", "METADATA"):
                 meta_str = json.dumps(chunk.metadata, ensure_ascii=False)
-                matched, snip = _check_match(meta_str)
+                matched, snip = render_grep_snippet(
+                    meta_str, pat, case_sensitive=case_sensitive, radius=30
+                )
                 if matched:
                     matched_field = "METADATA"
                     snippet = snip
@@ -222,11 +250,14 @@ class StagingDocumentSession(BaseModel):
             if matched_field:
                 hits.append(
                     StagingGrepHit(
+                        doc_slug=self.doc_slug,
                         path=chunk.path,
                         field_matched=matched_field,
                         match_snippet=snippet,
                         verbatim_text=chunk.verbatim_text,
                         contextualized_text=chunk.contextualized_text,
+                        start_line=chunk.start_line,
+                        end_line=chunk.end_line,
                         char_length=chunk.char_length or len(chunk.verbatim_text),
                         metadata=chunk.metadata,
                     )

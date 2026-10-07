@@ -345,7 +345,7 @@ def finalize_chunks_in_session(
                     path=p,
                     doc_slug=session.doc_slug,
                     message=f"Chunk '{p}' được phân loại SELF_CONTAINED nhưng lại tồn tại {len(chunk_edges)} cạnh quan hệ xuất phát từ nó.",
-                    remediation_hint="Xung đột trạng thái: Chunk được khai báo SELF_CONTAINED nhưng lại có cạnh phụ thuộc xuất phát từ nó. Hãy kiểm tra lại: (1) Nếu chunk thực sự độc lập, hãy xóa các cạnh thừa bằng stg_remove_edge; (2) Nếu chunk có phụ thuộc, dùng stg_patch cập nhật context_type thành REQUIRES_EXTERNAL_CONTEXT.",
+                    remediation_hint="Xung đột trạng thái: Chunk được khai báo SELF_CONTAINED nhưng lại có cạnh phụ thuộc xuất phát từ nó. Hãy kiểm tra lại: (1) Nếu chunk thực sự độc lập, hãy xóa các cạnh thừa bằng stg_remove_edges; (2) Nếu chunk có phụ thuộc, dùng stg_patch cập nhật context_type thành REQUIRES_EXTERNAL_CONTEXT.",
                 )
             target_chunk.finalization_state = FinalizationState.FINALIZED_SELF_CONTAINED
         elif target_chunk.context_type == ContextType.REQUIRES_EXTERNAL_CONTEXT:

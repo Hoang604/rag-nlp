@@ -1,5 +1,8 @@
+import uuid
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
+import asyncpg
 import httpx
 import pytest
 from fastapi import FastAPI
@@ -13,6 +16,8 @@ from rag_eval.ingestion.staging.models import (
     StagingChunkDelta,
     StagingEdge,
 )
+from rag_eval.retrieval.engine import RetrievalEngine, SearchPipelineResult
+from rag_eval.schemas import SearchHitDTO
 from rag_eval.web.app import create_app
 
 
@@ -246,3 +251,73 @@ async def test_unfinalize_chunks_endpoint_and_path_validation(
             json={"paths": [f"{doc_slug}.non_existent"]},
         )
         assert bad_resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_search_corpus_endpoint_returns_ranking_floats(
+    test_app_and_manager: tuple[FastAPI, StagingManager],
+) -> None:
+    """Verifies S-07 / I-07: POST /search executes through RetrievalEngine returning ranking floats."""
+    app, _ = test_app_and_manager
+    mock_pool = MagicMock(spec=asyncpg.Pool)
+    mock_pool._closed = False
+    app.state.pool = mock_pool
+
+    mock_hit = SearchHitDTO(
+        chunk_id=uuid.uuid4(),
+        doc_slug="test_doc",
+        doc_title="Test Document",
+        path="test_doc.sec_1",
+        verbatim_text="Sample text for testing search ranking",
+        contextualized_text="Sample text for testing search ranking",
+        start_line=10,
+        end_line=20,
+        context_type="SELF_CONTAINED",
+        is_all_refs_resolved=True,
+        metadata={"is_table": False},
+        score=0.925,
+        dense_similarity=0.880,
+        sparse_rank=1,
+        dense_rank=1,
+        rerank_score=0.950,
+    )
+    mock_engine = MagicMock(spec=RetrievalEngine)
+    mock_engine.search = AsyncMock(
+        return_value=SearchPipelineResult(
+            hits=[mock_hit],
+            confidence="HIGH",
+            expanded_query="sample query",
+        )
+    )
+    app.state.retrieval_engine = mock_engine
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        resp = await client.post(
+            "/api/search",
+            json={"query": "sample query", "limit": 5, "rerank": True},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["query"] == "sample query"
+        assert data["confidence"] == "HIGH"
+        assert len(data["hits"]) == 1
+
+        hit_resp = data["hits"][0]
+        assert hit_resp["path"] == "test_doc.sec_1"
+        assert hit_resp["score"] == 0.925
+        assert hit_resp["dense_similarity"] == 0.880
+        assert hit_resp["rerank_score"] == 0.950
+        assert hit_resp["keyword_matched"] is True
+
+        mock_engine.search.assert_awaited_once_with(
+            query="sample query",
+            limit=5,
+            rerank=True,
+            doc_slugs=None,
+            path_prefix=None,
+            only_resolved=False,
+        )
+

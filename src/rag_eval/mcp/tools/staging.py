@@ -11,12 +11,12 @@ from rag_eval.exceptions import (
     E_INVALID_DOCUMENT_HIERARCHY,
     CorpusDomainError,
 )
-from rag_eval.ingestion.staging.manager import StagingManager
+from rag_eval.ingestion.staging.manager import StagingManager, group_pending_chunks
 from rag_eval.ingestion.staging.models import (
     ChunkFinalizeStatus,
     ChunkProgressStats,
     ChunkReviewStatus,
-    RelationTypeFilter,
+    GrepHit,
     StagingChunk,
     StagingChunkDelta,
     StagingEdge,
@@ -36,7 +36,7 @@ from rag_eval.ingestion.staging.models import (
     StgPollPendingResult,
     StgPreviewHit,
     StgPreviewResult,
-    StgRemoveEdgeResult,
+    StgRemoveEdgesResult,
     StgReopenResult,
     StgReparentResult,
     StgUnfinalizeResult,
@@ -143,27 +143,48 @@ class CorpusStagingTools:
 
     async def stg_grep(
         self,
-        doc_slug: str,
         pattern: str,
+        doc_slug: str | None = None,
         is_regex: bool = False,
         case_sensitive: bool = False,
         search_in: StgGrepScope = "ALL",
         limit: int = 50,
     ) -> StgGrepResult:
-        session = await self._ensure_session(doc_slug)
-        matches = session.grep(
-            pattern=pattern,
-            is_regex=is_regex,
-            case_sensitive=case_sensitive,
-            search_in=search_in,
-            limit=limit,
-        )
+        if doc_slug:
+            session = await self._ensure_session(doc_slug)
+            matches = session.grep(
+                pattern=pattern,
+                is_regex=is_regex,
+                case_sensitive=case_sensitive,
+                search_in=search_in,
+                limit=limit,
+            )
+        else:
+            matches = self._staging.grep_all_sessions(
+                pattern=pattern,
+                is_regex=is_regex,
+                case_sensitive=case_sensitive,
+                search_in=search_in,
+                limit=limit,
+            )
+        hits = [
+            GrepHit(
+                rank=idx,
+                path=m.path,
+                doc_slug=m.doc_slug,
+                snippet=m.match_snippet,
+                field_matched=m.field_matched,
+                start_line=m.start_line,
+                end_line=m.end_line,
+            )
+            for idx, m in enumerate(matches, start=1)
+        ]
         return StgGrepResult(
             doc_slug=doc_slug,
             pattern=pattern,
             is_regex=is_regex,
-            total_matches=len(matches),
-            matches=matches,
+            total_matches=len(hits),
+            hits=hits,
         )
 
     async def stg_patch(
@@ -301,12 +322,13 @@ class CorpusStagingTools:
         limit: int = 5,
         path_prefix: str | None = None,
     ) -> StgPollPendingResult:
-        await self._ensure_session(doc_slug)
+        session = await self._ensure_session(doc_slug)
         configured_limit = get_staging_poll_limit()
         clamped_limit = min(limit or configured_limit, configured_limit)
         chunks, stats = self._staging.poll_pending_chunks(
             doc_slug=doc_slug, limit=clamped_limit, path_prefix=path_prefix
         )
+        groups = group_pending_chunks(chunks=chunks, session=session)
         stats_dict = dict(stats)
         progress_stats = ChunkProgressStats.model_validate(stats_dict)
         pending_val = int(str(stats.get("pending_count", 0)))
@@ -315,7 +337,8 @@ class CorpusStagingTools:
             progress=progress_stats,
             limit=clamped_limit,
             has_more=pending_val > len(chunks),
-            chunks=chunks,
+            returned_chunks=len(chunks),
+            groups=groups,
         )
 
     async def stg_finalize_chunks(
@@ -406,61 +429,24 @@ class CorpusStagingTools:
             message=f"Phiên làm việc cho tài liệu '{doc_slug}' đã được mở lại ở trạng thái AMENDMENT. Các công cụ stg_patch, stg_add_edges, stg_finalize_chunks đã sẵn sàng.",
         )
 
-    async def stg_remove_edge(
+    async def stg_remove_edges(
         self,
         doc_slug: str,
-        source_path: str = "",
-        target_path: str | None = None,
-        relation_type: RelationTypeFilter | None = None,
-        clear_all_targets: bool = False,
-        edges: Sequence[StagingEdgeFilter | dict[str, object]] | None = None,
-    ) -> StgRemoveEdgeResult:
-        """Removes relational graph edge(s) from the staging session."""
+        edges: Sequence[StagingEdgeFilter | dict[str, object]],
+    ) -> StgRemoveEdgesResult:
+        """Removes relational graph edge(s) matching filters from the staging session."""
         await self._ensure_session(doc_slug)
-
-        if edges:
-            session, removed_count = self._staging.remove_edges(
-                doc_slug=doc_slug,
-                filters=edges,
-                actor="AGENT",
-            )
-            target_repr = f"{len(edges)} edge filter(s)"
-        else:
-            if not source_path:
-                raise CorpusDomainError(
-                    error_code=E_AST_GROUNDING_VALIDATION,
-                    message="Bắt buộc phải cung cấp 'source_path' hoặc danh sách 'edges' khi xóa cạnh quan hệ đồ thị.",
-                    data={"doc_slug": doc_slug},
-                )
-            if not target_path and not clear_all_targets:
-                raise CorpusDomainError(
-                    error_code=E_AST_GROUNDING_VALIDATION,
-                    message=(
-                        f"Thao tác xóa cạnh từ '{source_path}' yêu cầu phải chỉ định 'target_path' "
-                        "để xác định đúng cạnh cần xóa. Nếu thực sự muốn xóa toàn bộ mọi cạnh xuất phát từ nút này, "
-                        "bắt buộc phải đặt 'clear_all_targets=True'."
-                    ),
-                    data={"doc_slug": doc_slug, "source_path": source_path},
-                )
-            flt = StagingEdgeFilter(
-                source_path=source_path,
-                target_path=target_path,
-                relation_type=relation_type,
-                clear_all_targets=clear_all_targets,
-            )
-            session, removed_count = self._staging.remove_edges(
-                doc_slug=doc_slug,
-                filters=[flt],
-                actor="AGENT",
-            )
-            target_repr = target_path or ("all targets" if clear_all_targets else "unknown")
-
-        return StgRemoveEdgeResult(
+        session, removed_count = self._staging.remove_edges(
+            doc_slug=doc_slug,
+            filters=edges,
+            actor="AGENT",
+        )
+        return StgRemoveEdgesResult(
             doc_slug=doc_slug,
             status="SUCCESS",
             removed_count=removed_count,
             total_edges=len(session.edges),
-            message=f"Removed {removed_count} edge(s) from '{source_path or 'batch'}' to '{target_repr}' ({relation_type or 'ANY'}).",
+            message=f"Removed {removed_count} edge(s) matching {len(edges)} filter(s).",
         )
 
     async def stg_validate(self, doc_slug: str) -> dict[str, object]:

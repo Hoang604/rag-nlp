@@ -15,12 +15,11 @@ from rag_eval.exceptions import (
     E_INVALID_DOCUMENT_HIERARCHY,
     CorpusDomainError,
 )
-from rag_eval.retrieval.confidence import compute_search_confidence
 from rag_eval.retrieval.embedder import QueryEmbedder
+from rag_eval.retrieval.engine import RetrievalEngine
 from rag_eval.retrieval.reranker import CorpusReranker
 from rag_eval.schemas import (
     HierarchicalDirection,
-    HybridSearchQuery,
     VerbatimGrepQuery,
     validate_ltree_path,
 )
@@ -168,6 +167,18 @@ class CorpusRuntimeSensors:
         self._embedder = embedding_engine
         self._reranker = reranker
         self._rerank_by_default = rerank_by_default
+        self._engine: RetrievalEngine | None = None
+
+    async def _get_engine(self) -> RetrievalEngine:
+        repo = await self._get_repo()
+        if self._engine is None or self._engine._pool is not repo.pool:
+            self._engine = RetrievalEngine(
+                pool=repo.pool,
+                embedder=self._embedder,
+                reranker=self._reranker,
+                rerank_by_default=self._rerank_by_default,
+            )
+        return self._engine
 
     async def build_dynamic_corpus_manifest(self) -> str:
         """Constructs a markdown table of active documents in the corpus."""
@@ -200,11 +211,6 @@ class CorpusRuntimeSensors:
             self._pool = await get_db_pool()
         return CorpusRepository(self._pool)
 
-    async def _embed_query(self, query: str) -> list[float] | None:
-        if self._embedder is None:
-            return None
-        return await self._embedder.embed_query(query)
-
     async def hybrid_search(
         self,
         query: str,
@@ -215,34 +221,18 @@ class CorpusRuntimeSensors:
         rerank: bool | None = None,
         rerank_pool: int = RERANK_POOL,
     ) -> HybridSearchResult:
-        """Executes generalized dense+sparse hybrid retrieval via ChunkRepository."""
-        repo = await self._get_repo()
-        vector_param = await self._embed_query(query)
-
-        want_rerank = self._rerank_by_default if rerank is None else rerank
-        want_rerank = want_rerank and self._reranker is not None
-        fetch_limit = max(limit, rerank_pool) if want_rerank else limit
-
-        query_dto = HybridSearchQuery(
-            query_text=query,
-            query_vector=vector_param,
-            match_limit=fetch_limit,
-            rrf_k=60,
-            target_documents=doc_slugs or None,
-            path_prefix=path_prefix,
-            only_resolved=bool(only_resolved),
-            ts_config="simple",
-        )
-
+        """Executes generalized dense+sparse hybrid retrieval via RetrievalEngine."""
         try:
-            hits = await repo.chunks.hybrid_search(query_dto)
-
-            if want_rerank and self._reranker is not None and len(hits) > 1:
-                hits = await self._reranker.rerank(query, hits, top_k=limit)
-            else:
-                hits = hits[:limit]
-
-            confidence = compute_search_confidence(hits)
+            engine = await self._get_engine()
+            pipeline_result = await engine.search(
+                query=query,
+                limit=limit,
+                rerank=rerank,
+                rerank_pool=rerank_pool,
+                doc_slugs=doc_slugs,
+                path_prefix=path_prefix,
+                only_resolved=bool(only_resolved),
+            )
             agent_hits = [
                 AgentSearchHit(
                     doc_slug=h.doc_slug,
@@ -256,14 +246,14 @@ class CorpusRuntimeSensors:
                     is_all_refs_resolved=h.is_all_refs_resolved,
                     metadata=dict(h.metadata),
                 )
-                for h in hits
+                for h in pipeline_result.hits
             ]
 
             return HybridSearchResult(
                 total_hits=len(agent_hits),
                 hits=agent_hits,
-                confidence=confidence,
-                expanded_query=query,
+                confidence=pipeline_result.confidence,
+                expanded_query=pipeline_result.expanded_query,
             )
         except (OSError, RuntimeError, CorpusDomainError, TypeError, ValueError) as exc:
             logger.error("hybrid_search failed: %s", exc)

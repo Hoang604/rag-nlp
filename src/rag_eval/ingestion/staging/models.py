@@ -119,7 +119,7 @@ class RelationType(str, Enum):
 class StagingChunkDelta(BaseModel):
     """Dữ liệu cập nhật từng phần cho một chunk trong vùng đệm staging."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     path: str = Field(
         ...,
@@ -244,14 +244,17 @@ class RawTextWindow(BaseModel):
 class StagingGrepHit(BaseModel):
     """Represents a matched chunk hit from in-memory staging session grep."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
+    doc_slug: str = Field(..., description="Mã định danh doc_slug của tài liệu")
     path: str = Field(..., description="Đường dẫn phân cấp phân cách bằng dấu chấm (hierarchical dot-separated path)")
     field_matched: str = Field(..., description="'VERBATIM' | 'CONTEXT' | 'PATH' | 'METADATA'")
     match_snippet: str = Field(..., description="Concise snippet highlighting the matched term")
     verbatim_text: str = Field(..., description="Complete verbatim text of the chunk")
     contextualized_text: str = Field(..., description="Full context text")
-    char_length: int = Field(..., description="Character count of verbatim text")
+    start_line: int = Field(..., ge=1, description="Dòng bắt đầu trong văn bản nguồn")
+    end_line: int = Field(..., ge=1, description="Dòng kết thúc trong văn bản nguồn")
+    char_length: int = Field(..., ge=0, description="Character count of verbatim text")
     metadata: dict[str, object] = Field(default_factory=dict, description="Chunk metadata payload")
 
 
@@ -294,7 +297,7 @@ class StagingChunk(BaseModel):
 class StagingEdgeFilter(BaseModel):
     """Bộ lọc xác định các cạnh quan hệ đồ thị cần xóa trong vùng đệm staging."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     source_path: str = Field(
         ...,
@@ -511,14 +514,28 @@ class StgGetRawResult(BaseModel):
     content: str
 
 
-class StgGrepResult(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+class GrepHit(BaseModel):
+    """Targeted search hit highlighting matched terms in context without dumping entire provisions."""
 
-    doc_slug: str
-    pattern: str
-    is_regex: bool
-    total_matches: int
-    matches: list[StagingGrepHit]
+    model_config = ConfigDict(extra="forbid")
+
+    rank: int = Field(..., ge=1, description="Thứ tự kết quả khớp")
+    path: str = Field(..., description="Đường dẫn phân cấp của chunk")
+    doc_slug: str = Field(..., description="Mã tài liệu")
+    snippet: str = Field(..., description="Trích đoạn chứa từ khóa được bôi đậm")
+    field_matched: str = Field(..., description="Trường dữ liệu khớp ('VERBATIM' | 'CONTEXT' | 'PATH' | 'METADATA')")
+    start_line: int = Field(..., ge=1, description="Dòng bắt đầu")
+    end_line: int = Field(..., ge=1, description="Dòng kết thúc")
+
+
+class StgGrepResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    doc_slug: str | None = Field(None, description="Mã định danh doc_slug (hoặc None nếu quét toàn cục)")
+    pattern: str = Field(..., description="Cụm từ tìm kiếm hoặc Regex")
+    is_regex: bool = Field(False, description="Cờ Regex")
+    total_matches: int = Field(..., description="Tổng số kết quả khớp")
+    hits: list[GrepHit] = Field(default_factory=list, description="Danh sách kết quả khớp dạng snippet")
 
 
 class StgPatchResult(BaseModel):
@@ -561,14 +578,46 @@ class ChunkProgressStats(BaseModel):
     progress_percent: float = Field(..., description="Tỷ lệ tiến độ (%)")
 
 
+class PendingChunkLeaf(BaseModel):
+    """Lightweight leaf provision node for staging review stripped of redundant parent strings."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: str = Field(..., description="Đường dẫn phân cấp ltree đầy đủ của đoạn quy phạm")
+    verbatim_text: str = Field(..., description="Nội dung nguyên văn của đoạn quy phạm")
+    start_line: int = Field(..., ge=1, description="Dòng bắt đầu trong văn bản nguồn")
+    end_line: int = Field(..., ge=1, description="Dòng kết thúc trong văn bản nguồn")
+    context_type: ContextType | None = Field(
+        default=None,
+        description="Phân loại ngữ nghĩa: SELF_CONTAINED hoặc REQUIRES_EXTERNAL_CONTEXT",
+    )
+    justification: str | None = Field(
+        default=None,
+        description="Căn cứ thẩm định giải trình tính tự chứa hoặc tóm tắt phụ thuộc",
+    )
+
+
+class PendingChunkGroup(BaseModel):
+    """Group of leaf provisions sharing an immediate parent hierarchical context."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    parent_path: str = Field(..., description="Đường dẫn phân cấp ltree của cấp cha")
+    parent_context: str = Field(..., description="Tiêu đề và ngữ cảnh cha dùng chung cho cả nhóm")
+    chunks: list[PendingChunkLeaf] = Field(..., description="Danh sách các đoạn con trong nhóm")
+
+
 class StgPollPendingResult(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    """Hierarchically grouped pending chunks queue polling result."""
+
+    model_config = ConfigDict(extra="forbid")
 
     doc_slug: str = Field(..., description="Mã định danh slug của tài liệu")
     progress: ChunkProgressStats = Field(..., description="Thống kê tiến độ rà soát")
     limit: int = Field(..., description="Giới hạn số chunk trả về trong đợt này")
     has_more: bool = Field(..., description="Còn chunk chưa chốt hay không")
-    chunks: list[StagingChunk] = Field(..., description="Danh sách các chunk chờ xử lý")
+    returned_chunks: int = Field(..., ge=0, description="Tổng số chunk con được trả về trong đợt này")
+    groups: list[PendingChunkGroup] = Field(..., description="Các nhóm chunk kèm ngữ cảnh cha dùng chung")
 
 
 class ChunkFinalizeStatus(BaseModel):
@@ -623,13 +672,15 @@ class StgReopenResult(BaseModel):
     message: str = Field(..., description="Thông điệp kết quả")
 
 
-class StgRemoveEdgeResult(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+class StgRemoveEdgesResult(BaseModel):
+    """Kết quả phản hồi của thao tác xóa cạnh quan hệ đồ thị staging."""
+
+    model_config = ConfigDict(extra="forbid")
 
     doc_slug: str = Field(..., description="Mã định danh slug của tài liệu")
     status: str = Field("SUCCESS", description="Trạng thái thực thi")
-    removed_count: int = Field(default=1, description="Số lượng cạnh quan hệ đã xóa")
-    total_edges: int = Field(..., description="Tổng số cạnh quan hệ còn lại")
+    removed_count: int = Field(..., ge=0, description="Số lượng cạnh quan hệ đã xóa")
+    total_edges: int = Field(..., ge=0, description="Tổng số cạnh quan hệ còn lại")
     message: str = Field(..., description="Thông điệp kết quả")
 
 

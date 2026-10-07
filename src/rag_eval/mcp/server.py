@@ -128,11 +128,12 @@ def create_corpus_mcp_server(
 
 def map_domain_error_to_jsonrpc(err: CorpusDomainError) -> tuple[int, str, dict[str, object]]:
     """Maps internal domain errors to strict JSON-RPC 2.0 error specifications."""
-    code = (
-        -32602
-        if err.error_code in (E_AST_GROUNDING_VALIDATION, E_INVALID_DOCUMENT_HIERARCHY)
-        else -32603
-    )
+    if err.error_code < 0:
+        code = err.error_code
+    elif err.error_code in (E_AST_GROUNDING_VALIDATION, E_INVALID_DOCUMENT_HIERARCHY):
+        code = -32602
+    else:
+        code = -32603
     data = {"domain_code": err.error_code, **err.data}
     return code, err.message, data
 
@@ -161,42 +162,60 @@ class CorpusMCPServer:
         ]
 
     async def execute_tool(self, name: str, args: dict[str, object]) -> dict[str, object]:
-        logger.info("[TOOL] START name=%s args=%s", name, args)
+        canonical_name = name.removeprefix("mcp_corpus_")
+        logger.info("[TOOL] START name=%s (canonical=%s) args=%s", name, canonical_name, args)
         try:
-            res = await self.mcp_server.call_tool(name, args)
+            res = await self.mcp_server.call_tool(canonical_name, args)
         except Exception as exc:
             cause = getattr(exc, "__cause__", None) or exc
             if isinstance(cause, CorpusDomainError):
                 raise cause from exc
-            logger.error("[TOOL] ERROR name=%s: %s", name, exc)
+            logger.error("[TOOL] ERROR name=%s: %s", canonical_name, exc)
             raise CorpusDomainError(
-                error_code=E_AST_GROUNDING_VALIDATION if "value" in str(exc).lower() else E_CORPUS_INTEGRITY_VIOLATION,
+                error_code=E_CORPUS_INTEGRITY_VIOLATION,
                 message=str(cause),
-                data={"tool": name, "error": str(cause)},
+                data={"tool": canonical_name, "error": str(cause)},
             ) from exc
 
         if isinstance(res, CallToolResult) and res.is_error:
             err_msg = "\n".join(
                 c.text for c in res.content if isinstance(c, TextContent)
             )
-            logger.error("[TOOL] ERROR name=%s: %s", name, err_msg)
+            logger.error("[TOOL] ERROR name=%s: %s", canonical_name, err_msg)
+
+            err_code = E_AST_GROUNDING_VALIDATION
+            err_data: dict[str, object] | None = None
+            try:
+                parsed = json.loads(err_msg)
+                if isinstance(parsed, dict):
+                    raw_code = parsed.get("error_code") or parsed.get("code")
+                    if isinstance(raw_code, int):
+                        err_code = raw_code
+                    if isinstance(parsed.get("data"), dict):
+                        err_data = parsed["data"]
+                    if "message" in parsed and isinstance(parsed["message"], str):
+                        err_msg = parsed["message"]
+            except (json.JSONDecodeError, ValueError):
+                pass
+
             raise CorpusDomainError(
-                error_code=E_AST_GROUNDING_VALIDATION,
-                message=err_msg or f"Error executing tool '{name}'",
+                error_code=err_code,
+                message=err_msg or f"Error executing tool '{canonical_name}'",
+                data=err_data or {"tool": canonical_name},
             )
         if isinstance(res, CallToolResult):
             for item in res.content:
                 if isinstance(item, TextContent):
                     try:
                         parsed = json.loads(item.text)
-                        logger.info("[TOOL] SUCCESS name=%s", name)
+                        logger.info("[TOOL] SUCCESS name=%s", canonical_name)
                         if isinstance(parsed, dict):
                             return parsed
                         return {"result": parsed}
                     except (json.JSONDecodeError, ValueError):
-                        logger.info("[TOOL] SUCCESS name=%s (raw text)", name)
+                        logger.info("[TOOL] SUCCESS name=%s (raw text)", canonical_name)
                         return {"result": item.text}
-        logger.info("[TOOL] SUCCESS name=%s (empty)", name)
+        logger.info("[TOOL] SUCCESS name=%s (empty)", canonical_name)
         return {}
 
     async def handle_request_dict(self, req: dict[str, object]) -> dict[str, object] | None:
@@ -260,9 +279,10 @@ class CorpusMCPServer:
                 return {"jsonrpc": "2.0", "id": req_id, "result": out}
 
             all_tool_names = {t.name for t in await self.mcp_server.list_tools()}
-            if method in all_tool_names:
+            clean_method = method.removeprefix("mcp_corpus_")
+            if clean_method in all_tool_names:
                 args = params if isinstance(params, dict) else {}
-                out = await self.execute_tool(method, args)
+                out = await self.execute_tool(clean_method, args)
                 return {"jsonrpc": "2.0", "id": req_id, "result": out}
 
             return {
@@ -331,7 +351,7 @@ def run_mcp_server(log_file: str | None = None) -> None:
         logger.warning("[SIGNAL] Caught signal %s (%d) on pid=%d, ppid=%d. Unwinding cleanly...", signame, signum, os.getpid(), os.getppid())
         for h in list(logger.handlers) + list(logging.getLogger().handlers):
             h.flush()
-        raise KeyboardInterrupt(f"Received signal {signame}")
+        sys.exit(0)
 
     try:
         signal.signal(signal.SIGTERM, _sig_handler)

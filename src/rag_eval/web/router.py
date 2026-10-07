@@ -545,19 +545,25 @@ async def delete_staging_edge(
             detail="Must provide target_path to identify the edge, or set clear_all_targets=True.",
         )
 
-    mgr.remove_edge(
-        doc_slug=doc_slug,
+    from rag_eval.ingestion.staging.models import StagingEdgeFilter
+
+    flt = StagingEdgeFilter(
         source_path=source_path,
         target_path=target_path,
         relation_type=relation_type,
         clear_all_targets=clear_all_targets,
+    )
+    _session, removed_count = mgr.remove_edges(
+        doc_slug=doc_slug,
+        filters=[flt],
         actor="HUMAN:reviewer",
     )
     return GenericSuccessResponse(
         status="SUCCESS",
-        message=f"Edge '{source_path}' -> '{target_path or 'all'}' removed successfully.",
+        message=f"Removed {removed_count} edge(s) from '{source_path}'.",
         doc_slug=doc_slug,
     )
+
 
 
 @router.post("/staging/{doc_slug}/status", response_model=StagingSessionDetailResponse)
@@ -673,11 +679,14 @@ async def grep_staging_session(
     )
     hit_responses = [
         StagingGrepHitResponse(
+            doc_slug=h.doc_slug,
             path=h.path,
             field_matched=h.field_matched,
             match_snippet=h.match_snippet,
             verbatim_text=h.verbatim_text,
             contextualized_text=h.contextualized_text,
+            start_line=h.start_line,
+            end_line=h.end_line,
             char_length=h.char_length,
             metadata=h.metadata,
         )
