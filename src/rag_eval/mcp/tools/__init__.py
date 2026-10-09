@@ -28,8 +28,6 @@ from rag_eval.ingestion.staging.models import (
     StgListSessionsResult,
     StgPatchResult,
     StgPollPendingResult,
-    StgPreviewHit,
-    StgPreviewResult,
     StgRemoveEdgesResult,
     StgReopenResult,
     StgUnfinalizeResult,
@@ -146,20 +144,6 @@ class CorpusMCPTools:
         return await self._sensors.corpus_backlog_poll(
             doc_slug=doc_slug,
             limit=limit,
-        )
-
-    async def stg_preview(
-        self,
-        doc_slug: str,
-        path_prefix: str | None = None,
-        limit: int = 50,
-        offset: int = 0,
-    ) -> StgPreviewResult:
-        return await self._staging.stg_preview(
-            doc_slug=doc_slug,
-            path_prefix=path_prefix,
-            limit=limit,
-            offset=offset,
         )
 
     async def stg_get_chunk(self, doc_slug: str, path: str) -> StgGetChunkResult:
@@ -330,8 +314,6 @@ __all__ = [
     "StgListSessionsResult",
     "StgPatchResult",
     "StgPollPendingResult",
-    "StgPreviewHit",
-    "StgPreviewResult",
     "StgRemoveEdgesResult",
     "StgReopenResult",
     "StgReparentResult",

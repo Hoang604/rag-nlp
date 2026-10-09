@@ -40,22 +40,26 @@ def _setup_test_session(
 
 
 @pytest.mark.asyncio
-async def test_bounded_poll_pending_clamps_to_env_limit(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Verifies that stg_poll_pending_chunks strictly clamps requested limit by STAGING_POLL_LIMIT."""
-    monkeypatch.setenv("STAGING_POLL_LIMIT", "2")
+async def test_bounded_poll_pending_clamps_to_max_limit(tmp_path: Path) -> None:
+    """Verifies that stg_poll_pending_chunks strictly clamps requested limit to [1, 15] with default 10."""
     mgr, tools = _setup_test_session(
-        tmp_path, "doc_poll", raw_text="# S1\n\nP1\n\n# S2\n\nP2\n\n# S3\n\nP3"
+        tmp_path, "doc_poll", raw_text="\n\n".join(f"# S{i}\n\nP{i}" for i in range(1, 25))
     )
 
-    # Request limit=10 when configured ceiling is 2
-    res = await tools.stg_poll_pending_chunks(doc_slug="doc_poll", limit=10)
-    assert res.limit == 2
-    assert res.returned_chunks == 2
-    assert len(res.groups) > 0
-    total_in_groups = sum(len(g.chunks) for g in res.groups)
-    assert total_in_groups == 2
+    # Request limit=50 when ceiling is 15
+    res = await tools.stg_poll_pending_chunks(doc_slug="doc_poll", limit=50)
+    assert res.limit == 15
+    assert res.returned_chunks == 15
+
+    # Request limit=0 (or below min 1)
+    res_min = await tools.stg_poll_pending_chunks(doc_slug="doc_poll", limit=0)
+    assert res_min.limit == 1
+    assert res_min.returned_chunks == 1
+
+    # Request default limit
+    res_def = await tools.stg_poll_pending_chunks(doc_slug="doc_poll")
+    assert res_def.limit == 10
+    assert res_def.returned_chunks == 10
 
     # Verify that queue polling never mutates inspected_paths
     session = mgr.load_session("doc_poll")

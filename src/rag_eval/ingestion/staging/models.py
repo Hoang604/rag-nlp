@@ -39,17 +39,9 @@ def _resolve_default_staging_dir() -> Path:
 DEFAULT_STAGING_DIR = _resolve_default_staging_dir()
 
 
-def get_staging_poll_limit() -> int:
-    """Reads STAGING_POLL_LIMIT (or STAGING_BATCH_SIZE) from env, bounded to [1, 50], default 5."""
-    import os
-
-    raw = os.environ.get("STAGING_POLL_LIMIT") or os.environ.get("STAGING_BATCH_SIZE")
-    if raw:
-        try:
-            return max(1, min(int(raw), 50))
-        except ValueError:
-            pass
-    return 5
+DEFAULT_STAGING_POLL_LIMIT = 10
+MAX_STAGING_POLL_LIMIT = 15
+MIN_STAGING_POLL_LIMIT = 1
 
 
 def deep_merge_dict(base: dict[str, object], delta: dict[str, object]) -> dict[str, object]:
@@ -472,29 +464,6 @@ RelationTypeFilter = Literal[
     "",
 ]
 
-
-class StgPreviewHit(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    path: str
-    preview_text: str
-    char_length: int = 0
-    is_truncated: bool = False
-    metadata: dict[str, object] = Field(default_factory=dict)
-
-
-class StgPreviewResult(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    doc_slug: str
-    title: str
-    total_chunks: int
-    total_edges: int
-    total_matched: int = 0
-    limit: int = 50
-    offset: int = 0
-    has_more: bool = False
-    chunks: list[StgPreviewHit]
 
 
 class StgGetChunkResult(BaseModel):

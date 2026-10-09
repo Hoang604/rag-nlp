@@ -194,6 +194,140 @@ def ingest(
         raise typer.Exit(code=1) from exc
 
 
+@app.command(name="ingest-all")
+def ingest_all(
+    dir_path: Annotated[
+        Path | None,
+        typer.Argument(
+            help="Directory containing document files to ingest sequentially (defaults to 'data')",
+        ),
+    ] = None,
+    dir_option: Annotated[
+        Path | None,
+        typer.Option(
+            "--dir",
+            "-d",
+            help="Alternative flag to specify directory containing document files",
+        ),
+    ] = None,
+    pattern: Annotated[
+        str,
+        typer.Option(
+            "--pattern",
+            "-p",
+            help="File glob pattern to match within directory (defaults to '*')",
+        ),
+    ] = "*",
+    skip_existing: Annotated[
+        bool,
+        typer.Option(
+            "--skip-existing/--overwrite",
+            help="Skip files that already have an existing staging session",
+        ),
+    ] = True,
+    stop_on_error: Annotated[
+        bool,
+        typer.Option(
+            "--stop-on-error/--continue-on-error",
+            help="Halt execution immediately on first ingestion failure",
+        ),
+    ] = False,
+) -> None:
+    """Sequentially ingest all supported documents in a directory into staging sessions."""
+    from rag_eval.exceptions import CorpusDomainError
+    from rag_eval.schemas import sanitize_ltree_label
+
+    target_dir = dir_option or dir_path or Path("data")
+    if not target_dir.exists() or not target_dir.is_dir():
+        console.print(f"[red]Error:[/red] Directory '{target_dir}' does not exist or is not a directory.")
+        raise typer.Exit(code=1)
+
+    supported_extensions = {
+        ".pdf",
+        ".docx",
+        ".md",
+        ".markdown",
+        ".mdown",
+        ".html",
+        ".htm",
+        ".txt",
+        ".text",
+    }
+
+    files = [
+        p
+        for p in sorted(target_dir.glob(pattern), key=lambda p: p.name.lower())
+        if p.is_file() and not p.name.startswith(".") and p.suffix.lower() in supported_extensions
+    ]
+
+    if not files:
+        console.print(
+            f"[yellow]No supported document files found in '{target_dir}' with pattern '{pattern}'.[/yellow]"
+        )
+        return
+
+    console.print(
+        f"[cyan]Found {len(files)} document(s) in '{target_dir}' to ingest sequentially...[/cyan]"
+    )
+
+    manager = StagingManager()
+    success_count = 0
+    skipped_count = 0
+    failed_count = 0
+    total_chunks = 0
+    total_edges = 0
+
+    for idx, file_path in enumerate(files, start=1):
+        doc_slug = sanitize_ltree_label(file_path.stem)
+        doc_title = file_path.stem
+
+        if manager.session_exists(doc_slug):
+            if skip_existing:
+                console.print(
+                    f"[yellow]({idx}/{len(files)}) Skipping '{file_path.name}' "
+                    f"(staging session '{doc_slug}' already exists).[/yellow]"
+                )
+                skipped_count += 1
+                continue
+            console.print(
+                f"[yellow]({idx}/{len(files)}) Overwriting existing staging session '{doc_slug}'...[/yellow]"
+            )
+            manager.delete_session(doc_slug)
+
+        console.print(
+            f"[cyan]({idx}/{len(files)}) Ingesting '{file_path.name}' as '{doc_slug}'...[/cyan]"
+        )
+        try:
+            session = manager.create_session_from_file(
+                doc_slug=doc_slug,
+                title=doc_title,
+                file_path=file_path,
+            )
+            chunks_count = len(session.chunks)
+            edges_count = len(session.edges)
+            total_chunks += chunks_count
+            total_edges += edges_count
+            success_count += 1
+            console.print(
+                f"[green]✔ ({idx}/{len(files)}) Successfully ingested '{session.doc_slug}' "
+                f"({chunks_count} chunks, {edges_count} edges).[/green]"
+            )
+        except (CorpusDomainError, Exception) as exc:
+            failed_count += 1
+            msg = exc.message if isinstance(exc, CorpusDomainError) else str(exc)
+            console.print(f"[red]✖ ({idx}/{len(files)}) Error ingesting '{file_path.name}':[/red] {msg}")
+            if stop_on_error:
+                raise typer.Exit(code=1) from exc
+
+    console.print(
+        f"[bold green]✔ Ingest completed: {success_count} succeeded "
+        f"({total_chunks} chunks, {total_edges} edges), "
+        f"{skipped_count} skipped, {failed_count} failed.[/bold green]"
+    )
+    if failed_count > 0:
+        raise typer.Exit(code=1)
+
+
 @app.command(name="server")
 def server(
     log_file: Annotated[
@@ -215,7 +349,7 @@ def tool(
     tool_name: Annotated[
         str,
         typer.Argument(
-            help="Name of the MCP tool to execute (e.g. hybrid_search, stg_preview, stg_commit)"
+            help="Name of the MCP tool to execute (e.g. hybrid_search, stg_poll_pending, stg_commit)"
         ),
     ],
     args: Annotated[
@@ -354,6 +488,7 @@ def ui(
     """Launch the Human-in-the-Loop Staging Reviewer Web Application."""
     import shutil
     import subprocess
+    import sys
     import threading
     import time
     import webbrowser
@@ -375,8 +510,19 @@ def ui(
             "[cyan]Building frontend SPA assets (dist/ missing)...[/cyan]"
         )
         try:
-            subprocess.run([npm, "install"], cwd=str(frontend_dir), check=True)
-            subprocess.run([npm, "run", "build"], cwd=str(frontend_dir), check=True)
+            is_win = sys.platform == "win32"
+            subprocess.run(
+                [npm, "install"],
+                cwd=str(frontend_dir),
+                check=True,
+                shell=is_win,
+            )
+            subprocess.run(
+                [npm, "run", "build"],
+                cwd=str(frontend_dir),
+                check=True,
+                shell=is_win,
+            )
             console.print(
                 "[green]✔ Successfully built frontend SPA bundle into dist/.[/green]"
             )

@@ -37,6 +37,7 @@ from rag_eval.schemas import (
     sanitize_ltree_label,
     validate_ltree_path,
 )
+from rag_eval.text import find_normalized_span, normalize_whitespace
 
 
 def apply_chunk_deltas_to_session(
@@ -102,6 +103,7 @@ def apply_chunk_deltas_to_session(
                     new_chunk.metadata["justification"] = delta.justification
                     new_chunk.metadata["finalization_justification"] = delta.justification
                 chunk_map[clean_p] = new_chunk
+                session.inspected_paths.add(clean_p)
                 fields_modified_set.add("created")
                 continue
             raise CorpusDomainError(
@@ -117,7 +119,6 @@ def apply_chunk_deltas_to_session(
                 chunk.char_length = len(delta.verbatim_text)
                 chunk.review_status = ChunkReviewStatus.PENDING
                 chunk.finalization_state = FinalizationState.UNFINALIZED
-                session.inspected_paths.discard(clean_p)
                 fields_modified_set.add("verbatim_text")
                 fields_modified_set.add("review_status")
 
@@ -158,7 +159,11 @@ def apply_chunk_deltas_to_session(
             fields_modified_set.add("metadata")
 
         if delta.context_type is not None:
-            chunk.context_type = delta.context_type
+            if delta.context_type != chunk.context_type:
+                chunk.context_type = delta.context_type
+                chunk.review_status = ChunkReviewStatus.PENDING
+                chunk.finalization_state = FinalizationState.UNFINALIZED
+                fields_modified_set.add("review_status")
             fields_modified_set.add("context_type")
 
         if delta.justification is not None:
@@ -171,6 +176,8 @@ def apply_chunk_deltas_to_session(
             base_dict["finalization_justification"] = delta.justification
             chunk.metadata = base_dict
             fields_modified_set.add("metadata")
+
+        session.inspected_paths.add(clean_p)
 
     if cascade_breadcrumbs and deltas:
         updated_paths = {
@@ -526,12 +533,28 @@ def validate_and_attach_edges_to_session(
                 data={"doc_slug": session.doc_slug, "path": clean_src},
             )
 
-        if clean_tgt.startswith(f"{doc_prefix}.") and clean_tgt not in valid_paths:
-            raise CorpusDomainError(
-                error_code=E_AST_GROUNDING_VALIDATION,
-                message=f"Invalid edge target path '{clean_tgt}': intra-document target does not exist in staged document '{session.doc_slug}'.",
-                data={"doc_slug": session.doc_slug, "target_path": clean_tgt},
-            )
+        prefix = f"{clean_tgt}."
+        matching_leaves = [p for p in valid_paths if p.startswith(prefix) and p != clean_src]
+
+        if clean_tgt not in valid_paths:
+            if matching_leaves:
+                resolved_targets = sorted(matching_leaves)
+            elif clean_tgt.startswith(f"{doc_prefix}."):
+                if any(p == clean_src for p in valid_paths if p.startswith(prefix)):
+                    raise CorpusDomainError(
+                        error_code=E_AST_GROUNDING_VALIDATION,
+                        message=f"Self-referencing edge loop detected on '{clean_src}'.",
+                        data={"doc_slug": session.doc_slug, "path": clean_src},
+                    )
+                raise CorpusDomainError(
+                    error_code=E_AST_GROUNDING_VALIDATION,
+                    message=f"Invalid edge target path '{clean_tgt}': intra-document target does not exist in staged document '{session.doc_slug}'.",
+                    data={"doc_slug": session.doc_slug, "target_path": clean_tgt},
+                )
+            else:
+                resolved_targets = [clean_tgt]
+        else:
+            resolved_targets = [clean_tgt]
 
         # Deterministic anchor text resolution
         if new_edge.anchor_text is not None and (new_edge.char_start is None or new_edge.char_end is None):
@@ -541,8 +564,8 @@ def validate_and_attach_edges_to_session(
                     message=f"Invalid edge source path '{clean_src}': path does not exist in staged document '{session.doc_slug}'.",
                     data={"doc_slug": session.doc_slug, "source_path": clean_src},
                 )
-            idx = src_chunk.verbatim_text.find(new_edge.anchor_text)
-            if idx == -1:
+            span = find_normalized_span(src_chunk.verbatim_text, new_edge.anchor_text)
+            if span is None:
                 raise CorpusDomainError(
                     error_code=E_AST_GROUNDING_VALIDATION,
                     message=(
@@ -555,8 +578,7 @@ def validate_and_attach_edges_to_session(
                         "anchor_text": new_edge.anchor_text,
                     },
                 )
-            new_edge.char_start = idx
-            new_edge.char_end = idx + len(new_edge.anchor_text)
+            new_edge.char_start, new_edge.char_end = span
 
         # Boundary checks when char_start and char_end are present
         if new_edge.char_start is not None and new_edge.char_end is not None:
@@ -584,7 +606,7 @@ def validate_and_attach_edges_to_session(
                 )
             if new_edge.anchor_text is not None:
                 actual_snippet = src_chunk.verbatim_text[new_edge.char_start : new_edge.char_end]
-                if actual_snippet != new_edge.anchor_text:
+                if normalize_whitespace(actual_snippet) != normalize_whitespace(new_edge.anchor_text):
                     raise CorpusDomainError(
                         error_code=E_AST_GROUNDING_VALIDATION,
                         message=(
@@ -599,15 +621,17 @@ def validate_and_attach_edges_to_session(
                         },
                     )
 
-        new_edge.source_path = clean_src
-        new_edge.target_path = clean_tgt
-        rel_str = (
-            new_edge.relation_type.value
-            if hasattr(new_edge.relation_type, "value")
-            else str(new_edge.relation_type)
-        )
-        key = (clean_src, clean_tgt, rel_str, new_edge.char_start, new_edge.char_end)
-        existing_edges[key] = new_edge
+        for tgt_path in resolved_targets:
+            edge_copy = new_edge.model_copy()
+            edge_copy.source_path = clean_src
+            edge_copy.target_path = tgt_path
+            rel_str = (
+                edge_copy.relation_type.value
+                if hasattr(edge_copy.relation_type, "value")
+                else str(edge_copy.relation_type)
+            )
+            key = (clean_src, tgt_path, rel_str, edge_copy.char_start, edge_copy.char_end)
+            existing_edges[key] = edge_copy
 
     session.edges = list(existing_edges.values())
     now = applied_at or datetime.datetime.now(datetime.UTC)

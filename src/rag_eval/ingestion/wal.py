@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import datetime
-import fcntl
 import hashlib
 import json
 import logging
@@ -10,6 +9,7 @@ from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
 
+import filelock
 from pydantic import BaseModel, ConfigDict, Field
 
 from rag_eval.exceptions import E_CORPUS_INTEGRITY_VIOLATION, CorpusDomainError
@@ -167,7 +167,7 @@ class WALSessionStore:
             )
 
             tmp_wal = self.session_dir / f"wal.jsonl.tmp.{os.getpid()}"
-            with open(tmp_wal, "w", encoding="utf-8") as f:
+            with open(tmp_wal, "w", encoding="utf-8", newline="\n") as f:
                 f.write(rec_0.model_dump_json() + "\n")
                 f.flush()
                 os.fsync(f.fileno())
@@ -205,15 +205,11 @@ class WALSessionStore:
 
     @contextmanager
     def _lock_session(self) -> Generator[None]:
-        """Advisory POSIX file locking ensuring strictly monotonic LSN under concurrent appends."""
+        """Cross-platform advisory file locking ensuring strictly monotonic LSN under concurrent appends."""
         lock_file_path = self.session_dir / ".wal.lock"
         self.session_dir.mkdir(parents=True, exist_ok=True)
-        with open(lock_file_path, "a+", encoding="utf-8") as lock_file:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        with filelock.FileLock(str(lock_file_path)):
+            yield
 
     def get_head_lsn(self) -> int:
         """Returns the highest LSN written in wal.jsonl in O(1) amortized time, or -1 if empty."""
@@ -296,7 +292,7 @@ class WALSessionStore:
             self.apply_record_to_session(session, record)
 
             line = record.model_dump_json() + "\n"
-            with open(self.wal_file, "a", encoding="utf-8") as f:
+            with open(self.wal_file, "a", encoding="utf-8", newline="\n") as f:
                 f.write(line)
                 f.flush()
                 os.fsync(f.fileno())
@@ -491,7 +487,7 @@ class WALSessionStore:
                     tgt = flt.get("target_path")
                     if not clear_all and not tgt:
                         continue
-                    if tgt is not None and e.target_path != tgt:
+                    if tgt is not None and e.target_path != tgt and not e.target_path.startswith(f"{tgt}."):
                         continue
                     return True
                 return False

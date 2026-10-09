@@ -654,7 +654,8 @@ class StagingManager:
                 else 0.0
             ),
         }
-        return pending_chunks[:limit], stats
+        clamped_limit = max(1, min(limit, 15))
+        return pending_chunks[:clamped_limit], stats
 
     def reopen_session_for_amendment(
         self,

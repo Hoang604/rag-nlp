@@ -4,7 +4,6 @@ import datetime
 from collections.abc import Sequence
 
 import asyncpg
-from pydantic import BaseModel
 
 from rag_eval.exceptions import (
     E_AST_GROUNDING_VALIDATION,
@@ -13,6 +12,9 @@ from rag_eval.exceptions import (
 )
 from rag_eval.ingestion.staging.manager import StagingManager, group_pending_chunks
 from rag_eval.ingestion.staging.models import (
+    DEFAULT_STAGING_POLL_LIMIT,
+    MAX_STAGING_POLL_LIMIT,
+    MIN_STAGING_POLL_LIMIT,
     ChunkFinalizeStatus,
     ChunkProgressStats,
     ChunkReviewStatus,
@@ -34,13 +36,10 @@ from rag_eval.ingestion.staging.models import (
     StgListSessionsResult,
     StgPatchResult,
     StgPollPendingResult,
-    StgPreviewHit,
-    StgPreviewResult,
     StgRemoveEdgesResult,
     StgReopenResult,
     StgReparentResult,
     StgUnfinalizeResult,
-    get_staging_poll_limit,
 )
 from rag_eval.ingestion.staging.session import StagingDocumentSession
 from rag_eval.schemas import (
@@ -74,46 +73,6 @@ class CorpusStagingTools:
             doc_slug=doc_slug, pool=await self._get_pool()
         )
 
-    async def stg_preview(
-        self,
-        doc_slug: str,
-        path_prefix: str | None = None,
-        limit: int = 50,
-        offset: int = 0,
-    ) -> StgPreviewResult:
-        session = await self._ensure_session(doc_slug)
-        chunks = session.chunks
-        if path_prefix:
-            clean_pre = validate_ltree_path(path_prefix)
-            chunks = [c for c in chunks if c.path.startswith(clean_pre)]
-
-        total_matched = len(chunks)
-        windowed_chunks = chunks[offset : offset + limit]
-        has_more = (offset + limit) < total_matched
-
-        preview_hits = [
-            StgPreviewHit(
-                path=c.path,
-                preview_text=c.verbatim_text[:120] + ("..." if len(c.verbatim_text) > 120 else ""),
-                char_length=c.char_length or len(c.verbatim_text),
-                is_truncated=len(c.verbatim_text) > 120,
-                metadata=(c.metadata.model_dump() if isinstance(c.metadata, BaseModel) else dict(c.metadata or {})),
-            )
-            for c in windowed_chunks
-        ]
-
-        return StgPreviewResult(
-            doc_slug=session.doc_slug,
-            title=session.title,
-            total_chunks=len(session.chunks),
-            total_edges=len(session.edges),
-            total_matched=total_matched,
-            limit=limit,
-            offset=offset,
-            has_more=has_more,
-            chunks=preview_hits,
-        )
-
     async def stg_get_chunk(self, doc_slug: str, path: str) -> StgGetChunkResult:
         session = await self._ensure_session(doc_slug)
         clean_path = validate_ltree_path(path)
@@ -130,6 +89,28 @@ class CorpusStagingTools:
     async def stg_get_raw(
         self, doc_slug: str, start_line: int = 1, end_line: int = 100
     ) -> StgGetRawResult:
+        if end_line < start_line:
+            raise CorpusDomainError(
+                error_code=E_AST_GROUNDING_VALIDATION,
+                message=f"Dòng kết thúc end_line ({end_line}) không được nhỏ hơn dòng bắt đầu start_line ({start_line}).",
+                data={"doc_slug": doc_slug, "start_line": start_line, "end_line": end_line},
+            )
+        window_size = end_line - start_line + 1
+        if window_size > 200:
+            raise CorpusDomainError(
+                error_code=E_AST_GROUNDING_VALIDATION,
+                message=(
+                    f"Cửa sổ dòng yêu cầu ({window_size} dòng) vượt quá giới hạn tối đa cho phép "
+                    f"là 200 dòng (từ dòng {start_line} đến {end_line})."
+                ),
+                data={
+                    "doc_slug": doc_slug,
+                    "start_line": start_line,
+                    "end_line": end_line,
+                    "window_size": window_size,
+                    "max_allowed": 200,
+                },
+            )
         session = await self._ensure_session(doc_slug)
         window = session.get_raw_window(start_line=start_line, end_line=end_line)
         self._staging.save_session(session)
@@ -319,15 +300,17 @@ class CorpusStagingTools:
     async def stg_poll_pending_chunks(
         self,
         doc_slug: str,
-        limit: int = 5,
+        limit: int = DEFAULT_STAGING_POLL_LIMIT,
         path_prefix: str | None = None,
     ) -> StgPollPendingResult:
         session = await self._ensure_session(doc_slug)
-        configured_limit = get_staging_poll_limit()
-        clamped_limit = min(limit or configured_limit, configured_limit)
+        clamped_limit = max(MIN_STAGING_POLL_LIMIT, min(limit, MAX_STAGING_POLL_LIMIT))
         chunks, stats = self._staging.poll_pending_chunks(
             doc_slug=doc_slug, limit=clamped_limit, path_prefix=path_prefix
         )
+        for c in chunks:
+            session.inspected_paths.add(c.path)
+        self._staging.save_session(session)
         groups = group_pending_chunks(chunks=chunks, session=session)
         stats_dict = dict(stats)
         progress_stats = ChunkProgressStats.model_validate(stats_dict)

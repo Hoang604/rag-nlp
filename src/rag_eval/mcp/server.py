@@ -44,26 +44,34 @@ class FlushingFileHandler(logging.FileHandler):
 SERVER_NAME = "rag-corpus-mcp"
 SERVER_VERSION = "3.0.0"
 
-STATIC_SERVER_INSTRUCTIONS = """# RAG CORPUS RETRIEVAL & STAGING PRINCIPLES
+STATIC_SERVER_INSTRUCTIONS = """# RAG CORPUS PROTOCOL & STAGING INVARIANTS
 
-## 1. DATA MODEL
-- HIERARCHICAL STRUCTURE: `Document -> Segment -> Sub-segment...` represented via dot-separated hierarchical paths (e.g. `doc_slug.sec_1.para_2`).
-- LEAF NODE RETRIEVAL: System indexes and retrieves chunks at leaf level with verbatim and contextualized text.
+## 1. MENTAL & TOPOLOGICAL MODEL
+- HIERARCHY: Documents form a strict tree `Document -> Segment -> Sub-segment...` with dot-separated hierarchical paths (e.g. `doc_slug.sec_1.para_2`).
+- KNOWLEDGE GRAPH: Directed relations interlink chunks across hierarchy boundaries to preserve cross-cutting semantic dependencies.
+- LEAF INDEXING: Retrieval and curation operate on leaf chunks containing verbatim source text and contextualized ancestry text.
 
-## 2. DUAL RETRIEVAL STRATEGY
-When investigating questions or documents, emit parallel retrieval calls:
-- `hybrid_search`: Combines semantic vector relevance and exact keyword matching.
-- `verbatim_grep`: Deterministic exact string and regular expression pattern matching.
+## 2. RETRIEVAL & CONTEXT EXPANSION PRINCIPLE
+Retrieval direction is governed by token specificity and contextual completeness:
+- Token Specificity: Exact alphanumeric identifiers and literal phrases demand deterministic pattern matching (`verbatim_grep`); thematic and conceptual inquiries demand hybrid semantic relevance (`hybrid_search`).
+- Contextual Expansion: When a retrieved chunk possesses an unresolved referential deficit, expand locally along the hierarchical tree (`hierarchical_navigate`) or follow semantic relations through the knowledge graph (`graph_traverse`) rather than issuing ungrounded global queries.
 
-## 3. STRICT CITATION & GROUNDING
-- Every conclusion must be grounded explicitly in retrieved chunks with hierarchical path citations.
-- Tool responses are the single authoritative source of truth. If no chunks match the query, state absence clearly.
+## 3. GROUNDING & AUTHORITATIVE CITATION CONTRACT
+- Every claim, inference, or synthesis must be explicitly grounded in retrieved leaf chunks and cited via exact hierarchical paths.
+- Tool responses are the sole source of truth. When no retrieved chunk grounds an answer, affirm the absence of data explicitly; never extrapolate or hallucinate ungrounded facts.
 
-## 4. STAGING REVIEW & INGESTION CONTRACT
-- Mandatory inspection: Chunks must be inspected via `stg_get_chunk` or `stg_get_raw` before finalization.
-- Semantic classification: Chunks must be classified as `SELF_CONTAINED` or `REQUIRES_EXTERNAL_CONTEXT` via `stg_patch`.
-- Relational consistency: `SELF_CONTAINED` chunks must have zero outgoing relation edges; `REQUIRES_EXTERNAL_CONTEXT` chunks must have at least one outgoing relation edge attached via `stg_add_edges`.
-- Finalization gate: Chunks are finalized exclusively via `stg_finalize_chunks` once all invariants are satisfied."""
+## 4. STAGING CURATION & TOPOLOGICAL INVARIANTS
+### Semantic Classification Principles
+- The Isolation Rule: Evaluate each chunk as if the rest of the document does not exist. A chunk is `SELF_CONTAINED` if and only if it is completely self-sufficient — read entirely on its own, it conveys an unambiguous, actionable truth that does not depend on any unstated information.
+- Dependency & Borrowed Meaning: A chunk is `REQUIRES_EXTERNAL_CONTEXT` whenever it relies on borrowed meaning. Read on its own, it is incomplete or risks causing incorrect actions without the context it relies upon.
+- Boundary Guardrail: Arguing that "the document provides the context", "the context is clear from the document", or "the topic was already introduced" is an explicit admission that the chunk is `REQUIRES_EXTERNAL_CONTEXT`.
+- Presumption of Dependency: Continuous text chunks are presumed to require context. Classifying a chunk as `SELF_CONTAINED` carries the burden of proof in `justification` to demonstrate total local autonomy.
+
+### Topological & Finality Contracts
+- Edge Topology: `SELF_CONTAINED` chunks must possess exactly zero outgoing relation edges. `REQUIRES_EXTERNAL_CONTEXT` chunks must possess at least one directed outgoing edge anchored directly to the chunk that resolves the dependency.
+- Two-Tier Finality Gate:
+  1. Chunk Finalization: A chunk transitions to `REVIEWED` via `stg_finalize_chunks` exclusively after explicit textual inspection (`inspected`), semantic classification, and topological edge consistency are satisfied.
+  2. Session Commitment: The staging session transitions to `AGENT_COMMITTED` via `stg_commit` exclusively after pre-flight validation (`stg_validate`) confirms zero topological or integrity violations."""
 
 
 def render_server_instructions(

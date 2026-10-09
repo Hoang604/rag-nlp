@@ -6,10 +6,12 @@ from mcp.server.mcpserver import MCPServer
 from pydantic import Field
 
 from rag_eval.ingestion.staging.models import (
+    DEFAULT_STAGING_POLL_LIMIT,
+    MAX_STAGING_POLL_LIMIT,
+    MIN_STAGING_POLL_LIMIT,
     StagingChunkDelta,
     StagingEdgeFilter,
     StagingEdgeInput,
-    get_staging_poll_limit,
 )
 from rag_eval.mcp.tools import (
     HIERARCHICAL_DIRECTION_DESCRIPTION,
@@ -31,7 +33,6 @@ from rag_eval.mcp.tools import (
     StgListSessionsResult,
     StgPatchResult,
     StgPollPendingResult,
-    StgPreviewResult,
     StgRemoveEdgesResult,
     StgReopenResult,
     StgReparentResult,
@@ -219,54 +220,11 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
         )
 
     @server.tool(
-        name="stg_preview",
-        description="Xem trước tóm tắt cấu trúc, nội dung nguyên văn và ngữ cảnh tổng hợp của các chunk trong vùng đệm staging.",
-    )
-    async def stg_preview(
-        doc_slug: Annotated[
-            str,
-            Field(
-                description="Mã định danh doc_slug của phiên làm việc trong vùng đệm.",
-            ),
-        ],
-        path_prefix: Annotated[
-            str,
-            Field(
-                default="",
-                description="Tiền tố đường dẫn phân cấp tùy chọn để lọc danh sách xem trước.",
-            ),
-        ] = "",
-        limit: Annotated[
-            int,
-            Field(
-                default=50,
-                ge=1,
-                le=200,
-                description="Số lượng chunk tối đa cần xem trước trên mỗi trang.",
-            ),
-        ] = 50,
-        offset: Annotated[
-            int,
-            Field(
-                default=0,
-                ge=0,
-                description="Vị trí bắt đầu phân trang danh sách xem trước.",
-            ),
-        ] = 0,
-    ) -> StgPreviewResult:
-        return await tool_impl.stg_preview(
-            doc_slug=doc_slug,
-            path_prefix=path_prefix or None,
-            limit=limit,
-            offset=offset,
-        )
-
-    @server.tool(
         name="stg_get_chunk",
         description=(
             "Đọc toàn bộ nội dung nguyên văn, ngữ cảnh tổng hợp, câu dẫn đề và siêu dữ liệu của một chunk "
-            "từ vùng đệm staging theo đường dẫn phân cấp. Việc đọc chunk này sẽ đồng thời ghi nhận dấu vết nhận thức "
-            "(inspected), làm tiền đề bắt buộc trước khi có thể chốt nghiệm thu (finalize)."
+            "từ vùng đệm staging theo đường dẫn phân cấp. Việc đọc chunk này (tương tự như qua stg_poll_pending hoặc stg_get_raw) "
+            "sẽ đồng thời ghi nhận dấu vết nhận thức (inspected), làm tiền đề bắt buộc trước khi có thể chốt nghiệm thu (finalize)."
         ),
     )
     async def stg_get_chunk(
@@ -287,7 +245,7 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
 
     @server.tool(
         name="stg_get_raw",
-        description="Đọc tài liệu nguồn ban đầu được lưu trong phiên staging theo cửa sổ dòng (line window).",
+        description="Đọc tài liệu nguồn ban đầu được lưu trong phiên staging theo cửa sổ dòng (line window, tối đa 200 dòng mỗi lần gọi).",
     )
     async def stg_get_raw(
         doc_slug: Annotated[
@@ -309,7 +267,7 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
             Field(
                 default=100,
                 ge=1,
-                description="Số thứ tự dòng kết thúc (bao gồm cả dòng này).",
+                description="Số thứ tự dòng kết thúc (bao gồm cả dòng này). Cửa sổ dòng (end_line - start_line + 1) tối đa là 200 dòng.",
             ),
         ] = 100,
     ) -> StgGetRawResult:
@@ -494,7 +452,10 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
 
     @server.tool(
         name="stg_poll_pending",
-        description="Lấy danh sách các chunk chưa chốt (PENDING) kèm thống kê tiến độ rà soát trong vùng đệm staging.",
+        description=(
+            "Lấy danh sách các chunk chưa chốt (PENDING) kèm thống kê tiến độ rà soát trong vùng đệm staging. "
+            "Việc lấy danh sách qua tool này cũng đồng thời ghi nhận dấu vết nhận thức (inspected) cho các chunk được trả về."
+        ),
     )
     async def stg_poll_pending(
         doc_slug: Annotated[
@@ -506,12 +467,12 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
         limit: Annotated[
             int,
             Field(
-                default=get_staging_poll_limit(),
-                ge=1,
-                le=get_staging_poll_limit(),
+                default=DEFAULT_STAGING_POLL_LIMIT,
+                ge=MIN_STAGING_POLL_LIMIT,
+                le=MAX_STAGING_POLL_LIMIT,
                 description="Số lượng chunk yêu cầu lấy trong đợt này.",
             ),
-        ] = get_staging_poll_limit(),
+        ] = DEFAULT_STAGING_POLL_LIMIT,
         path_prefix: Annotated[
             str,
             Field(
@@ -530,7 +491,7 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
         name="stg_finalize_chunks",
         description=(
             "Chốt nghiệm thu các chunk trong phiên staging sang trạng thái REVIEWED. "
-            "Yêu cầu 3 điều kiện tiên quyết: chunk đã được đọc kiểm tra (inspected) qua stg_get_chunk/stg_get_raw, "
+            "Yêu cầu 3 điều kiện tiên quyết: chunk đã được đọc kiểm tra (inspected) qua stg_poll_pending/stg_get_chunk/stg_get_raw, "
             "đã phân loại context_type qua stg_patch, và nhất quán cạnh quan hệ đồ thị."
         ),
     )
