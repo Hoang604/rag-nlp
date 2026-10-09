@@ -250,8 +250,6 @@ class PostgresBulkLoader:
                     contextualized_text=chunk.contextualized_text,
                     start_line=chunk.start_line,
                     end_line=chunk.end_line,
-                    context_type=chunk.context_type,
-                    is_all_refs_resolved=chunk.is_all_refs_resolved,
                     embedding=emb,
                     metadata=meta,
                 )
@@ -284,6 +282,7 @@ class PostgresBulkLoader:
                     source_chunk_id=e.source_chunk_id,
                     target_chunk_id=e.target_chunk_id,
                     relation_type=e.relation_type,
+                    rationale=e.rationale,
                 )
             )
 

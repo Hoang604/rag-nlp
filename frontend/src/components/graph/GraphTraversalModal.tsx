@@ -28,6 +28,7 @@ export const GraphTraversalModal: React.FC<GraphTraversalModalProps> = ({
   const [sourcePath, setSourcePath] = useState(initialSourcePath);
   const [navDirection, setNavDirection] = useState<'OUTGOING' | 'INCOMING' | 'BOTH'>('BOTH');
   const [depthLimit, setDepthLimit] = useState<number>(2);
+  const [limit, setLimit] = useState<number>(20);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [steps, setSteps] = useState<GraphTraversalStep[]>([]);
@@ -39,6 +40,7 @@ export const GraphTraversalModal: React.FC<GraphTraversalModalProps> = ({
       setSteps([]);
       setError(null);
       setHasSearched(false);
+      setLimit(20);
     }
   }, [isOpen, initialSourcePath]);
 
@@ -53,6 +55,7 @@ export const GraphTraversalModal: React.FC<GraphTraversalModalProps> = ({
         source_path: sourcePath.trim(),
         nav_direction: navDirection,
         depth_limit: depthLimit,
+        limit: limit,
       });
       setSteps(results || []);
       setHasSearched(true);
@@ -130,10 +133,10 @@ export const GraphTraversalModal: React.FC<GraphTraversalModalProps> = ({
               </select>
             </div>
 
-            <div className="w-full sm:w-32">
+            <div className="w-full sm:w-28">
               <div className="flex items-center justify-between mb-1">
                 <label className="text-[11px] font-semibold text-slate-300">
-                  Độ Sâu (Depth):
+                  Độ Sâu:
                 </label>
                 <span className="font-mono text-xs font-bold text-indigo-400">{depthLimit}</span>
               </div>
@@ -143,6 +146,23 @@ export const GraphTraversalModal: React.FC<GraphTraversalModalProps> = ({
                 max={5}
                 value={depthLimit}
                 onChange={(e) => setDepthLimit(Number(e.target.value))}
+                className="w-full accent-indigo-500 cursor-pointer"
+              />
+            </div>
+
+            <div className="w-full sm:w-28">
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-[11px] font-semibold text-slate-300">
+                  Giới Hạn:
+                </label>
+                <span className="font-mono text-xs font-bold text-indigo-400">{limit}</span>
+              </div>
+              <input
+                type="range"
+                min={1}
+                max={100}
+                value={limit}
+                onChange={(e) => setLimit(Number(e.target.value))}
                 className="w-full accent-indigo-500 cursor-pointer"
               />
             </div>
@@ -203,7 +223,7 @@ export const GraphTraversalModal: React.FC<GraphTraversalModalProps> = ({
               {steps.map((step, idx) => (
                 <div
                   key={idx}
-                  className="rounded-xl border border-slate-800 bg-slate-950/70 p-3 hover:border-indigo-500/50 hover:bg-slate-900/80 transition flex flex-col gap-2"
+                  className="rounded-xl border border-slate-800 bg-slate-950/70 p-3.5 hover:border-indigo-500/50 hover:bg-slate-900/80 transition flex flex-col gap-2.5"
                 >
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
@@ -230,16 +250,33 @@ export const GraphTraversalModal: React.FC<GraphTraversalModalProps> = ({
                     )}
                   </div>
 
-                  <div className="flex items-center gap-1.5 text-xs">
-                    <span className="text-slate-400 text-[10px]">Đích:</span>
-                    <span className="font-mono font-semibold text-slate-200">
+                  {/* Dual Path & Citation Breadcrumb */}
+                  <div className="flex flex-wrap items-center gap-2 text-xs">
+                    <span className="rounded bg-slate-950 px-2 py-0.5 font-mono text-[11px] text-slate-400 border border-slate-800">
+                      {step.source_path}
+                    </span>
+                    <ArrowRight className="h-3 w-3 text-slate-500" />
+                    <span className="rounded bg-slate-950 px-2 py-0.5 font-mono text-[11px] font-semibold text-indigo-300 border border-indigo-900/60">
                       {step.target_path}
+                    </span>
+                    <span className="rounded bg-slate-800/80 px-2 py-0.5 text-[10px] font-mono text-slate-400 border border-slate-700">
+                      {step.target_doc_slug} · L{step.target_start_line}-L{step.target_end_line}
                     </span>
                   </div>
 
-                  {step.target_text && (
-                    <div className="font-mono text-xs text-slate-300 bg-slate-950 p-2.5 rounded-lg border border-slate-850 line-clamp-3 leading-relaxed">
-                      {step.target_text}
+                  {/* Rationale if present */}
+                  {step.rationale && (
+                    <div className="rounded-lg bg-indigo-950/40 p-2.5 text-xs text-indigo-200 border border-indigo-800/50">
+                      <span className="font-semibold text-indigo-400">Luận cứ: </span>
+                      {step.rationale}
+                    </div>
+                  )}
+
+                  {/* Contextualized text preferred, fallback to verbatim text */}
+                  {(step.target_contextualized_text || step.target_text) && (
+                    <div className="font-mono text-xs text-slate-300 bg-slate-950 p-2.5 rounded-lg border border-slate-800 line-clamp-3 leading-relaxed">
+                      <div className="text-[10px] font-semibold text-slate-500 mb-1">Đoạn văn hoàn chỉnh:</div>
+                      {step.target_contextualized_text || step.target_text}
                     </div>
                   )}
                 </div>

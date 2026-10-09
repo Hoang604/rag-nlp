@@ -1,12 +1,14 @@
-from pathlib import Path
+import pytest
 
 from rag_eval.ingestion.parser.chunker import HierarchicalASTSegmenter
 from rag_eval.ingestion.parser.edges import LineageBreadcrumbAndEdgeExtractor
 from rag_eval.ingestion.parser.engine import DocumentIngestionEngine
-from rag_eval.ingestion.parser.normalizer import DocumentNormalizer, SupportedFormat
-from rag_eval.ingestion.staging.manager import StagingManager
-from rag_eval.ingestion.staging.models import RelationType
-from rag_eval.schemas import validate_ltree_path
+from rag_eval.ingestion.parser.normalizer import (
+    DocumentNormalizer,
+    PageLayoutSanitizer,
+    SupportedFormat,
+)
+from rag_eval.schemas import RelationType, validate_ltree_path
 
 
 def test_document_normalizer_synthetic_mechanics() -> None:
@@ -100,10 +102,10 @@ def test_table_block_preservation_mechanics() -> None:
     )
 
     engine = DocumentIngestionEngine()
-    chunks, _edges, _meta = engine.process_raw("schema_doc", "Data Schema", content)
+    draft = engine.process_raw("schema_doc", "Data Schema", content)
 
-    assert len(chunks) >= 1
-    table_chunks = [c for c in chunks if c.metadata.get("is_table") is True]
+    assert len(draft.chunks) >= 1
+    table_chunks = [c for c in draft.chunks if c.metadata.get("is_table") is True]
     assert len(table_chunks) == 1
 
     tbl = table_chunks[0]
@@ -128,16 +130,16 @@ def test_100_percent_precision_deterministic_edges() -> None:
     )
 
     engine = DocumentIngestionEngine()
-    chunks, edges, _meta = engine.process_raw("edge_doc", "Root Overview", content)
+    draft = engine.process_raw("edge_doc", "Root Overview", content)
 
     # Invariant: Must contain exactly 1 edge pointing to Subsystem Beta, and 0 hallucinated edges
-    assert len(edges) == 1
-    edge = edges[0]
-    assert edge.relation_type == RelationType.REFERENCES.value
+    assert len(draft.edges) == 1
+    edge = draft.edges[0]
+    assert edge.relation_type == RelationType.REFERENCES
     assert "beta" in edge.target_path.lower()
 
     # Verify that target_path actually exists in chunks
-    chunk_paths = {c.path for c in chunks}
+    chunk_paths = {c.path for c in draft.chunks}
     assert edge.target_path in chunk_paths
     assert edge.source_path in chunk_paths
 
@@ -161,9 +163,9 @@ def test_lineage_breadcrumb_contextualization() -> None:
     leaves = segmenter.flatten_leaf_chunks(root)
 
     extractor = LineageBreadcrumbAndEdgeExtractor()
-    staging_chunks = extractor.synthesize_breadcrumbs(root, leaves)
+    draft_chunks = extractor.synthesize_breadcrumbs(root, leaves)
 
-    deepest = next(c for c in staging_chunks if "normalizer" in c.path.lower() and c.path.endswith(".p"))
+    deepest = next(c for c in draft_chunks if "normalizer" in c.path.lower() and c.path.endswith(".p"))
     assert "AST Normalizer parses layout structures." == deepest.verbatim_text.strip()
     assert "[Architecture > Ingestion Pipeline > AST Normalizer]" in deepest.contextualized_text
 
@@ -193,7 +195,6 @@ def test_pdf_normalization_markdown_table_sync() -> None:
     assert tbl.row_count == 2
     assert tbl.col_count == 3
 
-    # Check that lines 5-8 in doc.raw_text match the table
     raw_lines = doc.raw_text.splitlines()
     assert "| Metric | Value | Status |" in raw_lines[tbl.start_line - 1]
     assert "| Recall | 0.8 | Target |" in raw_lines[tbl.end_line - 1]
@@ -261,12 +262,12 @@ def test_anchor_edge_precision_filters_generic_and_ambiguous() -> None:
     )
 
     engine = DocumentIngestionEngine()
-    _chunks, edges, _meta = engine.process_raw("precision_doc", "Root Document", content)
+    draft = engine.process_raw("precision_doc", "Root Document", content)
 
     # Invariant: Zero edges to #p, #tbl, or duplicate #repeated-heading.
     # Exactly 1 edge to #unique-target.
-    assert len(edges) == 1
-    edge = edges[0]
+    assert len(draft.edges) == 1
+    edge = draft.edges[0]
     assert "unique_target" in edge.target_path.lower()
 
 
@@ -283,54 +284,25 @@ def test_lineage_breadcrumb_strictly_ancestral() -> None:
     )
 
     engine = DocumentIngestionEngine()
-    chunks, _edges, _meta = engine.process_raw("breadcrumb_doc", "Root System", content)
+    draft = engine.process_raw("breadcrumb_doc", "Root System", content)
 
-    beta_chunk = next(c for c in chunks if "component_beta" in c.path and c.path.endswith(".p"))
-    # Contextualized text must show [Layer Alpha > Component Beta] for the paragraph,
-    # and the heading chunk for Component Beta itself must show [Layer Alpha]
-    beta_heading = next(c for c in chunks if c.path.endswith("component_beta"))
+    beta_chunk = next(c for c in draft.chunks if "component_beta" in c.path and c.path.endswith(".p"))
+    beta_heading = next(c for c in draft.chunks if c.path.endswith("component_beta"))
     assert "[Root System > Layer Alpha]" in beta_heading.contextualized_text
     assert "Component Beta" not in beta_heading.contextualized_text.split("]")[0]
-
     assert "[Root System > Layer Alpha > Component Beta]" in beta_chunk.contextualized_text
 
 
-def test_cli_ingest_command_execution(tmp_path: Path, monkeypatch) -> None:
-    """Verifies that the CLI ingest command creates a staging session from file on disk."""
-    from typer.testing import CliRunner
-
-    from rag_eval.cli import app
-
-    staging_dir = tmp_path / "stg_cache"
-    staging_dir.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr("rag_eval.cli.StagingManager", lambda: StagingManager(staging_dir=staging_dir))
-
-    doc_file = tmp_path / "spec_test.md"
-    doc_file.write_text(
-        "# Specification\n\nContent for CLI ingestion testing.\n",
-        encoding="utf-8",
-    )
-
-    runner = CliRunner()
-    result = runner.invoke(app, ["ingest", str(doc_file), "--slug", "cli_spec"])
-    assert result.exit_code == 0
-    assert "Successfully created staging session" in result.output
-
-    # Verify session on disk
-    mgr = StagingManager(staging_dir=staging_dir)
-    assert mgr.session_exists("cli_spec")
-    session = mgr.load_session("cli_spec")
-    assert len(session.chunks) >= 1
-
-
-def test_binary_pdf_bytes_ingestion(tmp_path: Path) -> None:
-    """Verifies that actual binary PDF bytes are parsed cleanly and staged with intact metadata."""
+def test_binary_pdf_bytes_ingestion(tmp_path) -> None:
+    """Verifies that actual binary PDF bytes are parsed cleanly into ParsedDocumentDraft."""
     import pymupdf
 
-    # Generate a real valid binary PDF in memory using pymupdf
     pdf_doc = pymupdf.open()
     page = pdf_doc.new_page()
-    page.insert_text((50, 50), "# PDF Architectural Blueprint\n\nPreamble explaining invariants.\n\n## Core Engine\n\nDetails of binary execution.\n")
+    page.insert_text(
+        (50, 50),
+        "# PDF Architectural Blueprint\n\nPreamble explaining invariants.\n\n## Core Engine\n\nDetails of binary execution.\n",
+    )
     pdf_bytes = pdf_doc.tobytes()
     pdf_doc.close()
 
@@ -341,33 +313,33 @@ def test_binary_pdf_bytes_ingestion(tmp_path: Path) -> None:
     assert norm_doc.metadata.get("original_filename") == "blueprint.pdf"
     assert "Architectural Blueprint" in norm_doc.raw_text
 
-    # Ingest into staging manager from bytes
-    staging_dir = tmp_path / "stg_cache"
-    staging_dir.mkdir(parents=True, exist_ok=True)
-    mgr = StagingManager(staging_dir=staging_dir)
-    session = mgr.create_session_from_bytes(
-        doc_slug="pdf_blueprint",
-        title="PDF Architectural Blueprint",
+    engine = DocumentIngestionEngine()
+    draft = engine.process_bytes(
         content=pdf_bytes,
         file_name="blueprint.pdf",
+        doc_slug="pdf_blueprint",
+        title="PDF Architectural Blueprint",
     )
-    assert len(session.chunks) >= 2
-    assert mgr.session_exists("pdf_blueprint")
+    assert len(draft.chunks) >= 2
+    assert draft.doc_slug == "pdf_blueprint"
+    assert draft.raw_text is not None
 
 
 def test_corrupted_docx_exception_shielding() -> None:
     """Verifies that corrupted DOCX files trigger a clean CorpusDomainError instead of unhandled library crashes."""
-    import pytest
-
-    from rag_eval.exceptions import CorpusDomainError
+    from rag_eval.exceptions import E_CORPUS_INTEGRITY_VIOLATION, CorpusDomainError
 
     normalizer = DocumentNormalizer()
     corrupted_bytes = b"PK\x03\x04corrupted_invalid_zip_content"
 
     with pytest.raises(CorpusDomainError) as exc_info:
-        normalizer.normalize_bytes(corrupted_bytes, "broken.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        normalizer.normalize_bytes(
+            corrupted_bytes,
+            "broken.docx",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
 
-    assert "broken.docx" in str(exc_info.value)
+    assert exc_info.value.error_code == E_CORPUS_INTEGRITY_VIOLATION
 
 
 def test_single_line_oversized_paragraph_splitting() -> None:
@@ -402,10 +374,161 @@ def test_unicode_anchor_deterministic_edges() -> None:
     )
 
     engine = DocumentIngestionEngine()
-    _chunks, edges, _meta = engine.process_raw("unicode_doc", "Hệ Thống", content)
+    draft = engine.process_raw("unicode_doc", "Hệ Thống", content)
 
-    assert len(edges) == 1
-    edge = edges[0]
-    assert edge.relation_type == RelationType.REFERENCES.value
+    assert len(draft.edges) == 1
+    edge = draft.edges[0]
+    assert edge.relation_type == RelationType.REFERENCES
     assert "dac_ta_module" in edge.target_path.lower()
 
+
+def test_page_layout_sanitizer_removes_repetitive_headers_and_footers() -> None:
+    """Verifies that PageLayoutSanitizer strips repetitive boundary lines occurring across >= min_repetition pages."""
+    raw_document = (
+        "Running Header Title\n\nPage 1 unique body content paragraph.\n\nConfidential Footer Notice\x0c"
+        "Running Header Title\n\nPage 2 unique body content paragraph.\n\nConfidential Footer Notice\x0c"
+        "Running Header Title\n\nPage 3 unique body content paragraph.\n\nConfidential Footer Notice\x0c"
+        "Running Header Title\n\nPage 4 unique body content paragraph.\n\nConfidential Footer Notice"
+    )
+
+    clean_text, artifacts = PageLayoutSanitizer.sanitize_document(
+        raw_document, min_repetition=3, boundary_window=3
+    )
+
+    assert "Running Header Title" not in clean_text
+    assert "Confidential Footer Notice" not in clean_text
+    assert "Page 1 unique body content paragraph." in clean_text
+    assert "Page 2 unique body content paragraph." in clean_text
+    assert "Page 3 unique body content paragraph." in clean_text
+    assert "Page 4 unique body content paragraph." in clean_text
+
+    assert len(artifacts) >= 2
+    header_art = next(a for a in artifacts if a.line_text == "Running Header Title")
+    footer_art = next(a for a in artifacts if a.line_text == "Confidential Footer Notice")
+
+    assert header_art.occurrences == 4
+    assert footer_art.occurrences == 4
+
+
+def test_page_layout_sanitizer_below_min_repetition_retains_text() -> None:
+    """Verifies that sequences with fewer pages than min_repetition retain boundary lines intact."""
+    raw_document = (
+        "Running Header\n\nShort page 1 text.\n\nFooter Text\x0c"
+        "Running Header\n\nShort page 2 text.\n\nFooter Text"
+    )
+
+    clean_text, artifacts = PageLayoutSanitizer.sanitize_document(
+        raw_document, min_repetition=3, boundary_window=3
+    )
+
+    assert "Running Header" in clean_text
+    assert "Footer Text" in clean_text
+    assert len(artifacts) == 0
+
+
+def test_document_normalizer_form_feed_page_break_sanitization() -> None:
+    """Verifies that normalize_text preserves ground-truth form feed (\\x0c) into sanitize_document."""
+    raw_input = (
+        "Document Running Title\n\nContent of chapter 1.\n\nPage Footer\x0c"
+        "Document Running Title\n\nContent of chapter 2.\n\nPage Footer\x0c"
+        "Document Running Title\n\nContent of chapter 3.\n\nPage Footer"
+    )
+
+    normalizer = DocumentNormalizer()
+    doc = normalizer.normalize_text(raw_input)
+
+    assert "Document Running Title" not in doc.raw_text
+    assert "Page Footer" not in doc.raw_text
+    assert "Content of chapter 1." in doc.raw_text
+    assert "Content of chapter 2." in doc.raw_text
+    assert "Content of chapter 3." in doc.raw_text
+    assert "sanitized_page_artifacts" in doc.metadata
+    artifacts_meta = doc.metadata["sanitized_page_artifacts"]
+    assert isinstance(artifacts_meta, list)
+    assert len(artifacts_meta) == 2
+
+
+def test_continuous_stream_layout_sanitization_with_periodic_anchors() -> None:
+    """Verifies that continuous streams without form-feed characters strip periodic anchors, counters, and delimiters."""
+    continuous_input = (
+        "# Chapter 1 Overview\n\n"
+        "Section 1 technical architecture details.\n\n"
+        "Periodic Publication Anchor\n\n"
+        "Page 1\n\n"
+        "-\n\n"
+        "## Subsystem Alpha\n\n"
+        "Alpha subsystem mechanics.\n\n"
+        "Periodic Publication Anchor\n\n"
+        "Page 2\n\n"
+        "-\n\n"
+        "## Subsystem Beta\n\n"
+        "Beta subsystem mechanics.\n\n"
+        "Periodic Publication Anchor\n\n"
+        "Page 3\n\n"
+        "-\n\n"
+        "## Final Conclusions\n\n"
+        "Final technical takeaways.\n"
+    )
+
+    normalizer = DocumentNormalizer()
+    doc = normalizer.normalize_text(continuous_input)
+
+    assert "Periodic Publication Anchor" not in doc.raw_text
+    assert "Section 1 technical architecture details." in doc.raw_text
+    assert "Alpha subsystem mechanics." in doc.raw_text
+    assert "Beta subsystem mechanics." in doc.raw_text
+    assert "Final technical takeaways." in doc.raw_text
+    assert "sanitized_page_artifacts" in doc.metadata
+    artifacts_meta = doc.metadata["sanitized_page_artifacts"]
+    assert isinstance(artifacts_meta, list)
+    artifact_texts = [a["line_text"] for a in artifacts_meta if isinstance(a, dict)]
+    assert "Periodic Publication Anchor" in artifact_texts
+
+
+def test_markdown_semantic_preservation_code_fences_and_lists() -> None:
+    """Verifies that code blocks, list items, and git diff markers are 100% preserved during sanitization."""
+    markdown_content = (
+        "# System Operations\n\n"
+        "- List item option alpha\n"
+        "- List item option beta\n"
+        "- List item option gamma\n\n"
+        "Here is a code example with delimiters and git diff syntax:\n\n"
+        "```diff\n"
+        "- deleted_line_in_diff = True\n"
+        "+ added_line_in_diff = True\n"
+        "---\n"
+        "```\n\n"
+        "1. Numbered procedure one\n"
+        "2. Numbered procedure two\n"
+    )
+
+    normalizer = DocumentNormalizer()
+    doc = normalizer.normalize_text(markdown_content)
+
+    assert "- List item option alpha" in doc.raw_text
+    assert "- List item option beta" in doc.raw_text
+    assert "- List item option gamma" in doc.raw_text
+    assert "1. Numbered procedure one" in doc.raw_text
+    assert "2. Numbered procedure two" in doc.raw_text
+    assert "```diff\n- deleted_line_in_diff = True\n+ added_line_in_diff = True\n---\n```" in doc.raw_text
+
+
+def test_code_fence_multiline_whitespace_preservation() -> None:
+    """Verifies Invariant I-02: 3+ consecutive newlines inside code fences are preserved 100% verbatim."""
+    content = (
+        "# Code Sample Header\n\n"
+        "Here is code with multiple blank lines:\n\n"
+        "```python\n"
+        "def compute():\n"
+        "\n"
+        "\n"
+        "\n"
+        "    return 100\n"
+        "```\n\n"
+        "Trailing text.\n"
+    )
+    normalizer = DocumentNormalizer()
+    doc = normalizer.normalize_text(content)
+
+    assert "def compute():\n\n\n\n    return 100" in doc.raw_text
+    assert "Trailing text." in doc.raw_text

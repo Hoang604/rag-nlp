@@ -8,7 +8,6 @@ import typer
 from rich.console import Console
 
 from rag_eval.console import use_utf8_stdout
-from rag_eval.ingestion.staging import StagingManager
 
 app = typer.Typer(name="rag-eval", help="Agentic RAG CLI")
 console = Console()
@@ -34,111 +33,6 @@ def migrate() -> None:
     console.print(
         f"[green]✔ Successfully applied {len(applied)} migration files.[/green]"
     )
-
-
-async def _prune_stale_chunks(
-    manager: StagingManager, target_slugs: list[str] | None = None
-) -> int:
-    """Deletes chunks of promoted documents that the current staging no longer has."""
-    from rag_eval.db.connection import get_db_pool
-
-    pool = await get_db_pool()
-    from rag_eval.db.repositories import CorpusRepository
-
-    corpus_repo = CorpusRepository(pool)
-    removed = 0
-    slugs_to_check = (
-        target_slugs
-        if target_slugs is not None
-        else [s.doc_slug for s in manager.list_sessions()]
-    )
-    for slug in slugs_to_check:
-        session = manager.load_session(slug)
-        paths = [c.path for c in session.chunks]
-        doc = await corpus_repo.documents.get_by_slug(session.doc_slug)
-        if doc:
-            all_chunks = await corpus_repo.chunks.list_by_document(doc.id)
-            stale_paths = [c.path for c in all_chunks if c.path not in paths]
-            if stale_paths:
-                stale_ids = [c.id for c in all_chunks if c.path in stale_paths]
-                await corpus_repo.graph.delete_outgoing_edges_for_chunks(stale_ids)
-                count = await corpus_repo.chunks.delete_stale_by_paths(doc.id, stale_paths)
-                removed += count
-    return removed
-
-
-async def _rebuild_indexes() -> None:
-    from rag_eval.db.connection import get_db_pool
-    from rag_eval.db.repositories import CorpusRepository
-
-    pool = await get_db_pool()
-    corpus_repo = CorpusRepository(pool)
-    try:
-        await corpus_repo.chunks.reindex_and_vacuum()
-    except (OSError, RuntimeError) as exc:
-        console.print(f"[yellow]  index rebuild skipped: {exc}[/yellow]")
-
-
-@app.command(name="promote")
-def promote(
-    embed: Annotated[bool, typer.Option("--embed/--no-embed")] = True,
-) -> None:
-    """Promote agent-committed staging sessions into PostgreSQL."""
-    import asyncio
-
-    from rag_eval.ingestion.staging import StagingManager
-    from rag_eval.ingestion.staging.models import StagingStatus
-    from rag_eval.web.services import HumanPromotionEngine
-
-    async def run() -> None:
-        manager = StagingManager()
-        engine = HumanPromotionEngine(staging_manager=manager)
-        all_unpromoted = [
-            s for s in manager.list_sessions()
-            if s.status != StagingStatus.PROMOTED
-        ]
-        eligible_sessions = [
-            s for s in all_unpromoted
-            if s.status in (StagingStatus.AGENT_COMMITTED, StagingStatus.APPROVED)
-        ]
-        uncommitted = [
-            s for s in all_unpromoted
-            if s.status not in (StagingStatus.AGENT_COMMITTED, StagingStatus.APPROVED)
-        ]
-        if uncommitted:
-            for s in uncommitted:
-                console.print(
-                    f"[yellow]Skipping session '{s.doc_slug}': status '{s.status.value}' is not committed by agent.[/yellow]"
-                )
-
-        if not eligible_sessions:
-            console.print("[yellow]No agent-committed staged documents found in .cache/stg ready for promotion.[/yellow]")
-            return
-
-        chunks = edges = 0
-        promoted_slugs: list[str] = []
-        for s_summary in eligible_sessions:
-            slug = s_summary.doc_slug
-            result = await engine.promote_session(
-                doc_slug=slug, compute_embeddings=embed
-            )
-            chunks += result.chunks_promoted
-            edges += result.edges_promoted
-            promoted_slugs.append(slug)
-            console.print(
-                f"  {slug}: {result.chunks_promoted} chunks, "
-                f"{result.edges_promoted} edges"
-            )
-        pruned = await _prune_stale_chunks(manager, target_slugs=promoted_slugs)
-        await _rebuild_indexes()
-        console.print(
-            f"[green]✔ Promoted {len(promoted_slugs)} documents: "
-            f"{chunks} chunks, {edges} edges"
-            + (f", pruned {pruned} stale chunks" if pruned else "")
-            + ".[/green]"
-        )
-
-    asyncio.run(run())
 
 
 @app.command(name="ingest")
@@ -169,29 +63,55 @@ def ingest(
             help="Human-readable document title. Defaults to filename stem.",
         ),
     ] = None,
+    embed: Annotated[
+        bool,
+        typer.Option(
+            "--embed/--no-embed",
+            help="Compute dense vector embeddings upon ingestion",
+        ),
+    ] = True,
+    overwrite: Annotated[
+        bool,
+        typer.Option(
+            "--overwrite/--no-overwrite",
+            help="Overwrite existing document if it already exists in database",
+        ),
+    ] = True,
 ) -> None:
-    """Ingest a document file (PDF, DOCX, Markdown, HTML, TXT) into a new staging session."""
+    """Ingest a document file directly into PostgreSQL with dense vector embeddings."""
+    import asyncio
+
+    from rag_eval.db.connection import close_db_pool, get_db_pool
     from rag_eval.exceptions import CorpusDomainError
+    from rag_eval.ingestion.pipeline import DirectIngestionCoordinator
     from rag_eval.schemas import sanitize_ltree_label
 
     doc_slug = sanitize_ltree_label(slug) if slug else sanitize_ltree_label(file_path.stem)
     doc_title = title if title else file_path.stem
 
-    console.print(f"[cyan]Ingesting document '{file_path.name}' as '{doc_slug}'...[/cyan]")
-    manager = StagingManager()
-    try:
-        session = manager.create_session_from_file(
-            doc_slug=doc_slug,
-            title=doc_title,
-            file_path=file_path,
-        )
-        console.print(
-            f"[green]✔ Successfully created staging session for '{session.doc_slug}' "
-            f"({len(session.chunks)} chunks, {len(session.edges)} edges).[/green]"
-        )
-    except CorpusDomainError as exc:
-        console.print(f"[red]Error during ingestion:[/red] {exc.message}")
-        raise typer.Exit(code=1) from exc
+    console.print(f"[cyan]Ingesting document '{file_path.name}' directly into PostgreSQL as '{doc_slug}'...[/cyan]")
+
+    async def _run() -> None:
+        pool = await get_db_pool()
+        try:
+            coordinator = DirectIngestionCoordinator(pool=pool, compute_embeddings=embed)
+            res = await coordinator.ingest_file(
+                file_path=file_path,
+                doc_slug=doc_slug,
+                title=doc_title,
+                overwrite=overwrite,
+            )
+            console.print(
+                f"[green]✔ Successfully ingested '{res.doc_slug}' "
+                f"({res.chunks_count} chunks, {res.edges_count} edges) directly into PostgreSQL.[/green]"
+            )
+        except CorpusDomainError as exc:
+            console.print(f"[red]Error during ingestion:[/red] {exc.message}")
+            raise typer.Exit(code=1) from exc
+        finally:
+            await close_db_pool()
+
+    asyncio.run(_run())
 
 
 @app.command(name="ingest-all")
@@ -222,7 +142,7 @@ def ingest_all(
         bool,
         typer.Option(
             "--skip-existing/--overwrite",
-            help="Skip files that already have an existing staging session",
+            help="Skip files that already exist in PostgreSQL",
         ),
     ] = True,
     stop_on_error: Annotated[
@@ -232,9 +152,21 @@ def ingest_all(
             help="Halt execution immediately on first ingestion failure",
         ),
     ] = False,
+    embed: Annotated[
+        bool,
+        typer.Option(
+            "--embed/--no-embed",
+            help="Compute dense vector embeddings upon ingestion",
+        ),
+    ] = True,
 ) -> None:
-    """Sequentially ingest all supported documents in a directory into staging sessions."""
+    """Sequentially ingest all supported documents in a directory directly into PostgreSQL."""
+    import asyncio
+
+    from rag_eval.db.connection import close_db_pool, get_db_pool
+    from rag_eval.db.repositories import CorpusRepository
     from rag_eval.exceptions import CorpusDomainError
+    from rag_eval.ingestion.pipeline import DirectIngestionCoordinator
     from rag_eval.schemas import sanitize_ltree_label
 
     target_dir = dir_option or dir_path or Path("data")
@@ -267,65 +199,71 @@ def ingest_all(
         return
 
     console.print(
-        f"[cyan]Found {len(files)} document(s) in '{target_dir}' to ingest sequentially...[/cyan]"
+        f"[cyan]Found {len(files)} document(s) in '{target_dir}' to ingest directly into PostgreSQL...[/cyan]"
     )
 
-    manager = StagingManager()
-    success_count = 0
-    skipped_count = 0
-    failed_count = 0
-    total_chunks = 0
-    total_edges = 0
-
-    for idx, file_path in enumerate(files, start=1):
-        doc_slug = sanitize_ltree_label(file_path.stem)
-        doc_title = file_path.stem
-
-        if manager.session_exists(doc_slug):
-            if skip_existing:
-                console.print(
-                    f"[yellow]({idx}/{len(files)}) Skipping '{file_path.name}' "
-                    f"(staging session '{doc_slug}' already exists).[/yellow]"
-                )
-                skipped_count += 1
-                continue
-            console.print(
-                f"[yellow]({idx}/{len(files)}) Overwriting existing staging session '{doc_slug}'...[/yellow]"
-            )
-            manager.delete_session(doc_slug)
-
-        console.print(
-            f"[cyan]({idx}/{len(files)}) Ingesting '{file_path.name}' as '{doc_slug}'...[/cyan]"
-        )
+    async def _run() -> None:
+        pool = await get_db_pool()
         try:
-            session = manager.create_session_from_file(
-                doc_slug=doc_slug,
-                title=doc_title,
-                file_path=file_path,
-            )
-            chunks_count = len(session.chunks)
-            edges_count = len(session.edges)
-            total_chunks += chunks_count
-            total_edges += edges_count
-            success_count += 1
-            console.print(
-                f"[green]✔ ({idx}/{len(files)}) Successfully ingested '{session.doc_slug}' "
-                f"({chunks_count} chunks, {edges_count} edges).[/green]"
-            )
-        except (CorpusDomainError, Exception) as exc:
-            failed_count += 1
-            msg = exc.message if isinstance(exc, CorpusDomainError) else str(exc)
-            console.print(f"[red]✖ ({idx}/{len(files)}) Error ingesting '{file_path.name}':[/red] {msg}")
-            if stop_on_error:
-                raise typer.Exit(code=1) from exc
+            corpus_repo = CorpusRepository(pool)
+            coordinator = DirectIngestionCoordinator(pool=pool, compute_embeddings=embed)
 
-    console.print(
-        f"[bold green]✔ Ingest completed: {success_count} succeeded "
-        f"({total_chunks} chunks, {total_edges} edges), "
-        f"{skipped_count} skipped, {failed_count} failed.[/bold green]"
-    )
-    if failed_count > 0:
-        raise typer.Exit(code=1)
+            success_count = 0
+            skipped_count = 0
+            failed_count = 0
+            total_chunks = 0
+            total_edges = 0
+
+            for idx, file_path in enumerate(files, start=1):
+                doc_slug = sanitize_ltree_label(file_path.stem)
+                doc_title = file_path.stem
+
+                existing = await corpus_repo.documents.get_by_slug(doc_slug)
+                if existing is not None and skip_existing:
+                    console.print(
+                        f"[yellow]({idx}/{len(files)}) Skipping '{file_path.name}' "
+                        f"(document '{doc_slug}' already exists in database).[/yellow]"
+                    )
+                    skipped_count += 1
+                    continue
+
+                console.print(
+                    f"[cyan]({idx}/{len(files)}) Ingesting '{file_path.name}' as '{doc_slug}'...[/cyan]"
+                )
+                try:
+                    res = await coordinator.ingest_file(
+                        file_path=file_path,
+                        doc_slug=doc_slug,
+                        title=doc_title,
+                        overwrite=True,
+                    )
+                    chunks_count = res.chunks_count
+                    edges_count = res.edges_count
+                    total_chunks += chunks_count
+                    total_edges += edges_count
+                    success_count += 1
+                    console.print(
+                        f"[green]✔ ({idx}/{len(files)}) Successfully ingested '{res.doc_slug}' "
+                        f"({chunks_count} chunks, {edges_count} edges).[/green]"
+                    )
+                except (CorpusDomainError, Exception) as exc:
+                    failed_count += 1
+                    msg = exc.message if isinstance(exc, CorpusDomainError) else str(exc)
+                    console.print(f"[red]✖ ({idx}/{len(files)}) Error ingesting '{file_path.name}':[/red] {msg}")
+                    if stop_on_error:
+                        raise typer.Exit(code=1) from exc
+
+            console.print(
+                f"[bold green]✔ Ingest completed: {success_count} succeeded "
+                f"({total_chunks} chunks, {total_edges} edges), "
+                f"{skipped_count} skipped, {failed_count} failed.[/bold green]"
+            )
+            if failed_count > 0:
+                raise typer.Exit(code=1)
+        finally:
+            await close_db_pool()
+
+    asyncio.run(_run())
 
 
 @app.command(name="server")
@@ -349,7 +287,7 @@ def tool(
     tool_name: Annotated[
         str,
         typer.Argument(
-            help="Name of the MCP tool to execute (e.g. hybrid_search, stg_poll_pending, stg_commit)"
+            help="Name of the MCP tool to execute (e.g. hybrid_search, hierarchical_navigate, link_chunks)"
         ),
     ],
     args: Annotated[
@@ -443,12 +381,12 @@ def api(
         ),
     ] = True,
 ) -> None:
-    """Launch FastAPI backend server for staging API."""
+    """Launch FastAPI backend server for Corpus Knowledge Observatory API."""
     import uvicorn
 
     src_dir = Path(__file__).resolve().parents[1]
     console.print(
-        f"[bold green]Starting Corpus Staging API at http://{host}:{port}[/bold green]"
+        f"[bold green]Starting Corpus Knowledge Observatory API at http://{host}:{port}[/bold green]"
     )
     if reload:
         uvicorn.run(
@@ -485,7 +423,7 @@ def ui(
         ),
     ] = True,
 ) -> None:
-    """Launch the Human-in-the-Loop Staging Reviewer Web Application."""
+    """Launch the Corpus Knowledge Observatory Web Application."""
     import shutil
     import subprocess
     import sys
@@ -532,7 +470,7 @@ def ui(
 
     url = f"http://{host}:{port}"
     console.print(
-        f"[bold green]Starting Corpus Reviewer Web Application at {url}[/bold green]"
+        f"[bold green]Starting Corpus Knowledge Observatory at {url}[/bold green]"
     )
     if open_browser:
 

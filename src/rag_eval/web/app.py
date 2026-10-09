@@ -13,24 +13,21 @@ from fastapi.staticfiles import StaticFiles
 
 from rag_eval.db.connection import close_db_pool, get_db_pool
 from rag_eval.exceptions import CorpusDomainError
-from rag_eval.ingestion.staging import DEFAULT_STAGING_DIR, StagingManager
 from rag_eval.web.router import router
 
 logger = logging.getLogger(__name__)
 
 
 def create_app(
-    staging_dir: Path | str = DEFAULT_STAGING_DIR,
     db_pool: asyncpg.Pool | None = None,
     static_dir: Path | str | None = None,
 ) -> FastAPI:
-    """Constructs and configures the RAG Corpus Staging Reviewer FastAPI application."""
+    """Constructs and configures the Corpus Knowledge Observatory FastAPI application."""
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         """Manages application startup and shutdown lifecycle (database pools, caches)."""
-        logger.info("Initializing RAG Corpus Staging Reviewer Web Backend...")
-        app.state.staging_manager = StagingManager(staging_dir=staging_dir)
+        logger.info("Initializing Corpus Knowledge Observatory Web Backend...")
 
         if db_pool is not None:
             app.state.pool = db_pool
@@ -65,17 +62,16 @@ def create_app(
 
         yield
 
-        logger.info("Shutting down RAG Corpus Staging Reviewer Web Backend...")
+        logger.info("Shutting down Corpus Knowledge Observatory Web Backend...")
         if db_pool is None and app.state.pool is not None:
             await close_db_pool()
 
     app = FastAPI(
-        title="RAG Corpus Staging Reviewer API",
-        description="FastAPI Backend Service for Human-in-the-Loop Corpus Staging and Promotion",
+        title="Corpus Knowledge Observatory API",
+        description="FastAPI Backend Service for Corpus Knowledge Graph and Hierarchy Observatory",
         version="0.1.0",
         lifespan=lifespan,
     )
-    app.state.staging_manager = StagingManager(staging_dir=staging_dir)
     app.state.pool = db_pool
 
     app.add_middleware(
@@ -117,7 +113,6 @@ def create_app(
         )
 
     app.include_router(router, prefix="/api")
-    app.include_router(router, prefix="/api/v1")
 
     target_static = Path(static_dir) if static_dir else Path("frontend/dist")
     if target_static.exists() and target_static.is_dir():

@@ -5,9 +5,11 @@ import logging
 import mimetypes
 import re
 import tempfile
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
+from typing import Literal
 
 from rag_eval.exceptions import (
     E_CORPUS_INTEGRITY_VIOLATION,
@@ -15,6 +17,285 @@ from rag_eval.exceptions import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class PageBoundaryArtifact:
+    line_text: str
+    position: Literal["HEADER", "FOOTER", "BOUNDARY", "DELIMITER"]
+    occurrences: int
+
+
+class PageLayoutSanitizer:
+    """Domain-agnostic detector and sanitizer of periodic boundary layout artifacts across document streams."""
+
+    _CODE_BLOCK_PATTERN = re.compile(r"(?ms)^```[^\n]*\n.*?^```(?:\n|$)")
+    _NUMERIC_COUNTER_PATTERN = re.compile(
+        r"^\s*(?:[^\W\d_]+\s+)?\d+(?:\s*(?:/|-|of)\s*\d+)?\s*$", re.UNICODE
+    )
+    _DELIMITER_PATTERN = re.compile(r"^\s*[-_=*~]{1,3}\s*$")
+    _MARKDOWN_BLOCK_START = re.compile(r"^\s*(?:#{1,6}\s+|\||```|[-*+]\s+|\d+\.\s+|>)")
+
+    @classmethod
+    def sanitize_document(
+        cls, raw_text: str, min_repetition: int = 3, boundary_window: int = 3
+    ) -> tuple[str, list[PageBoundaryArtifact]]:
+        """Single canonical layout sanitizer for all incoming document streams.
+
+        Operates with code-fence masking, discrete page boundary handling when \\x0c is present,
+        periodic anchor & non-leaking cluster scanning across continuous text, and standalone delimiter cleanup.
+        """
+        # Step 1: Code-Fence Masking
+        masked_code_blocks: list[str] = []
+
+        def _mask_code(match: re.Match[str]) -> str:
+            idx = len(masked_code_blocks)
+            masked_code_blocks.append(match.group(0))
+            return f"<!-- MASKED_CODE_BLOCK_{idx} -->\n"
+
+        text_masked = cls._CODE_BLOCK_PATTERN.sub(_mask_code, raw_text)
+
+        artifacts: list[PageBoundaryArtifact] = []
+
+        # Step 2: Dual-Mode Boundary Sanitization
+        if "\x0c" in text_masked:
+            pages = [p for p in text_masked.split("\x0c") if p.strip()]
+            if len(pages) >= min_repetition:
+                sanitized_text, page_artifacts = cls._sanitize_discrete_pages(
+                    pages, min_repetition=min_repetition, boundary_window=boundary_window
+                )
+                artifacts.extend(page_artifacts)
+            else:
+                sanitized_text = "\n\n".join(pages)
+        else:
+            sanitized_text, stream_artifacts = cls._sanitize_continuous_stream(
+                text_masked, min_repetition=min_repetition, boundary_window=boundary_window
+            )
+            artifacts.extend(stream_artifacts)
+
+        # Step 3: Standalone Delimiter Normalization outside code blocks
+        lines = sanitized_text.splitlines()
+        cleaned_lines: list[str] = []
+        delimiter_count = 0
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            prev_empty = (i == 0) or not lines[i - 1].strip()
+            next_empty = (i == len(lines) - 1) or not lines[i + 1].strip()
+            if cls._DELIMITER_PATTERN.fullmatch(stripped) and prev_empty and next_empty:
+                delimiter_count += 1
+                continue
+            cleaned_lines.append(line)
+
+        if delimiter_count > 0:
+            artifacts.append(
+                PageBoundaryArtifact(
+                    line_text="-",
+                    position="DELIMITER",
+                    occurrences=delimiter_count,
+                )
+            )
+
+        sanitized_text = "\n".join(cleaned_lines)
+
+        # Collapse excessive newlines in the document stream before unmasking code fences
+        sanitized_text = re.sub(r"\n{3,}", "\n\n", sanitized_text).strip()
+
+        # Step 4: Code-Fence Unmasking (preserving code block contents 100% verbatim)
+        for idx, original_code in enumerate(masked_code_blocks):
+            placeholder = f"<!-- MASKED_CODE_BLOCK_{idx} -->\n"
+            if placeholder in sanitized_text:
+                sanitized_text = sanitized_text.replace(placeholder, original_code)
+            else:
+                # Fallback without trailing newline if stripped
+                sanitized_text = sanitized_text.replace(f"<!-- MASKED_CODE_BLOCK_{idx} -->", original_code)
+
+        return sanitized_text, artifacts
+
+    @classmethod
+    def _sanitize_discrete_pages(
+        cls, pages: Sequence[str], min_repetition: int, boundary_window: int
+    ) -> tuple[str, list[PageBoundaryArtifact]]:
+        page_line_lists: list[list[str]] = [p.splitlines() for p in pages]
+        header_counts: dict[str, int] = {}
+        footer_counts: dict[str, int] = {}
+
+        for lines in page_line_lists:
+            ne_indices = [i for i, l in enumerate(lines) if l.strip()]
+            if not ne_indices:
+                continue
+            n = len(ne_indices)
+            hw = min(boundary_window, max(1, n // 2)) if n > 1 else 0
+
+            page_headers = {lines[i].strip() for i in ne_indices[:hw]}
+            for h in page_headers:
+                header_counts[h] = header_counts.get(h, 0) + 1
+
+            page_footers = {lines[i].strip() for i in ne_indices[-hw:]} if hw > 0 else set()
+            for f in page_footers:
+                footer_counts[f] = footer_counts.get(f, 0) + 1
+
+        header_artifacts_set = {
+            line for line, cnt in header_counts.items() if cnt >= min_repetition
+        }
+        footer_artifacts_set = {
+            line for line, cnt in footer_counts.items() if cnt >= min_repetition
+        }
+
+        artifacts: list[PageBoundaryArtifact] = []
+        for line in sorted(header_artifacts_set):
+            artifacts.append(
+                PageBoundaryArtifact(
+                    line_text=line,
+                    position="HEADER",
+                    occurrences=header_counts[line],
+                )
+            )
+        for line in sorted(footer_artifacts_set):
+            if line not in header_artifacts_set:
+                artifacts.append(
+                    PageBoundaryArtifact(
+                        line_text=line,
+                        position="FOOTER",
+                        occurrences=footer_counts[line],
+                    )
+                )
+
+        sanitized_pages: list[str] = []
+        for lines in page_line_lists:
+            ne_indices = [i for i, l in enumerate(lines) if l.strip()]
+            if not ne_indices:
+                continue
+            n = len(ne_indices)
+            hw = min(boundary_window, max(1, n // 2)) if n > 1 else 0
+
+            top_indices = set(ne_indices[:hw])
+            bottom_indices = set(ne_indices[-hw:]) if hw > 0 else set()
+
+            remove_indices: set[int] = set()
+            for i in top_indices:
+                if lines[i].strip() in header_artifacts_set:
+                    remove_indices.add(i)
+            for i in bottom_indices:
+                if lines[i].strip() in footer_artifacts_set:
+                    remove_indices.add(i)
+
+            cleaned_lines = [l for i, l in enumerate(lines) if i not in remove_indices]
+            cleaned_page = "\n".join(cleaned_lines).strip()
+            if cleaned_page:
+                sanitized_pages.append(cleaned_page)
+
+        return "\n\n".join(sanitized_pages), artifacts
+
+    @classmethod
+    def _sanitize_continuous_stream(
+        cls, text: str, min_repetition: int, boundary_window: int
+    ) -> tuple[str, list[PageBoundaryArtifact]]:
+        lines = text.splitlines()
+        candidate_counts: dict[str, int] = {}
+
+        # Pass 1: Identify periodic boundary anchors
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if not stripped or len(stripped) >= 120:
+                continue
+            if cls._MARKDOWN_BLOCK_START.match(stripped) or stripped.endswith(":"):
+                continue
+            if cls._DELIMITER_PATTERN.fullmatch(stripped):
+                continue
+
+            prev_empty = (i == 0) or not lines[i - 1].strip()
+            next_empty = (i == len(lines) - 1) or not lines[i + 1].strip()
+            if prev_empty and next_empty:
+                candidate_counts[stripped] = candidate_counts.get(stripped, 0) + 1
+
+        confirmed_anchors = {
+            txt for txt, cnt in candidate_counts.items() if cnt >= min_repetition
+        }
+
+        if not confirmed_anchors:
+            return text, []
+
+        remove_indices: set[int] = set()
+        anchor_occurrences: dict[str, int] = {}
+        boundary_occurrences: dict[str, int] = {}
+
+        # Pass 2: Boundary Cluster Scanning around confirmed anchors
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped in confirmed_anchors:
+                prev_empty = (i == 0) or not lines[i - 1].strip()
+                next_empty = (i == len(lines) - 1) or not lines[i + 1].strip()
+                if not (prev_empty and next_empty):
+                    continue
+
+                remove_indices.add(i)
+                anchor_occurrences[stripped] = anchor_occurrences.get(stripped, 0) + 1
+
+                # Scan backward up to boundary_window non-empty lines
+                backward_non_empty = 0
+                for target_idx in range(i - 1, -1, -1):
+                    t_stripped = lines[target_idx].strip()
+                    if not t_stripped:
+                        continue
+                    backward_non_empty += 1
+                    if backward_non_empty > boundary_window:
+                        break
+                    # Non-leaking halt guardrail
+                    if (
+                        cls._MARKDOWN_BLOCK_START.match(t_stripped)
+                        or t_stripped.endswith(":")
+                        or len(t_stripped) >= 120
+                    ):
+                        break
+                    if cls._NUMERIC_COUNTER_PATTERN.fullmatch(t_stripped) or cls._DELIMITER_PATTERN.fullmatch(t_stripped):
+                        remove_indices.add(target_idx)
+                        boundary_occurrences[t_stripped] = boundary_occurrences.get(t_stripped, 0) + 1
+                    else:
+                        break
+
+                # Scan forward up to boundary_window non-empty lines
+                forward_non_empty = 0
+                for target_idx in range(i + 1, len(lines)):
+                    t_stripped = lines[target_idx].strip()
+                    if not t_stripped:
+                        continue
+                    forward_non_empty += 1
+                    if forward_non_empty > boundary_window:
+                        break
+                    # Non-leaking halt guardrail
+                    if (
+                        cls._MARKDOWN_BLOCK_START.match(t_stripped)
+                        or t_stripped.endswith(":")
+                        or len(t_stripped) >= 120
+                    ):
+                        break
+                    if cls._NUMERIC_COUNTER_PATTERN.fullmatch(t_stripped) or cls._DELIMITER_PATTERN.fullmatch(t_stripped):
+                        remove_indices.add(target_idx)
+                        boundary_occurrences[t_stripped] = boundary_occurrences.get(t_stripped, 0) + 1
+                    else:
+                        break
+
+        artifacts: list[PageBoundaryArtifact] = []
+        for anchor_text, cnt in sorted(anchor_occurrences.items()):
+            artifacts.append(
+                PageBoundaryArtifact(
+                    line_text=anchor_text,
+                    position="BOUNDARY",
+                    occurrences=cnt,
+                )
+            )
+        for bound_text, cnt in sorted(boundary_occurrences.items()):
+            if bound_text not in anchor_occurrences:
+                artifacts.append(
+                    PageBoundaryArtifact(
+                        line_text=bound_text,
+                        position="DELIMITER" if cls._DELIMITER_PATTERN.fullmatch(bound_text) else "BOUNDARY",
+                        occurrences=cnt,
+                    )
+                )
+
+        cleaned = [l for i, l in enumerate(lines) if i not in remove_indices]
+        return "\n".join(cleaned), artifacts
 
 
 class SupportedFormat(str, Enum):
@@ -162,7 +443,10 @@ class DocumentNormalizer:
             self._mime_init = True
 
     def normalize_text(
-        self, text: str, format_hint: SupportedFormat = SupportedFormat.MARKDOWN
+        self,
+        text: str,
+        format_hint: SupportedFormat = SupportedFormat.MARKDOWN,
+        extra_metadata: dict[str, object] | None = None,
     ) -> NormalizedDocument:
         """Chuẩn hóa chuỗi văn bản thô trực tiếp."""
         clean_text = text.replace("\r\n", "\n").replace("\r", "\n")
@@ -172,14 +456,26 @@ class DocumentNormalizer:
                 message="Tài liệu văn bản thô không chứa nội dung hợp lệ hoặc chỉ toàn khoảng trắng.",
                 data={"format_hint": format_hint.value},
             )
-        lines = clean_text.splitlines()
-        tables = _extract_markdown_tables(clean_text)
+
+        sanitized_text, artifacts = PageLayoutSanitizer.sanitize_document(clean_text)
+
+        metadata: dict[str, object] = {"source_type": format_hint.value}
+        if extra_metadata:
+            metadata.update(extra_metadata)
+        if artifacts:
+            metadata["sanitized_page_artifacts"] = [
+                {"line_text": a.line_text, "position": a.position, "occurrences": a.occurrences}
+                for a in artifacts
+            ]
+
+        lines = sanitized_text.splitlines()
+        tables = _extract_markdown_tables(sanitized_text)
         return NormalizedDocument(
             format_type=format_hint,
-            raw_text=clean_text,
+            raw_text=sanitized_text,
             total_lines=len(lines),
             tables=tables,
-            metadata={"source_type": "raw_text"},
+            metadata=metadata,
         )
 
     def normalize_file(self, file_path: Path | str) -> NormalizedDocument:
@@ -230,6 +526,7 @@ class DocumentNormalizer:
             doc = self.normalize_file(tmp_path)
             meta = dict(doc.metadata)
             meta["original_filename"] = file_name
+            meta.pop("source_path", None)
             return dataclasses.replace(doc, metadata=meta)
         except CorpusDomainError as err:
             clean_msg = err.message.replace(tmp_path.name, file_name)
@@ -249,19 +546,27 @@ class DocumentNormalizer:
         import pymupdf
         import pymupdf4llm
 
-        clean_text = ""
+        clean_markdown = ""
         engine_used = "pymupdf4llm"
 
         try:
-            markdown_content = pymupdf4llm.to_markdown(str(path))
-            if markdown_content and markdown_content.strip():
-                clean_text = markdown_content.replace("\r\n", "\n").replace("\r", "\n")
+            chunks = pymupdf4llm.to_markdown(str(path), page_chunks=True)
+            if chunks and isinstance(chunks, list):
+                raw_pages = [
+                    str(c.get("text", "")).replace("\r\n", "\n").replace("\r", "\n")
+                    for c in chunks
+                    if isinstance(c, dict) and str(c.get("text", "")).strip()
+                ]
+                if raw_pages:
+                    clean_markdown = "\x0c".join(raw_pages)
+            elif isinstance(chunks, str) and chunks.strip():
+                clean_markdown = chunks.replace("\r\n", "\n").replace("\r", "\n")
         except (RuntimeError, ValueError, OSError, TypeError, pymupdf.FileDataError, Exception) as exc:  # noqa: BLE001
             logger.warning("pymupdf4llm thất bại trên %s (%s), fallback sang pdfplumber", path, exc)
-            clean_text = ""
+            clean_markdown = ""
 
         # Fallback sang pdfplumber nếu pymupdf4llm không trả về text
-        if not clean_text:
+        if not clean_markdown:
             engine_used = "pdfplumber"
             page_blocks: list[str] = []
             try:
@@ -270,29 +575,24 @@ class DocumentNormalizer:
                         txt = page.extract_text() or ""
                         if txt.strip():
                             page_blocks.append(txt.strip())
-                clean_text = "\n\n".join(page_blocks).replace("\r\n", "\n").replace("\r", "\n")
+                if page_blocks:
+                    clean_markdown = "\x0c".join(page_blocks)
             except (RuntimeError, ValueError, OSError, TypeError, pymupdf.FileDataError, Exception) as exc:  # noqa: BLE001
                 logger.warning("pdfplumber trích xuất text thất bại trên %s: %s", path, exc)
-                clean_text = ""
+                clean_markdown = ""
 
-        clean_text = clean_text.strip()
-        if not clean_text:
+        clean_markdown = clean_markdown.strip()
+        if not clean_markdown:
             raise CorpusDomainError(
                 error_code=E_CORPUS_INTEGRITY_VIOLATION,
                 message=f"Tệp tin PDF '{path.name}' không chứa nội dung văn bản có thể trích xuất hoặc là tài liệu ảnh scan chưa qua OCR.",
                 data={"source_path": str(path)},
             )
 
-        lines = clean_text.splitlines()
-        # Trích xuất bảng biểu trực tiếp từ clean_text để đảm bảo tọa độ dòng đồng bộ 100%
-        tables = _extract_markdown_tables(clean_text)
-
-        return NormalizedDocument(
-            format_type=SupportedFormat.PDF,
-            raw_text=clean_text,
-            total_lines=len(lines),
-            tables=tables,
-            metadata={"source_path": str(path), "engine": engine_used},
+        return self.normalize_text(
+            clean_markdown,
+            format_hint=SupportedFormat.PDF,
+            extra_metadata={"source_path": str(path), "engine": engine_used},
         )
 
     def _normalize_docx(self, path: Path) -> NormalizedDocument:
@@ -325,15 +625,11 @@ class DocumentNormalizer:
                 message=f"Tệp tin DOCX '{path.name}' không chứa nội dung văn bản hợp lệ hoặc rỗng.",
                 data={"source_path": str(path)},
             )
-        lines = clean_text.splitlines()
-        tables = _extract_markdown_tables(clean_text)
 
-        return NormalizedDocument(
-            format_type=SupportedFormat.DOCX,
-            raw_text=clean_text,
-            total_lines=len(lines),
-            tables=tables,
-            metadata={"source_path": str(path), "engine": "markitdown"},
+        return self.normalize_text(
+            clean_text,
+            format_hint=SupportedFormat.DOCX,
+            extra_metadata={"source_path": str(path), "engine": "markitdown"},
         )
 
     def _normalize_html(self, path: Path) -> NormalizedDocument:
@@ -357,13 +653,9 @@ class DocumentNormalizer:
                 message=f"Tệp tin HTML '{path.name}' không chứa nội dung văn bản hợp lệ hoặc rỗng.",
                 data={"source_path": str(path)},
             )
-        lines = clean_text.splitlines()
-        tables = _extract_markdown_tables(clean_text)
 
-        return NormalizedDocument(
-            format_type=SupportedFormat.HTML,
-            raw_text=clean_text,
-            total_lines=len(lines),
-            tables=tables,
-            metadata={"source_path": str(path), "engine": "markitdown"},
+        return self.normalize_text(
+            clean_text,
+            format_hint=SupportedFormat.HTML,
+            extra_metadata={"source_path": str(path), "engine": "markitdown"},
         )

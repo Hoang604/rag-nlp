@@ -72,40 +72,33 @@ class GraphRepository(BaseRepository):
 
         query = """
         INSERT INTO graph_edges (
-            id, source_chunk_id, target_chunk_id, relation_type
+            id, source_chunk_id, target_chunk_id, relation_type, rationale
         )
-        SELECT r.id, r.source_chunk_id, r.target_chunk_id, r.relation_type
-        FROM unnest($1::uuid[], $2::uuid[], $3::uuid[], $4::varchar(32)[]) 
-            AS r(id, source_chunk_id, target_chunk_id, relation_type)
+        SELECT r.id, r.source_chunk_id, r.target_chunk_id, r.relation_type, r.rationale
+        FROM unnest($1::uuid[], $2::uuid[], $3::uuid[], $4::varchar(32)[], $5::text[]) 
+            AS r(id, source_chunk_id, target_chunk_id, relation_type, rationale)
         ON CONFLICT (source_chunk_id, target_chunk_id, relation_type) 
-        DO UPDATE SET relation_type = EXCLUDED.relation_type
+        DO UPDATE SET 
+            relation_type = EXCLUDED.relation_type,
+            rationale = COALESCE(EXCLUDED.rationale, graph_edges.rationale)
         RETURNING id, source_chunk_id, target_chunk_id, relation_type;
         """
         deduped: dict[tuple[uuid.UUID, uuid.UUID, str], GraphEdgeEntity] = {}
         for e in edges:
-            rel: str = str(
-                e.relation_type.value
-                if hasattr(e.relation_type, "value")
-                else e.relation_type
-            )
-            deduped[(e.source_chunk_id, e.target_chunk_id, rel)] = e
+            key = (e.source_chunk_id, e.target_chunk_id, e.relation_type)
+            if key not in deduped or e.rationale is not None:
+                deduped[key] = e
 
         unique_edges = list(deduped.values())
         edge_ids = [e.id for e in unique_edges]
         source_ids = [e.source_chunk_id for e in unique_edges]
         target_ids = [e.target_chunk_id for e in unique_edges]
-        relations: list[str] = [
-            str(
-                e.relation_type.value
-                if hasattr(e.relation_type, "value")
-                else e.relation_type
-            )
-            for e in unique_edges
-        ]
+        relations: list[str] = [e.relation_type for e in unique_edges]
+        rationales: list[str | None] = [e.rationale for e in unique_edges]
 
         try:
             async with self._connection_scope(conn) as c:
-                rows = await c.fetch(query, edge_ids, source_ids, target_ids, relations)
+                rows = await c.fetch(query, edge_ids, source_ids, target_ids, relations, rationales)
                 return {
                     (
                         uuid.UUID(str(r["source_chunk_id"])),
@@ -117,39 +110,34 @@ class GraphRepository(BaseRepository):
         except (asyncpg.PostgresError, OSError, RuntimeError) as exc:
             raise self._translate_error("upsert_edges", exc) from exc
 
-    async def delete_edges_for_chunks(
-        self, chunk_ids: list[uuid.UUID], conn: asyncpg.Connection | None = None
-    ) -> int:
-        """Deletes all edges where source or target chunk is in the given chunk_ids list."""
-        if not chunk_ids:
-            return 0
-        query = """
-        DELETE FROM graph_edges 
-        WHERE source_chunk_id = ANY($1::uuid[]) OR target_chunk_id = ANY($1::uuid[]);
-        """
-        try:
-            async with self._connection_scope(conn) as c:
-                status = await c.execute(query, chunk_ids)
-                return int(status.rsplit(" ", 1)[-1] or 0)
-        except (asyncpg.PostgresError, OSError, RuntimeError) as exc:
-            raise self._translate_error("delete_edges_for_chunks", exc) from exc
 
-    async def delete_outgoing_edges_for_chunks(
-        self, chunk_ids: list[uuid.UUID], conn: asyncpg.Connection | None = None
+    async def delete_directed_edge(
+        self,
+        source_chunk_id: uuid.UUID,
+        target_chunk_id: uuid.UUID,
+        relation_type: str | None = None,
+        conn: asyncpg.Connection | None = None,
     ) -> int:
-        """Deletes only outgoing edges originating from the given chunk IDs."""
-        if not chunk_ids:
-            return 0
-        query = """
-        DELETE FROM graph_edges 
-        WHERE source_chunk_id = ANY($1::uuid[]);
-        """
+        """Deletes targeted directed relationship edge(s) between two chunks, optionally filtered by relation_type."""
+        if relation_type is not None:
+            query = """
+            DELETE FROM graph_edges
+            WHERE source_chunk_id = $1 AND target_chunk_id = $2 AND relation_type = $3;
+            """
+            params = [source_chunk_id, target_chunk_id, relation_type]
+        else:
+            query = """
+            DELETE FROM graph_edges
+            WHERE source_chunk_id = $1 AND target_chunk_id = $2;
+            """
+            params = [source_chunk_id, target_chunk_id]
+
         try:
             async with self._connection_scope(conn) as c:
-                status = await c.execute(query, chunk_ids)
+                status = await c.execute(query, *params)
                 return int(status.rsplit(" ", 1)[-1] or 0)
         except (asyncpg.PostgresError, OSError, RuntimeError) as exc:
-            raise self._translate_error("delete_outgoing_edges_for_chunks", exc) from exc
+            raise self._translate_error("delete_directed_edge", exc) from exc
 
     async def list_edges_for_chunks(
         self, chunk_ids: list[uuid.UUID], conn: asyncpg.Connection | None = None
@@ -158,7 +146,7 @@ class GraphRepository(BaseRepository):
         if not chunk_ids:
             return []
         query = """
-        SELECT id, source_chunk_id, target_chunk_id, relation_type, created_at
+        SELECT id, source_chunk_id, target_chunk_id, relation_type, created_at, rationale
         FROM graph_edges
         WHERE source_chunk_id = ANY($1::uuid[]);
         """
@@ -172,6 +160,7 @@ class GraphRepository(BaseRepository):
                         target_chunk_id=uuid.UUID(str(r["target_chunk_id"])),
                         relation_type=str(r["relation_type"]),
                         created_at=r["created_at"],
+                        rationale=str(r["rationale"]) if r["rationale"] is not None else None,
                     )
                     for r in rows
                 ]
@@ -184,12 +173,14 @@ class GraphRepository(BaseRepository):
         nav_direction: str = "OUTGOING",
         depth_limit: int = 2,
         filter_relations: list[str] | None = None,
+        match_limit: int = 20,
         conn: asyncpg.Connection | None = None,
     ) -> list[GraphTraversalStepDTO]:
         """Traverses knowledge graph bidirectionally for symmetric edges via traverse_knowledge_graph."""
         sql = """
-        SELECT id, source_chunk_id, target_chunk_id, relation_type, depth, target_path, target_text
-        FROM traverse_knowledge_graph($1::uuid, $2::text, $3::int, $4::varchar(32)[]);
+        SELECT id, source_chunk_id, target_chunk_id, relation_type, depth, source_path, target_path, target_text,
+               target_contextualized_text, target_doc_slug, target_start_line, target_end_line, rationale
+        FROM traverse_knowledge_graph($1::uuid, $2::text, $3::int, $4::varchar(32)[], $5::int);
         """
         try:
             async with self._connection_scope(conn) as c:
@@ -199,6 +190,7 @@ class GraphRepository(BaseRepository):
                     nav_direction,
                     depth_limit,
                     filter_relations or None,
+                    match_limit,
                 )
                 return [
                     GraphTraversalStepDTO(
@@ -207,8 +199,14 @@ class GraphRepository(BaseRepository):
                         target_chunk_id=uuid.UUID(str(r["target_chunk_id"])),
                         relation_type=str(r["relation_type"]),
                         depth=int(r["depth"]),
-                        target_path=str(r["target_path"]) if r["target_path"] is not None else "",
-                        target_text=str(r["target_text"]) if r["target_text"] is not None else "",
+                        source_path=str(r["source_path"]),
+                        target_path=str(r["target_path"]),
+                        target_text=str(r["target_text"]),
+                        target_contextualized_text=str(r["target_contextualized_text"]),
+                        target_doc_slug=str(r["target_doc_slug"]),
+                        target_start_line=int(r["target_start_line"]),
+                        target_end_line=int(r["target_end_line"]),
+                        rationale=str(r["rationale"]) if r["rationale"] is not None else None,
                     )
                     for r in rows
                 ]

@@ -10,7 +10,7 @@ import {
   X,
 } from 'lucide-react';
 import { useToast } from '../toast/ToastContext';
-import { StagingEdge } from '../../types/staging';
+import { GraphVisualizerEdge } from '../../types/api';
 import { DocumentTreeNode } from '../../types/tree';
 import { getNodeTypeColor } from '../../utils/ltree';
 import { GraphTraversalModal } from '../graph/GraphTraversalModal';
@@ -19,7 +19,7 @@ interface NodeInspectorPanelProps {
   selectedNode: DocumentTreeNode | null;
   onClose?: () => void;
   onSelectPath?: (path: string) => void;
-  edges: StagingEdge[];
+  edges: GraphVisualizerEdge[];
   docSlug?: string;
 }
 
@@ -89,32 +89,6 @@ export const NodeInspectorPanel: React.FC<NodeInspectorPanelProps> = ({
             >
               {selectedNode.node_type}
             </span>
-            <span
-              className={`rounded border px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
-                selectedNode.review_status === 'REVIEWED'
-                  ? 'border-emerald-600/60 bg-emerald-950/80 text-emerald-300'
-                  : 'border-amber-600/60 bg-amber-950/80 text-amber-300'
-              }`}
-            >
-              {selectedNode.review_status === 'REVIEWED' ? 'ĐÃ RÀ SOÁT' : 'CHỜ RÀ SOÁT'}
-            </span>
-            {selectedNode.finalization_state && (
-              <span
-                className={`rounded border px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
-                  selectedNode.finalization_state === 'FINALIZED_FULLY_LINKED'
-                    ? 'border-cyan-600/60 bg-cyan-950/80 text-cyan-300'
-                    : selectedNode.finalization_state === 'FINALIZED_SELF_CONTAINED'
-                    ? 'border-emerald-600/60 bg-emerald-950/80 text-emerald-300'
-                    : 'border-amber-600/60 bg-amber-950/80 text-amber-300'
-                }`}
-              >
-                {selectedNode.finalization_state === 'FINALIZED_FULLY_LINKED'
-                  ? 'FULLY LINKED'
-                  : selectedNode.finalization_state === 'FINALIZED_SELF_CONTAINED'
-                  ? 'SELF CONTAINED'
-                  : 'UNFINALIZED'}
-              </span>
-            )}
             {Boolean(selectedNode.metadata?.is_table) && (
               <span className="rounded border border-indigo-700 bg-indigo-950/80 px-1.5 py-0.5 text-[10px] font-bold uppercase text-indigo-300">
                 BẢNG BIỂU

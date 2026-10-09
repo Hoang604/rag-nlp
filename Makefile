@@ -5,8 +5,8 @@ help:
 	@echo "  make check      - Run QA verification pipeline (ruff, ty)"
 	@echo "  make lint       - Run ruff check with auto-fix"
 	@echo "  make typecheck  - Run ty type checker"
-	@echo "  make api        - Launch Staging FastAPI backend"
-	@echo "  make ui         - Launch Reviewer Studio web application"
+	@echo "  make api        - Launch Corpus Knowledge Observatory API backend"
+	@echo "  make ui         - Launch Corpus Knowledge Observatory Web Application"
 	@echo "  make server     - Launch MCP server over stdio"
 	@echo "  make migrate    - Run PostgreSQL database migrations"
 

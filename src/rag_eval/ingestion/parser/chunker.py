@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 
 class HierarchicalASTSegmenter:
-    """Điều phối phân tách cây AST và làm phẳng thành danh sách các leaf chunks phục vụ Staging."""
+    """Điều phối phân tách cây AST và làm phẳng thành danh sách các leaf chunks phục vụ Ingestion."""
 
     def __init__(self, max_chunk_chars: int = 1500) -> None:
         self.max_chunk_chars = max_chunk_chars

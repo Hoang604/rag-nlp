@@ -8,21 +8,18 @@ import { api } from '../../services/api';
 interface GlobalGrepModalProps {
   isOpen: boolean;
   onClose: () => void;
-  docSlug: string;
+  docSlug?: string;
   onSelectHit: (path: string) => void;
 }
 
 export const GlobalGrepModal: React.FC<GlobalGrepModalProps> = ({
   isOpen,
   onClose,
-  docSlug,
   onSelectHit,
 }) => {
   const [pattern, setPattern] = useState('');
   const [isRegex, setIsRegex] = useState(false);
   const [caseSensitive, setCaseSensitive] = useState(false);
-  const [searchIn, setSearchIn] = useState<'ALL' | 'VERBATIM' | 'CONTEXT' | 'PATH'>('ALL');
-  const [grepScope, setGrepScope] = useState<'STAGING' | 'CORPUS'>('STAGING');
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState<
     Array<{
@@ -31,8 +28,6 @@ export const GlobalGrepModal: React.FC<GlobalGrepModalProps> = ({
       field_matched: string;
       match_snippet: string;
       verbatim_text: string;
-      contextualized_text?: string;
-      char_length?: number;
     }>
   >([]);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -56,36 +51,21 @@ export const GlobalGrepModal: React.FC<GlobalGrepModalProps> = ({
       setLoading(true);
       setErrorMsg(null);
       try {
-        if (grepScope === 'CORPUS') {
-          const resp = await api.grepCorpus({
-            pattern,
-            is_regex: isRegex,
-            case_sensitive: caseSensitive,
-            limit: 30,
-          });
-          setResults(
-            (resp.matches || []).map((m) => ({
-              path: m.path,
-              doc_slug: m.doc_slug,
-              field_matched: `LINE ${m.start_line}-${m.end_line}`,
-              match_snippet: m.match_snippet,
-              verbatim_text: m.verbatim_text,
-            }))
-          );
-        } else {
-          if (!docSlug) {
-            setResults([]);
-            return;
-          }
-          const resp = await api.grepSession(docSlug, {
-            pattern,
-            is_regex: isRegex,
-            case_sensitive: caseSensitive,
-            search_in: searchIn,
-            limit: 30,
-          });
-          setResults(resp.hits || []);
-        }
+        const resp = await api.grepCorpus({
+          pattern,
+          is_regex: isRegex,
+          case_sensitive: caseSensitive,
+          limit: 30,
+        });
+        setResults(
+          (resp.matches || []).map((m) => ({
+            path: m.path,
+            doc_slug: m.doc_slug,
+            field_matched: `LINE ${m.start_line}-${m.end_line}`,
+            match_snippet: m.match_snippet,
+            verbatim_text: m.verbatim_text,
+          }))
+        );
       } catch (err: unknown) {
         setErrorMsg(err instanceof Error ? err.message : String(err));
         setResults([]);
@@ -95,7 +75,7 @@ export const GlobalGrepModal: React.FC<GlobalGrepModalProps> = ({
     }, 250);
 
     return () => clearTimeout(timer);
-  }, [pattern, isRegex, caseSensitive, searchIn, grepScope, isOpen, docSlug]);
+  }, [pattern, isRegex, caseSensitive, isOpen]);
 
   if (!isOpen) return null;
 
@@ -116,39 +96,9 @@ export const GlobalGrepModal: React.FC<GlobalGrepModalProps> = ({
             type="text"
             value={pattern}
             onChange={(e) => setPattern(e.target.value)}
-            placeholder={
-              grepScope === 'CORPUS'
-                ? "Quét toàn bộ Corpus PostgreSQL bằng pg_trgm..."
-                : "Tìm kiếm mẫu Regex hoặc văn bản trong staging..."
-            }
+            placeholder="Quét toàn bộ Corpus PostgreSQL bằng pg_trgm..."
             className="flex-1 bg-transparent text-sm text-slate-100 placeholder-slate-500 focus:outline-none font-mono"
           />
-
-          {/* Scope Selector */}
-          <div className="flex items-center rounded-lg border border-slate-800 bg-slate-900 p-0.5 text-[10px] font-semibold">
-            <button
-              type="button"
-              onClick={() => setGrepScope('STAGING')}
-              className={`rounded px-2 py-1 transition ${
-                grepScope === 'STAGING'
-                  ? 'bg-brand-600 text-white shadow'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              Staging
-            </button>
-            <button
-              type="button"
-              onClick={() => setGrepScope('CORPUS')}
-              className={`rounded px-2 py-1 transition ${
-                grepScope === 'CORPUS'
-                  ? 'bg-brand-600 text-white shadow'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              Corpus (pg_trgm)
-            </button>
-          </div>
 
           {/* Quick Options */}
           <div className="flex items-center gap-1.5 shrink-0">
@@ -176,18 +126,6 @@ export const GlobalGrepModal: React.FC<GlobalGrepModalProps> = ({
             >
               Aa
             </button>
-            {grepScope === 'STAGING' && (
-              <select
-                value={searchIn}
-                onChange={(e) => setSearchIn(e.target.value as 'ALL' | 'VERBATIM' | 'CONTEXT' | 'PATH')}
-                className="rounded border border-slate-800 bg-slate-900 px-2 py-1 text-[11px] text-slate-300 focus:outline-none"
-              >
-                <option value="ALL">Toàn bộ trường</option>
-                <option value="VERBATIM">Chỉ Verbatim</option>
-                <option value="CONTEXT">Chỉ Ngữ cảnh</option>
-                <option value="PATH">Chỉ Đường dẫn Path</option>
-              </select>
-            )}
           </div>
 
           <button
@@ -202,9 +140,7 @@ export const GlobalGrepModal: React.FC<GlobalGrepModalProps> = ({
         <div className="max-h-[60vh] overflow-y-auto p-3 space-y-2">
           {loading && (
             <div className="py-6 text-center text-xs text-slate-400 animate-pulse">
-              {grepScope === 'CORPUS'
-                ? 'Đang thực thi stored procedure verbatim_grep trên PostgreSQL...'
-                : 'Đang quét toàn văn staging in-memory...'}
+              Đang thực thi stored procedure verbatim_grep trên PostgreSQL...
             </div>
           )}
 
@@ -255,7 +191,7 @@ export const GlobalGrepModal: React.FC<GlobalGrepModalProps> = ({
         {/* Modal Footer */}
         <div className="flex items-center justify-between border-t border-slate-800 px-4 py-2.5 bg-slate-950/80 text-[11px] text-slate-400 font-mono">
           <span>
-            {results.length} kết quả khớp ({grepScope === 'CORPUS' ? 'PostgreSQL pg_trgm' : 'Staging Session'})
+            {results.length} kết quả khớp (PostgreSQL pg_trgm)
           </span>
           <span>Bấm ESC để đóng</span>
         </div>

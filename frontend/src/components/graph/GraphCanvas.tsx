@@ -6,19 +6,19 @@ import {
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
-import { StagingChunk, StagingDocumentSession, StagingEdge } from '../../types/staging';
+import { GraphVisualizerEdge, GraphVisualizerNode } from '../../types/api';
 
 interface GraphCanvasProps {
-  session: StagingDocumentSession;
+  nodes: GraphVisualizerNode[];
+  edges: GraphVisualizerEdge[];
+  docSlug: string;
   onSelectNode?: (path: string) => void;
 }
 
 interface GraphNodePos {
   path: string;
   label: string;
-  nodeType?: string;
-  reviewStatus?: string;
-  isExternal?: boolean;
+  nodeType: string;
   x: number;
   y: number;
   width: number;
@@ -28,7 +28,8 @@ interface GraphNodePos {
 }
 
 export const GraphCanvas: React.FC<GraphCanvasProps> = ({
-  session,
+  nodes: inputNodes,
+  edges: inputEdges,
   onSelectNode,
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -37,7 +38,7 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
   const [isPanning, setIsPanning] = useState(false);
   const [startPanPos, setStartPanPos] = useState({ x: 0, y: 0 });
 
-  const [selectedEdge, setSelectedEdge] = useState<StagingEdge | null>(null);
+  const [selectedEdge, setSelectedEdge] = useState<GraphVisualizerEdge | null>(null);
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);
 
   // Attach native non-passive wheel listener on Graph Canvas
@@ -66,34 +67,20 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
     };
   }, []);
 
-  // F-7: Extract all unique nodes from session.chunks as well as session.edges so isolated nodes are fully visible
+  // Compute hierarchical layout based on LTree path depth
   const { nodes, edgesWithPos } = useMemo(() => {
-    const nodeSet = new Set<string>();
-    const inDegrees: Record<string, number> = {};
-    const outDegrees: Record<string, number> = {};
-    const chunkMap = new Map<string, StagingChunk>();
-
-    for (const c of session.chunks || []) {
-      chunkMap.set(c.path, c);
-      nodeSet.add(c.path);
+    const nodeMap = new Map<string, GraphVisualizerNode>();
+    for (const n of inputNodes) {
+      nodeMap.set(n.path, n);
     }
 
-    for (const e of session.edges) {
-      nodeSet.add(e.source_path);
-      outDegrees[e.source_path] = (outDegrees[e.source_path] || 0) + 1;
-      if (e.target_path) {
-        nodeSet.add(e.target_path);
-        inDegrees[e.target_path] = (inDegrees[e.target_path] || 0) + 1;
-      }
-    }
-
-    // Hierarchical DAG / Tree layout: group by ltree depth level
-    const sortedNodePaths = Array.from(nodeSet).sort();
     const nodePositions: GraphNodePos[] = [];
     const nMap = new Map<string, GraphNodePos>();
 
     const levelMap = new Map<number, string[]>();
-    sortedNodePaths.forEach((path) => {
+    const sortedPaths = inputNodes.map((n) => n.path).sort();
+
+    sortedPaths.forEach((path) => {
       const depth = Math.max(0, path.split('.').length - 1);
       if (!levelMap.has(depth)) {
         levelMap.set(depth, []);
@@ -109,27 +96,17 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
         const x = 50 + level * levelSpacing;
         const y = 50 + rowIdx * rowSpacing;
 
-        const chunk = chunkMap.get(path);
-        const isExternal = !chunk;
-        const nodeType = isExternal
-          ? 'NGOẠI VI'
-          : (chunk?.metadata?.node_type as string) ||
-            (chunk as { node_type?: string })?.node_type ||
-            (chunk?.metadata?.is_table ? 'TABLE' : 'PARAGRAPH');
-        const reviewStatus = isExternal ? undefined : (chunk?.review_status || 'PENDING');
-
+        const rawNode = nodeMap.get(path);
         const nodeObj: GraphNodePos = {
           path,
-          label: path.split('.').slice(-2).join('.'),
-          nodeType,
-          reviewStatus,
-          isExternal,
+          label: rawNode?.label || path.split('.').slice(-2).join('.'),
+          nodeType: rawNode?.node_type || 'PARAGRAPH',
           x,
           y,
           width: 220,
           height: 72,
-          inDegree: inDegrees[path] || 0,
-          outDegree: outDegrees[path] || 0,
+          inDegree: rawNode?.in_degree || 0,
+          outDegree: rawNode?.out_degree || 0,
         };
 
         nodePositions.push(nodeObj);
@@ -137,7 +114,7 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
       });
     });
 
-    const renderedEdges = session.edges.map((e) => {
+    const renderedEdges = inputEdges.map((e) => {
       const src = nMap.get(e.source_path);
       const tgt = e.target_path ? nMap.get(e.target_path) : null;
       return {
@@ -148,7 +125,7 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
     });
 
     return { nodes: nodePositions, edgesWithPos: renderedEdges };
-  }, [session.chunks, session.edges]);
+  }, [inputNodes, inputEdges]);
 
   // Pan handlers
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -182,7 +159,7 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
             Chưa Có Chunk Hay Quan Hệ Nào
           </h4>
           <p className="mt-1.5 text-xs text-slate-400 leading-relaxed">
-            Phiên làm việc này hiện chưa có mục nội dung nào được bóc tách vào Staging.
+            Tài liệu này hiện chưa có mục nội dung nào trong cơ sở dữ liệu.
           </p>
         </div>
       </div>
@@ -492,7 +469,7 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
           const isHovered = hoveredNode === n.path;
           const isConnected =
             hoveredNode &&
-            session.edges.some(
+            inputEdges.some(
               (e) =>
                 (e.source_path === hoveredNode && e.target_path === n.path) ||
                 (e.target_path === hoveredNode && e.source_path === n.path)
@@ -515,40 +492,22 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
             >
               <div
                 className={`flex h-full w-full flex-col justify-between rounded-xl p-2.5 shadow-lg backdrop-blur-md transition-all duration-150 ${
-                  n.isExternal
-                    ? 'border-2 border-dashed border-amber-600/80 bg-slate-950/95 shadow-amber-950/50'
-                    : isHovered || isConnected
+                  isHovered || isConnected
                     ? 'border border-brand-400 bg-brand-950/90 ring-2 ring-brand-400/40 shadow-brand-950'
                     : 'border border-slate-800 bg-slate-900/90 hover:border-slate-600'
                 }`}
               >
                 <div className="flex items-center justify-between gap-1.5">
                   <div className="flex items-center gap-1.5 truncate">
-                    {n.isExternal ? (
-                      <span
-                        className="rounded bg-amber-950 px-1 py-0.5 text-[8px] font-mono font-bold uppercase text-amber-300 border border-amber-700/80"
-                        title="Chunk ngoại vi / chưa nạp nội bộ"
-                      >
-                        NGOẠI VI
-                      </span>
-                    ) : (
-                      <span
-                        className={`h-2 w-2 rounded-full shrink-0 ${
-                          n.reviewStatus === 'REVIEWED' ? 'bg-emerald-400' : 'bg-amber-400'
-                        }`}
-                        title={n.reviewStatus === 'REVIEWED' ? 'Đã rà soát' : 'Chờ rà soát'}
-                      />
-                    )}
+                    <span className="h-2 w-2 rounded-full shrink-0 bg-emerald-400" />
                     <span className="font-mono text-[11px] font-bold text-slate-100 truncate">
                       {n.label}
                     </span>
                   </div>
                   <div className="flex items-center gap-1">
-                    {n.nodeType && !n.isExternal && (
-                      <span className="rounded bg-slate-800 px-1 py-0.2 text-[8px] font-mono uppercase text-slate-300 border border-slate-700">
-                        {n.nodeType}
-                      </span>
-                    )}
+                    <span className="rounded bg-slate-800 px-1 py-0.2 text-[8px] font-mono uppercase text-slate-300 border border-slate-700">
+                      {n.nodeType}
+                    </span>
                     {n.outDegree > 0 && (
                       <span className="rounded bg-blue-950 px-1 py-0.2 text-[9px] font-mono font-bold text-blue-300 border border-blue-800">
                         {n.outDegree} ra
@@ -562,7 +521,7 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
                   </div>
                 </div>
 
-                <div className={`font-mono text-[10px] truncate ${n.isExternal ? 'text-amber-400/90' : 'text-slate-400'}`}>
+                <div className="font-mono text-[10px] truncate text-slate-400">
                   {n.path}
                 </div>
               </div>

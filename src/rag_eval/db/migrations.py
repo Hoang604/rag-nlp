@@ -11,6 +11,35 @@ logger = logging.getLogger(__name__)
 SQL_DIR: Final[Path] = Path(__file__).parent / "sql"
 MIGRATION_ADVISORY_LOCK_ID: Final[int] = 849201
 
+LEGACY_MIGRATIONS: Final[tuple[str, ...]] = (
+    "006_chunk_context_refs.sql",
+    "007_stored_procs.sql",
+    "008_unresolved_external_refs.sql",
+    "009_deferred_ref_integrity.sql",
+    "010_drop_chunk_context_refs.sql",
+)
+
+RECONCILIATION_DDL: Final[str] = """
+DROP TABLE IF EXISTS chunk_context_refs CASCADE;
+ALTER TABLE chunks DROP COLUMN IF EXISTS context_type CASCADE;
+ALTER TABLE chunks DROP COLUMN IF EXISTS is_all_refs_resolved CASCADE;
+DROP TRIGGER IF EXISTS trg_assert_chunk_invariants ON chunks;
+DROP FUNCTION IF EXISTS assert_chunk_invariants() CASCADE;
+DROP FUNCTION IF EXISTS assert_chunk_context_ref_invariants() CASCADE;
+DROP FUNCTION IF EXISTS assert_chunk_ref_consistency() CASCADE;
+DROP FUNCTION IF EXISTS assert_chunk_ref_edge_integrity() CASCADE;
+DROP INDEX IF EXISTS idx_chunks_context_type;
+DROP FUNCTION IF EXISTS verbatim_grep(TEXT, TEXT[], LTREE, BOOLEAN, BOOLEAN, BOOLEAN, INT) CASCADE;
+DROP FUNCTION IF EXISTS verbatim_grep_count(TEXT, TEXT[], LTREE, BOOLEAN, BOOLEAN, BOOLEAN) CASCADE;
+DROP FUNCTION IF EXISTS hybrid_search(TEXT, VECTOR, INT, INT, TEXT[], LTREE, BOOLEAN, TEXT) CASCADE;
+DROP FUNCTION IF EXISTS verbatim_grep(TEXT, TEXT[], LTREE, BOOLEAN, BOOLEAN, INT) CASCADE;
+DROP FUNCTION IF EXISTS verbatim_grep_count(TEXT, TEXT[], LTREE, BOOLEAN, BOOLEAN) CASCADE;
+DROP FUNCTION IF EXISTS hybrid_search(TEXT, VECTOR, INT, INT, TEXT[], LTREE, TEXT) CASCADE;
+DROP FUNCTION IF EXISTS verbatim_grep CASCADE;
+DROP FUNCTION IF EXISTS verbatim_grep_count CASCADE;
+DROP FUNCTION IF EXISTS hybrid_search CASCADE;
+"""
+
 
 def get_migration_sql_files(sql_dir: Path | None = None) -> list[Path]:
     """Discovers all .sql migration files in the SQL directory sorted lexicographically.
@@ -59,11 +88,47 @@ async def get_applied_migrations(conn: asyncpg.Connection) -> set[str]:
     return {str(r["version"]) for r in records}
 
 
+async def reconcile_legacy_schema(conn: asyncpg.Connection) -> bool:
+    """Non-destructively reconciles legacy database mutations targeting clean Day-One layout.
+
+    Args:
+        conn: Active asyncpg connection.
+
+    Returns:
+        True if legacy reconciliation was executed, False if already canonical.
+    """
+    await init_migration_table(conn)
+    legacy_count = await conn.fetchval(
+        "SELECT count(*) FROM schema_migrations WHERE version = ANY($1::text[]);",
+        list(LEGACY_MIGRATIONS),
+    )
+    has_legacy_cols = await conn.fetchval(
+        """
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_name = 'chunks' AND column_name = 'context_type'
+        );
+        """
+    )
+    if not legacy_count and not has_legacy_cols:
+        return False
+
+    logger.info("Detected legacy database schema mutations; executing in-place reconciliation...")
+    async with conn.transaction():
+        await conn.execute(RECONCILIATION_DDL)
+        await conn.execute(
+            "DELETE FROM schema_migrations WHERE version = ANY($1::text[]);",
+            list(LEGACY_MIGRATIONS),
+        )
+    logger.info("Legacy schema reconciliation successfully completed.")
+    return True
+
+
 async def run_migrations(
     pool: asyncpg.Pool,
     sql_dir: Path | None = None,
 ) -> list[str]:
-    """Executes unapplied SQL migrations in deterministic alphabetical sequence.
+    """Executes unapplied SQL migrations in deterministic alphabetical sequence after reconciliation.
 
     Uses PostgreSQL session-level advisory locks to prevent concurrent worker migration races.
 
@@ -88,6 +153,7 @@ async def run_migrations(
         await conn.execute("SELECT pg_advisory_lock($1);", MIGRATION_ADVISORY_LOCK_ID)
         try:
             await init_migration_table(conn)
+            await reconcile_legacy_schema(conn)
             applied_set = await get_applied_migrations(conn)
 
             for sql_file in migration_files:
@@ -126,3 +192,25 @@ async def run_migrations(
             )
 
     return applied_now
+
+
+if __name__ == "__main__":
+    import asyncio
+    import sys
+
+    from rag_eval.db.connection import get_db_pool
+
+    async def _cli_main() -> None:
+        logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+        pool = await get_db_pool()
+        try:
+            applied = await run_migrations(pool)
+            print(f"Applied migrations: {applied}")
+        finally:
+            await pool.close()
+
+    try:
+        asyncio.run(_cli_main())
+    except (asyncpg.PostgresError, OSError, RuntimeError, ValueError) as exc:
+        print(f"Migration error: {exc}", file=sys.stderr)
+        sys.exit(1)

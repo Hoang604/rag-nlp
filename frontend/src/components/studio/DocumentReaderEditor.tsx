@@ -3,7 +3,7 @@ import {
   FileText,
   Share2,
 } from 'lucide-react';
-import { StagingEdge } from '../../types/staging';
+import { GraphVisualizerEdge } from '../../types/api';
 import { DocumentTreeNode } from '../../types/tree';
 import { getNodeTypeColor } from '../../utils/ltree';
 import { naturalPathCompare } from '../../utils/sorting';
@@ -12,14 +12,14 @@ interface DocumentReaderEditorProps {
   rootNode: DocumentTreeNode | null;
   selectedPath: string;
   onSelectPath: (path: string) => void;
-  edges: StagingEdge[];
+  edges: GraphVisualizerEdge[];
 }
 
 interface RenderSectionProps {
   node: DocumentTreeNode;
   selectedPath: string;
   onSelectPath: (path: string) => void;
-  edges: StagingEdge[];
+  edges: GraphVisualizerEdge[];
   nodeRefs: React.MutableRefObject<Map<string, HTMLDivElement>>;
   depth: number;
 }
@@ -185,7 +185,7 @@ export const DocumentReaderEditor: React.FC<DocumentReaderEditorProps> = ({
   if (!rootNode) {
     return (
       <div className="flex h-full w-full items-center justify-center p-8 text-center text-xs text-slate-500">
-        Chưa có dữ liệu chunk trong phiên này.
+        Chưa có dữ liệu chunk cho tài liệu này.
       </div>
     );
   }

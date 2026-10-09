@@ -10,8 +10,7 @@
         "logs/mcp_server.log"
       ],
       "env": {
-        "DATABASE_URL": "postgresql://postgres:postgres@localhost:15432/rag_db",
-        "STAGING_DIR": ".cache/stg"
+        "DATABASE_URL": "postgresql://postgres:postgres@localhost:1542/rag_db"
       }
     }
   }

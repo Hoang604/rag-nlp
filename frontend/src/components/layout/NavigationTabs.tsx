@@ -1,19 +1,13 @@
 import React from 'react';
 import {
-  CheckSquare,
-  Columns,
   FolderTree,
-  GitBranch,
   Search,
   Share2,
 } from 'lucide-react';
 
 export type TabId =
   | 'studio'
-  | 'dualview'
-  | 'diff'
   | 'graph'
-  | 'checklist'
   | 'search';
 
 interface NavigationTabsProps {
@@ -21,8 +15,6 @@ interface NavigationTabsProps {
   onTabChange: (tab: TabId) => void;
   chunksCount: number;
   edgesCount: number;
-  diffsCount: number;
-  issuesCount: number;
 }
 
 export const NavigationTabs: React.FC<NavigationTabsProps> = ({
@@ -30,8 +22,6 @@ export const NavigationTabs: React.FC<NavigationTabsProps> = ({
   onTabChange,
   chunksCount,
   edgesCount,
-  diffsCount,
-  issuesCount,
 }) => {
   const tabs = [
     {
@@ -41,39 +31,17 @@ export const NavigationTabs: React.FC<NavigationTabsProps> = ({
       badge: chunksCount > 0 ? `${chunksCount} mục` : undefined,
     },
     {
-      id: 'dualview' as TabId,
-      label: 'Đối Chiếu Toàn Văn',
-      icon: Columns,
-    },
-    {
       id: 'graph' as TabId,
-      label: 'Đồ Thị Quan Hệ 2D',
+      label: 'Đồ Thị Tri Thức 2D',
       icon: Share2,
       badge: edgesCount > 0 ? `${edgesCount}` : undefined,
       badgeColor: 'bg-blue-950 text-blue-300 border border-blue-800',
-    },
-    {
-      id: 'diff' as TabId,
-      label: 'Lịch Sử & Diff',
-      icon: GitBranch,
-      badge: diffsCount > 0 ? `${diffsCount}` : undefined,
-    },
-    {
-      id: 'checklist' as TabId,
-      label: 'Kiểm Tra Toàn Vẹn',
-      icon: CheckSquare,
-      badge: issuesCount > 0 ? `${issuesCount} lỗi` : 'Đạt ✔',
-      badgeColor:
-        issuesCount > 0
-          ? 'bg-rose-950 text-rose-300 border border-rose-800'
-          : 'bg-emerald-950 text-emerald-300 border border-emerald-800',
     },
     {
       id: 'search' as TabId,
       label: 'Thử Nghiệm Truy Xuất',
       icon: Search,
     },
-
   ];
 
   return (

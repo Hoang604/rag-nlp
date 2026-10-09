@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import uuid
 from typing import Final, Literal
 
 import asyncpg
@@ -19,8 +18,9 @@ from rag_eval.retrieval.embedder import QueryEmbedder
 from rag_eval.retrieval.engine import RetrievalEngine
 from rag_eval.retrieval.reranker import CorpusReranker
 from rag_eval.schemas import (
+    AgentVennHit,
     HierarchicalDirection,
-    VerbatimGrepQuery,
+    VennSearchResult,
     validate_ltree_path,
 )
 
@@ -46,40 +46,6 @@ RERANK_POOL: Final[int] = 10
 # Canonical Agent-First Models & Result Containers
 # ---------------------------------------------------------------------------
 
-
-class AgentSearchHit(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    doc_slug: str
-    doc_title: str
-    path: str
-    start_line: int
-    end_line: int
-    verbatim_text: str
-    contextualized_text: str
-    context_type: str
-    is_all_refs_resolved: bool
-    metadata: dict[str, object] = Field(default_factory=dict)
-
-
-class HybridSearchResult(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    total_hits: int
-    hits: list[AgentSearchHit]
-    confidence: str
-    expanded_query: str = ""
-
-
-class VerbatimGrepResult(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    pattern: str
-    is_regex: bool
-    total_matches: int
-    returned: int
-    truncated: bool
-    matches: list[AgentSearchHit]
 
 
 class AgentHierarchyNode(BaseModel):
@@ -110,11 +76,16 @@ class HierarchicalNavigateResult(BaseModel):
 class AgentGraphTraversalStep(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    source_path: str
-    target_path: str
-    relation_type: str
-    depth: int
-    target_text: str = ""
+    source_path: str = Field(..., min_length=1, description="Đường dẫn LTree của chunk nguồn")
+    target_path: str = Field(..., min_length=1, description="Đường dẫn LTree của chunk đích")
+    relation_type: str = Field(..., description="Loại quan hệ giữa 2 chunk")
+    depth: int = Field(..., ge=1, description="Độ sâu bước nhảy trên đồ thị")
+    target_text: str = Field(..., description="Nội dung văn bản gốc của chunk đích")
+    target_contextualized_text: str = Field(..., min_length=1, description="Đoạn văn đầy đủ ngữ cảnh để trích dẫn trực tiếp")
+    target_doc_slug: str = Field(..., min_length=1, description="Mã định danh tài liệu chứa chunk đích")
+    target_start_line: int = Field(..., ge=1, description="Số dòng bắt đầu trong tài liệu gốc")
+    target_end_line: int = Field(..., ge=1, description="Số dòng kết thúc trong tài liệu gốc")
+    rationale: str | None = Field(default=None, description="Luận cứ ngữ nghĩa kết nối hai nút")
 
 
 class GraphTraverseResult(BaseModel):
@@ -123,29 +94,6 @@ class GraphTraverseResult(BaseModel):
     source_path: str
     total_paths: int
     paths: list[AgentGraphTraversalStep]
-
-
-class AgentBacklogItem(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    doc_slug: str
-    path: str
-    target_path: str | None = None
-    context_type: str = "REQUIRES_EXTERNAL_CONTEXT"
-    is_all_refs_resolved: bool = False
-    verbatim_text: str = ""
-    contextualized_text: str = ""
-    char_start: int | None = None
-    char_end: int | None = None
-    metadata: dict[str, object] = Field(default_factory=dict)
-
-
-class ChunkBacklogResult(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    total_unfinalized: int
-    returned: int
-    items: list[AgentBacklogItem]
 
 
 # ---------------------------------------------------------------------------
@@ -214,109 +162,34 @@ class CorpusRuntimeSensors:
     async def hybrid_search(
         self,
         query: str,
+        pattern: str,
         limit: int = 10,
-        doc_slugs: list[str] | None = None,
-        path_prefix: str | None = None,
-        only_resolved: bool | None = None,
         rerank: bool | None = None,
         rerank_pool: int = RERANK_POOL,
-    ) -> HybridSearchResult:
-        """Executes generalized dense+sparse hybrid retrieval via RetrievalEngine."""
+        doc_slugs: list[str] | None = None,
+        path_prefix: str | None = None,
+        is_regex: bool = False,
+        case_sensitive: bool = False,
+    ) -> VennSearchResult:
+        """Executes generalized dual-channel Venn retrieval via RetrievalEngine."""
         try:
             engine = await self._get_engine()
-            pipeline_result = await engine.search(
+            return await engine.search_venn(
                 query=query,
+                pattern=pattern,
                 limit=limit,
                 rerank=rerank,
                 rerank_pool=rerank_pool,
                 doc_slugs=doc_slugs,
                 path_prefix=path_prefix,
-                only_resolved=bool(only_resolved),
-            )
-            agent_hits = [
-                AgentSearchHit(
-                    doc_slug=h.doc_slug,
-                    doc_title=h.doc_title,
-                    path=h.path,
-                    start_line=h.start_line,
-                    end_line=h.end_line,
-                    verbatim_text=h.verbatim_text,
-                    contextualized_text=h.contextualized_text,
-                    context_type=str(h.context_type),
-                    is_all_refs_resolved=h.is_all_refs_resolved,
-                    metadata=dict(h.metadata),
-                )
-                for h in pipeline_result.hits
-            ]
-
-            return HybridSearchResult(
-                total_hits=len(agent_hits),
-                hits=agent_hits,
-                confidence=pipeline_result.confidence,
-                expanded_query=pipeline_result.expanded_query,
+                is_regex=is_regex,
+                case_sensitive=case_sensitive,
             )
         except (OSError, RuntimeError, CorpusDomainError, TypeError, ValueError) as exc:
             logger.error("hybrid_search failed: %s", exc)
             raise CorpusDomainError(
                 error_code=E_AST_GROUNDING_VALIDATION,
                 message=f"Hybrid search execution error: {exc}",
-            ) from exc
-
-    async def verbatim_grep(
-        self,
-        pattern: str,
-        is_regex: bool = False,
-        case_sensitive: bool = False,
-        limit: int = 20,
-        path_prefix: str | None = None,
-        only_resolved: bool | None = None,
-        target_documents: list[str] | None = None,
-    ) -> VerbatimGrepResult:
-        """Executes exact / trigram grep search via ChunkRepository."""
-        repo = await self._get_repo()
-
-        query_dto = VerbatimGrepQuery(
-            query_pattern=pattern,
-            target_documents=target_documents or None,
-            path_prefix=path_prefix,
-            only_resolved=bool(only_resolved),
-            is_regex=is_regex,
-            case_sensitive=case_sensitive,
-            match_limit=limit,
-        )
-
-        try:
-            hits, total = await repo.chunks.verbatim_grep(query_dto)
-
-            agent_hits = [
-                AgentSearchHit(
-                    doc_slug=h.doc_slug,
-                    doc_title=h.doc_title,
-                    path=h.path,
-                    start_line=h.start_line,
-                    end_line=h.end_line,
-                    verbatim_text=h.verbatim_text,
-                    contextualized_text=h.contextualized_text,
-                    context_type=str(h.context_type),
-                    is_all_refs_resolved=h.is_all_refs_resolved,
-                    metadata=dict(h.metadata),
-                )
-                for h in hits
-            ]
-
-            return VerbatimGrepResult(
-                pattern=pattern,
-                is_regex=is_regex,
-                total_matches=total,
-                returned=len(agent_hits),
-                truncated=(total > len(agent_hits)),
-                matches=agent_hits,
-            )
-        except (OSError, RuntimeError, CorpusDomainError, TypeError, ValueError) as exc:
-            logger.error("verbatim_grep failed: %s", exc)
-            raise CorpusDomainError(
-                error_code=E_AST_GROUNDING_VALIDATION,
-                message=f"Verbatim grep execution error: {exc}",
             ) from exc
 
     async def hierarchical_navigate(
@@ -366,6 +239,7 @@ class CorpusRuntimeSensors:
         direction: GraphDirection = "OUTGOING",
         max_depth: int = 2,
         filter_relations: list[str] | None = None,
+        limit: int = 20,
     ) -> GraphTraverseResult:
         """Traverses knowledge graph bidirectionally for symmetric edges via GraphRepository."""
         repo = await self._get_repo()
@@ -382,34 +256,24 @@ class CorpusRuntimeSensors:
             nav_direction=direction,
             depth_limit=max_depth,
             filter_relations=filter_relations,
+            match_limit=limit,
         )
 
-        needed_ids = {s.source_chunk_id for s in steps_dto if s.depth > 1}
-        id_to_path: dict[uuid.UUID, str] = {chunk.id: clean_path}
-        if needed_ids:
-            resolved = await repo.chunks.resolve_ids_batch(list(needed_ids))
-            id_to_path.update(resolved)
-
-        agent_steps: list[AgentGraphTraversalStep] = []
-        for s in steps_dto:
-            src_path = id_to_path.get(s.source_chunk_id)
-            if src_path is None:
-                raise CorpusDomainError(
-                    error_code=E_INVALID_DOCUMENT_HIERARCHY,
-                    message=(
-                        f"Không thể phân giải đường dẫn nút nguồn (UUID: {s.source_chunk_id}) "
-                        f"tại bước nhảy độ sâu {s.depth} cho đích '{s.target_path}'."
-                    ),
-                )
-            agent_steps.append(
-                AgentGraphTraversalStep(
-                    source_path=src_path,
-                    target_path=s.target_path,
-                    relation_type=s.relation_type,
-                    depth=s.depth,
-                    target_text=s.target_text,
-                )
+        agent_steps: list[AgentGraphTraversalStep] = [
+            AgentGraphTraversalStep(
+                source_path=s.source_path,
+                target_path=s.target_path,
+                relation_type=s.relation_type,
+                depth=s.depth,
+                target_text=s.target_text,
+                target_contextualized_text=s.target_contextualized_text,
+                target_doc_slug=s.target_doc_slug,
+                target_start_line=s.target_start_line,
+                target_end_line=s.target_end_line,
+                rationale=s.rationale,
             )
+            for s in steps_dto
+        ]
 
         return GraphTraverseResult(
             source_path=clean_path,
@@ -417,33 +281,18 @@ class CorpusRuntimeSensors:
             paths=agent_steps,
         )
 
-    async def corpus_backlog_poll(
-        self,
-        doc_slug: str | None = None,
-        limit: int = 50,
-    ) -> ChunkBacklogResult:
-        """Polls unresolved context dependencies via ChunkContextRefRepository."""
-        repo = await self._get_repo()
-        rows = await repo.context_refs.get_unresolved_backlog(doc_slug=doc_slug, limit=limit)
 
-        agent_items = [
-            AgentBacklogItem(
-                doc_slug=b.doc_slug,
-                path=b.path,
-                target_path=b.target_path,
-                context_type=str(b.context_type),
-                is_all_refs_resolved=b.is_all_refs_resolved,
-                verbatim_text=b.verbatim_text,
-                contextualized_text=b.contextualized_text,
-                char_start=b.char_start,
-                char_end=b.char_end,
-                metadata=dict(b.metadata),
-            )
-            for b in rows
-        ]
-
-        return ChunkBacklogResult(
-            total_unfinalized=len(agent_items),
-            returned=len(agent_items),
-            items=agent_items,
-        )
+__all__ = [
+    "HIERARCHICAL_DIRECTION_DESCRIPTION",
+    "HIERARCHICAL_DIRECTION_DOCS",
+    "RERANK_POOL",
+    "AgentGraphTraversalStep",
+    "AgentHierarchyNode",
+    "AgentVennHit",
+    "CorpusRuntimeSensors",
+    "GraphDirection",
+    "GraphTraverseResult",
+    "HierarchicalDirection",
+    "HierarchicalNavigateResult",
+    "VennSearchResult",
+]

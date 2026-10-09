@@ -1,9 +1,15 @@
+-- Overload-safe head drops to prevent collision with legacy signatures
+DROP FUNCTION IF EXISTS verbatim_grep(TEXT, TEXT[], LTREE, BOOLEAN, BOOLEAN, BOOLEAN, INT) CASCADE;
+DROP FUNCTION IF EXISTS verbatim_grep_count(TEXT, TEXT[], LTREE, BOOLEAN, BOOLEAN, BOOLEAN) CASCADE;
+DROP FUNCTION IF EXISTS hybrid_search(TEXT, VECTOR, INT, INT, TEXT[], LTREE, BOOLEAN, TEXT) CASCADE;
+DROP FUNCTION IF EXISTS verbatim_grep(TEXT, TEXT[], LTREE, BOOLEAN, BOOLEAN, INT) CASCADE;
+DROP FUNCTION IF EXISTS verbatim_grep_count(TEXT, TEXT[], LTREE, BOOLEAN, BOOLEAN) CASCADE;
+DROP FUNCTION IF EXISTS hybrid_search(TEXT, VECTOR, INT, INT, TEXT[], LTREE, TEXT) CASCADE;
+DROP FUNCTION IF EXISTS verbatim_grep CASCADE;
+DROP FUNCTION IF EXISTS verbatim_grep_count CASCADE;
+DROP FUNCTION IF EXISTS hybrid_search CASCADE;
+
 -- 1. Stored Procedure: Recursive Knowledge Graph Traversal (Strict Contract)
--- Tối ưu hóa:
--- - Nhận diện quan hệ đối xứng (rt.is_symmetric = TRUE) để duyệt 2 chiều tự động.
--- - Chống chu trình lặp (visited_nodes) tránh loop vô hạn trên đồ thị có chu trình.
--- - Hỗ trợ lọc theo danh mục quan hệ (filter_relations).
--- - Tuyệt đối không dùng DEFAULT; validate tham số đầu vào (Fail-Fast).
 CREATE OR REPLACE FUNCTION traverse_knowledge_graph(
     source_id UUID,
     nav_direction TEXT,
@@ -107,15 +113,10 @@ END;
 $$ LANGUAGE plpgsql STABLE;
 
 -- 2. Stored Procedure: Exact & Trigram Grep Search (Strict Contract)
--- Tối ưu hóa:
--- - Bổ sung start_line, end_line cho phép grounding chính xác dòng trong tài liệu.
--- - Bổ sung lọc phân cấp cây tài liệu (path_prefix LTREE) qua index GiST.
--- - Bổ sung lọc trạng thái hoàn thiện ngữ cảnh (only_resolved BOOLEAN).
 CREATE OR REPLACE FUNCTION verbatim_grep(
     query_pattern TEXT,
     target_documents TEXT[],
     path_prefix LTREE,
-    only_resolved BOOLEAN,
     is_regex BOOLEAN,
     case_sensitive BOOLEAN,
     match_limit INT
@@ -129,8 +130,6 @@ RETURNS TABLE (
     end_line INT,
     verbatim_text TEXT,
     contextualized_text TEXT,
-    context_type VARCHAR,
-    is_all_refs_resolved BOOLEAN,
     metadata JSONB,
     similarity_score FLOAT,
     full_count BIGINT
@@ -156,8 +155,6 @@ BEGIN
             c.end_line,
             c.verbatim_text,
             c.contextualized_text,
-            c.context_type,
-            c.is_all_refs_resolved,
             c.metadata,
             GREATEST(
                 word_similarity(clean_pattern, c.verbatim_text),
@@ -176,7 +173,6 @@ BEGIN
             OR d.doc_slug = ANY(target_documents)
         )
         AND (path_prefix IS NULL OR c.path <@ path_prefix)
-        AND (only_resolved IS NULL OR NOT only_resolved OR c.is_all_refs_resolved = TRUE)
         ORDER BY similarity_score DESC
         LIMIT match_limit;
     ELSE
@@ -190,8 +186,6 @@ BEGIN
             c.end_line,
             c.verbatim_text,
             c.contextualized_text,
-            c.context_type,
-            c.is_all_refs_resolved,
             c.metadata,
             GREATEST(
                 word_similarity(clean_pattern, c.verbatim_text),
@@ -215,7 +209,6 @@ BEGIN
             OR d.doc_slug = ANY(target_documents)
         )
         AND (path_prefix IS NULL OR c.path <@ path_prefix)
-        AND (only_resolved IS NULL OR NOT only_resolved OR c.is_all_refs_resolved = TRUE)
         ORDER BY similarity_score DESC
         LIMIT match_limit;
     END IF;
@@ -223,12 +216,10 @@ END;
 $$ LANGUAGE plpgsql STABLE;
 
 -- 3. Stored Procedure: Exact & Trigram Grep Count (Strict Contract)
--- Tối ưu hóa: Đồng bộ các bộ lọc phân cấp cây (path_prefix) và ngữ cảnh (only_resolved) với hàm search.
 CREATE OR REPLACE FUNCTION verbatim_grep_count(
     query_pattern TEXT,
     target_documents TEXT[],
     path_prefix LTREE,
-    only_resolved BOOLEAN,
     is_regex BOOLEAN,
     case_sensitive BOOLEAN
 )
@@ -264,19 +255,13 @@ BEGIN
         OR cardinality(target_documents) = 0 
         OR d.doc_slug = ANY(target_documents)
     )
-    AND (path_prefix IS NULL OR c.path <@ path_prefix)
-    AND (only_resolved IS NULL OR NOT only_resolved OR c.is_all_refs_resolved = TRUE);
+    AND (path_prefix IS NULL OR c.path <@ path_prefix);
 
     RETURN COALESCE(total, 0);
 END;
 $$ LANGUAGE plpgsql STABLE;
 
 -- 4. Stored Procedure: Generalized Hybrid Search (Strict Contract)
--- Tối ưu hóa:
--- - Bổ sung start_line, end_line.
--- - Bổ sung lọc phân cấp cây tài liệu (path_prefix LTREE) qua index GiST ở cả 2 nhánh dense và sparse.
--- - Bổ sung lọc trạng thái hoàn thiện tham chiếu (only_resolved BOOLEAN).
--- - Fail-fast kiểm tra giá trị tham số hợp lệ (match_limit, rrf_k, ts_config).
 CREATE OR REPLACE FUNCTION hybrid_search(
     query_text TEXT,
     query_vector VECTOR(512),
@@ -284,7 +269,6 @@ CREATE OR REPLACE FUNCTION hybrid_search(
     rrf_k INT,
     target_documents TEXT[],
     path_prefix LTREE,
-    only_resolved BOOLEAN,
     ts_config TEXT
 )
 RETURNS TABLE (
@@ -296,8 +280,6 @@ RETURNS TABLE (
     end_line INT,
     verbatim_text TEXT,
     contextualized_text TEXT,
-    context_type VARCHAR,
-    is_all_refs_resolved BOOLEAN,
     metadata JSONB,
     rrf_score DOUBLE PRECISION,
     dense_rank BIGINT,
@@ -362,7 +344,6 @@ BEGIN
           AND c.embedding IS NOT NULL
           AND (scope_ids IS NULL OR c.document_id = ANY(scope_ids))
           AND (path_prefix IS NULL OR c.path <@ path_prefix)
-          AND (only_resolved IS NULL OR NOT only_resolved OR c.is_all_refs_resolved = TRUE)
         ORDER BY (c.embedding <=> query_vector) ASC
         LIMIT candidate_limit
     ),
@@ -378,7 +359,6 @@ BEGIN
               )
           AND (scope_ids IS NULL OR c.document_id = ANY(scope_ids))
           AND (path_prefix IS NULL OR c.path <@ path_prefix)
-          AND (only_resolved IS NULL OR NOT only_resolved OR c.is_all_refs_resolved = TRUE)
         ORDER BY base_score DESC
         LIMIT candidate_limit * 2
     ),
@@ -403,8 +383,6 @@ BEGIN
         c.end_line,
         c.verbatim_text,
         c.contextualized_text,
-        c.context_type,
-        c.is_all_refs_resolved,
         c.metadata,
         (COALESCE(1.0 / (rrf_k + d_s.rank_dense), 0.0) +
          COALESCE(1.0 / (rrf_k + s.rank_sparse), 0.0))::DOUBLE PRECISION AS rrf_score,

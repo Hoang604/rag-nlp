@@ -7,18 +7,20 @@ import {
   Search,
   Share2,
 } from 'lucide-react';
-import { StagingDocumentSession } from '../../types/staging';
+import { GraphVisualizerResponse } from '../../types/api';
 import { EdgeCardList } from './EdgeCardList';
 import { GraphCanvas } from './GraphCanvas';
 import { GraphTraversalModal } from './GraphTraversalModal';
 
 interface VisualGraphInspectorProps {
-  session: StagingDocumentSession;
+  docSlug: string;
+  graphData: GraphVisualizerResponse | null;
   onSelectNode?: (path: string) => void;
 }
 
 export const VisualGraphInspector: React.FC<VisualGraphInspectorProps> = ({
-  session,
+  docSlug,
+  graphData,
   onSelectNode,
 }) => {
   const [viewMode, setViewMode] = useState<'canvas' | 'list'>('canvas');
@@ -26,8 +28,11 @@ export const VisualGraphInspector: React.FC<VisualGraphInspectorProps> = ({
   const [searchPath, setSearchPath] = useState<string>('');
   const [isTraversalOpen, setIsTraversalOpen] = useState<boolean>(false);
 
+  const edges = useMemo(() => graphData?.edges || [], [graphData]);
+  const nodes = useMemo(() => graphData?.nodes || [], [graphData]);
+
   const filteredEdges = useMemo(() => {
-    return session.edges.filter((e) => {
+    return edges.filter((e) => {
       const matchRel =
         !filterRelation || e.relation_type.toUpperCase() === filterRelation.toUpperCase();
       const matchSearch =
@@ -36,7 +41,7 @@ export const VisualGraphInspector: React.FC<VisualGraphInspectorProps> = ({
         (e.target_path && e.target_path.toLowerCase().includes(searchPath.toLowerCase()));
       return matchRel && matchSearch;
     });
-  }, [session.edges, filterRelation, searchPath]);
+  }, [edges, filterRelation, searchPath]);
 
   return (
     <div className="flex h-full w-full flex-col overflow-hidden bg-slate-950">
@@ -52,11 +57,11 @@ export const VisualGraphInspector: React.FC<VisualGraphInspectorProps> = ({
                 Đồ Thị Tri Thức (Knowledge Graph)
               </h3>
               <span className="rounded-full bg-blue-950 px-2 py-0.5 font-mono text-[10px] font-bold text-blue-400 border border-blue-800">
-                {session.edges.length} quan hệ
+                {edges.length} quan hệ
               </span>
             </div>
             <p className="text-[11px] text-slate-400">
-              Trực quan hóa mạng lưới liên kết quan hệ và cấu trúc đồ thị
+              Trực quan hóa mạng lưới liên kết quan hệ và cấu trúc đồ thị sống từ PostgreSQL
             </p>
           </div>
         </div>
@@ -113,7 +118,7 @@ export const VisualGraphInspector: React.FC<VisualGraphInspectorProps> = ({
               type="text"
               value={searchPath}
               onChange={(e) => setSearchPath(e.target.value)}
-              placeholder="Lọc theo source/target path hoặc trích dẫn..."
+              placeholder="Lọc theo source/target path..."
               className="w-full rounded-md border border-slate-700 bg-slate-950 py-1.5 pl-8 pr-3 text-xs text-slate-100 focus:border-blue-500 focus:outline-none"
             />
           </div>
@@ -144,7 +149,9 @@ export const VisualGraphInspector: React.FC<VisualGraphInspectorProps> = ({
       <div className="flex-1 overflow-hidden relative">
         {viewMode === 'canvas' ? (
           <GraphCanvas
-            session={{ ...session, edges: filteredEdges }}
+            nodes={nodes}
+            edges={filteredEdges}
+            docSlug={docSlug}
             onSelectNode={onSelectNode}
           />
         ) : (
@@ -155,13 +162,15 @@ export const VisualGraphInspector: React.FC<VisualGraphInspectorProps> = ({
       </div>
 
       {/* Multi-Hop Traversal Modal */}
-      <GraphTraversalModal
-        isOpen={isTraversalOpen}
-        onClose={() => setIsTraversalOpen(false)}
-        docSlug={session.doc_slug}
-        initialSourcePath={session.chunks[0]?.path || ''}
-        onSelectNode={onSelectNode}
-      />
+      {docSlug && (
+        <GraphTraversalModal
+          isOpen={isTraversalOpen}
+          onClose={() => setIsTraversalOpen(false)}
+          docSlug={docSlug}
+          initialSourcePath={nodes[0]?.path || ''}
+          onSelectNode={onSelectNode}
+        />
+      )}
     </div>
   );
 };

@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from mcp.shared.exceptions import MCPError
 from mcp.types import CallToolResult, TextContent
 
@@ -22,7 +23,6 @@ from rag_eval.mcp.registry import register_mcp_tools
 from rag_eval.mcp.tools import (
     CorpusMCPTools,
     CorpusRuntimeSensors,
-    CorpusStagingTools,
 )
 from rag_eval.retrieval.embedder import (
     QueryEmbedder,
@@ -44,7 +44,7 @@ class FlushingFileHandler(logging.FileHandler):
 SERVER_NAME = "rag-corpus-mcp"
 SERVER_VERSION = "3.0.0"
 
-STATIC_SERVER_INSTRUCTIONS = """# RAG CORPUS PROTOCOL & STAGING INVARIANTS
+STATIC_SERVER_INSTRUCTIONS = """# RAG CORPUS PROTOCOL & KNOWLEDGE GRAPH INVARIANTS
 
 ## 1. MENTAL & TOPOLOGICAL MODEL
 - HIERARCHY: Documents form a strict tree `Document -> Segment -> Sub-segment...` with dot-separated hierarchical paths (e.g. `doc_slug.sec_1.para_2`).
@@ -53,26 +53,17 @@ STATIC_SERVER_INSTRUCTIONS = """# RAG CORPUS PROTOCOL & STAGING INVARIANTS
 
 ## 2. RETRIEVAL & CONTEXT EXPANSION PRINCIPLE
 Retrieval direction is governed by token specificity and contextual completeness:
-- Token Specificity: Exact alphanumeric identifiers and literal phrases demand deterministic pattern matching (`verbatim_grep`); thematic and conceptual inquiries demand hybrid semantic relevance (`hybrid_search`).
+- Dual-Channel Retrieval: Unified hybrid_search concurrently gathers semantic context (query) and literal keyword anchors (pattern), partitioned into disjoint Venn sets.
 - Contextual Expansion: When a retrieved chunk possesses an unresolved referential deficit, expand locally along the hierarchical tree (`hierarchical_navigate`) or follow semantic relations through the knowledge graph (`graph_traverse`) rather than issuing ungrounded global queries.
 
 ## 3. GROUNDING & AUTHORITATIVE CITATION CONTRACT
 - Every claim, inference, or synthesis must be explicitly grounded in retrieved leaf chunks and cited via exact hierarchical paths.
 - Tool responses are the sole source of truth. When no retrieved chunk grounds an answer, affirm the absence of data explicitly; never extrapolate or hallucinate ungrounded facts.
 
-## 4. STAGING CURATION & TOPOLOGICAL INVARIANTS
-### Semantic Classification Principles
-- The Isolation Rule: Evaluate each chunk as if the rest of the document does not exist. A chunk is `SELF_CONTAINED` if and only if it is completely self-sufficient — read entirely on its own, it conveys an unambiguous, actionable truth that does not depend on any unstated information.
-- Dependency & Borrowed Meaning: A chunk is `REQUIRES_EXTERNAL_CONTEXT` whenever it relies on borrowed meaning. Read on its own, it is incomplete or risks causing incorrect actions without the context it relies upon.
-- Boundary Guardrail: Arguing that "the document provides the context", "the context is clear from the document", or "the topic was already introduced" is an explicit admission that the chunk is `REQUIRES_EXTERNAL_CONTEXT`.
-- Presumption of Dependency: Continuous text chunks are presumed to require context. Classifying a chunk as `SELF_CONTAINED` carries the burden of proof in `justification` to demonstrate total local autonomy.
-
-### Topological & Finality Contracts
-- Edge Topology: `SELF_CONTAINED` chunks must possess exactly zero outgoing relation edges. `REQUIRES_EXTERNAL_CONTEXT` chunks must possess at least one directed outgoing edge anchored directly to the chunk that resolves the dependency.
-- Two-Tier Finality Gate:
-  1. Chunk Finalization: A chunk transitions to `REVIEWED` via `stg_finalize_chunks` exclusively after explicit textual inspection (`inspected`), semantic classification, and topological edge consistency are satisfied.
-  2. Session Commitment: The staging session transitions to `AGENT_COMMITTED` via `stg_commit` exclusively after pre-flight validation (`stg_validate`) confirms zero topological or integrity violations.
-- Rollback Gate (Uncommit): An `AGENT_COMMITTED` session can be safely unlocked back to an editable status (`DRAFT` or `AMENDMENT`) via `stg_uncommit`. Uncommitting cleanses the commit timestamp while strictly preserving 100% of reviewed chunks and attached graph edges, enabling targeted remediation without re-evaluating unmodified chunks."""
+## 4. RUNTIME KNOWLEDGE GRAPH ENRICHMENT
+- Dynamic Enrichment: Agents can dynamically enrich relationships discovered during retrieval synthesis using `link_chunks`.
+- Relationship Rectification: Erroneous or superseded graph connections can be decoupled cleanly using `unlink_chunks`.
+- Pure Path Addressing: All operations identify chunks exclusively by hierarchical LTree `path` (e.g. `doc_slug.sec_1.para_2`). Database internal UUIDs are completely abstracted."""
 
 
 def render_server_instructions(
@@ -84,23 +75,19 @@ def render_server_instructions(
     return f"{STATIC_SERVER_INSTRUCTIONS.strip()}\n\n{manifest_block.strip()}"
 
 
-CORPUS_SERVER_INSTRUCTIONS = render_server_instructions()
-
-
 def create_default_corpus_mcp_tools(
     embedding_engine: QueryEmbedder | None = None,
     reranker: CorpusReranker | None = None,
 ) -> CorpusMCPTools:
-    """Composition root factory explicitly assembling runtime sensors and staging tools via pure DI."""
-    from rag_eval.ingestion.staging.manager import StagingManager
+    """Composition root factory explicitly assembling runtime sensors and enrichment tools via pure DI."""
+    from rag_eval.mcp.tools.enrichment import CorpusEnrichmentTools
     from rag_eval.retrieval.reranker import CrossEncoderReranker
 
     embedder = embedding_engine or SentenceTransformerQueryEmbedder()
     re_rank = reranker or CrossEncoderReranker()
-    staging_mgr = StagingManager()
     sensors = CorpusRuntimeSensors(embedding_engine=embedder, reranker=re_rank)
-    staging = CorpusStagingTools(staging_manager=staging_mgr)
-    return CorpusMCPTools(sensors=sensors, staging=staging)
+    enrichment = CorpusEnrichmentTools()
+    return CorpusMCPTools(sensors=sensors, enrichment=enrichment)
 
 
 def create_corpus_mcp_server(
@@ -171,26 +158,45 @@ class CorpusMCPServer:
         ]
 
     async def execute_tool(self, name: str, args: dict[str, object]) -> dict[str, object]:
-        canonical_name = name.removeprefix("mcp_corpus_")
-        logger.info("[TOOL] START name=%s (canonical=%s) args=%s", name, canonical_name, args)
+        logger.info("[TOOL] START name=%s args=%s", name, args)
         try:
-            res = await self.mcp_server.call_tool(canonical_name, args)
+            res = await self.mcp_server.call_tool(name, args)
+        except ToolError as exc:
+            raise CorpusDomainError(
+                error_code=E_AST_GROUNDING_VALIDATION,
+                message=str(exc),
+                data={"tool": name, "error": str(exc)},
+            ) from exc
         except Exception as exc:
             cause = getattr(exc, "__cause__", None) or exc
             if isinstance(cause, CorpusDomainError):
                 raise cause from exc
-            logger.error("[TOOL] ERROR name=%s: %s", canonical_name, exc)
+            if isinstance(cause, ToolError):
+                raise CorpusDomainError(
+                    error_code=E_AST_GROUNDING_VALIDATION,
+                    message=str(cause),
+                    data={"tool": name, "error": str(cause)},
+                ) from exc
+            logger.error("[TOOL] ERROR name=%s: %s", name, exc)
+            from pydantic import ValidationError
+
+            err_code = (
+                E_AST_GROUNDING_VALIDATION
+                if isinstance(cause, (ValidationError, ValueError, TypeError, ToolError))
+                or "validation error" in str(cause).lower()
+                else E_CORPUS_INTEGRITY_VIOLATION
+            )
             raise CorpusDomainError(
-                error_code=E_CORPUS_INTEGRITY_VIOLATION,
+                error_code=err_code,
                 message=str(cause),
-                data={"tool": canonical_name, "error": str(cause)},
+                data={"tool": name, "error": str(cause)},
             ) from exc
 
         if isinstance(res, CallToolResult) and res.is_error:
             err_msg = "\n".join(
                 c.text for c in res.content if isinstance(c, TextContent)
             )
-            logger.error("[TOOL] ERROR name=%s: %s", canonical_name, err_msg)
+            logger.error("[TOOL] ERROR name=%s: %s", name, err_msg)
 
             err_code = E_AST_GROUNDING_VALIDATION
             err_data: dict[str, object] | None = None
@@ -209,22 +215,22 @@ class CorpusMCPServer:
 
             raise CorpusDomainError(
                 error_code=err_code,
-                message=err_msg or f"Error executing tool '{canonical_name}'",
-                data=err_data or {"tool": canonical_name},
+                message=err_msg or f"Error executing tool '{name}'",
+                data=err_data or {"tool": name},
             )
         if isinstance(res, CallToolResult):
             for item in res.content:
                 if isinstance(item, TextContent):
                     try:
                         parsed = json.loads(item.text)
-                        logger.info("[TOOL] SUCCESS name=%s", canonical_name)
+                        logger.info("[TOOL] SUCCESS name=%s", name)
                         if isinstance(parsed, dict):
                             return parsed
                         return {"result": parsed}
                     except (json.JSONDecodeError, ValueError):
-                        logger.info("[TOOL] SUCCESS name=%s (raw text)", canonical_name)
+                        logger.info("[TOOL] SUCCESS name=%s (raw text)", name)
                         return {"result": item.text}
-        logger.info("[TOOL] SUCCESS name=%s (empty)", canonical_name)
+        logger.info("[TOOL] SUCCESS name=%s (empty)", name)
         return {}
 
     async def handle_request_dict(self, req: dict[str, object]) -> dict[str, object] | None:
@@ -285,13 +291,6 @@ class CorpusMCPServer:
                         },
                     }
                 out = await self.execute_tool(t_name, t_args)
-                return {"jsonrpc": "2.0", "id": req_id, "result": out}
-
-            all_tool_names = {t.name for t in await self.mcp_server.list_tools()}
-            clean_method = method.removeprefix("mcp_corpus_")
-            if clean_method in all_tool_names:
-                args = params if isinstance(params, dict) else {}
-                out = await self.execute_tool(clean_method, args)
                 return {"jsonrpc": "2.0", "id": req_id, "result": out}
 
             return {

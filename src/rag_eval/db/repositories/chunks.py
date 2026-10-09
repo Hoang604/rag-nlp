@@ -26,8 +26,6 @@ ChunkInsertTuple = tuple[
     str,
     int,
     int,
-    str,
-    bool,
     list[float] | None,
     str,
 ]
@@ -46,20 +44,16 @@ class ChunkRepository(BaseRepository):
         query = """
         INSERT INTO chunks (
             id, document_id, path, verbatim_text, contextualized_text,
-            start_line, end_line, context_type, is_all_refs_resolved,
-            embedding, metadata
+            start_line, end_line, embedding, metadata
         ) VALUES (
             $1, $2, $3::ltree, $4, $5,
-            $6, $7, $8, $9,
-            $10, $11
+            $6, $7, $8, $9
         )
         ON CONFLICT (path) DO UPDATE SET
             verbatim_text = EXCLUDED.verbatim_text,
             contextualized_text = EXCLUDED.contextualized_text,
             start_line = EXCLUDED.start_line,
             end_line = EXCLUDED.end_line,
-            context_type = EXCLUDED.context_type,
-            is_all_refs_resolved = EXCLUDED.is_all_refs_resolved,
             embedding = COALESCE(EXCLUDED.embedding, chunks.embedding),
             metadata = EXCLUDED.metadata,
             updated_at = CURRENT_TIMESTAMP;
@@ -76,8 +70,6 @@ class ChunkRepository(BaseRepository):
                     c.contextualized_text,
                     c.start_line,
                     c.end_line,
-                    c.context_type,
-                    c.is_all_refs_resolved,
                     c.embedding,
                     json.dumps(meta),
                 )
@@ -129,7 +121,7 @@ class ChunkRepository(BaseRepository):
         """Retrieves a chunk by its primary key UUID."""
         query = """
         SELECT id, document_id, path::text, verbatim_text, contextualized_text,
-               start_line, end_line, context_type, is_all_refs_resolved,
+               start_line, end_line,
                embedding, tsv_content, metadata, created_at, updated_at
         FROM chunks WHERE id = $1;
         """
@@ -146,7 +138,7 @@ class ChunkRepository(BaseRepository):
         """Retrieves a chunk by its unique ltree path."""
         query = """
         SELECT id, document_id, path::text, verbatim_text, contextualized_text,
-               start_line, end_line, context_type, is_all_refs_resolved,
+               start_line, end_line,
                embedding, tsv_content, metadata, created_at, updated_at
         FROM chunks WHERE path = $1::ltree;
         """
@@ -163,7 +155,7 @@ class ChunkRepository(BaseRepository):
         """Lists all chunks belonging to a document ordered hierarchically by path."""
         query = """
         SELECT id, document_id, path::text, verbatim_text, contextualized_text,
-               start_line, end_line, context_type, is_all_refs_resolved,
+               start_line, end_line,
                embedding, tsv_content, metadata, created_at, updated_at
         FROM chunks WHERE document_id = $1 ORDER BY path ASC;
         """
@@ -198,10 +190,10 @@ class ChunkRepository(BaseRepository):
         sql = """
         SELECT 
             chunk_id, doc_slug, doc_title, path, start_line, end_line,
-            verbatim_text, contextualized_text, context_type, is_all_refs_resolved,
+            verbatim_text, contextualized_text,
             metadata, rrf_score, dense_rank, sparse_rank, dense_similarity
         FROM hybrid_search(
-            $1, $2::vector, $3::int, $4::int, $5::text[], $6::ltree, $7::boolean, $8::text
+            $1, $2::vector, $3::int, $4::int, $5::text[], $6::ltree, $7::text
         );
         """
         try:
@@ -214,7 +206,6 @@ class ChunkRepository(BaseRepository):
                     query.rrf_k,
                     query.target_documents or None,
                     query.path_prefix or None,
-                    query.only_resolved,
                     query.ts_config,
                 )
                 return [
@@ -227,8 +218,6 @@ class ChunkRepository(BaseRepository):
                         end_line=int(r["end_line"]),
                         verbatim_text=str(r["verbatim_text"]),
                         contextualized_text=str(r["contextualized_text"]),
-                        context_type=str(r["context_type"]),
-                        is_all_refs_resolved=bool(r["is_all_refs_resolved"]),
                         metadata=self._parse_metadata(r["metadata"]),
                         score=float(r["rrf_score"]),
                         dense_rank=int(r["dense_rank"]) if r["dense_rank"] is not None else None,
@@ -247,10 +236,10 @@ class ChunkRepository(BaseRepository):
         sql = """
         SELECT 
             chunk_id, doc_slug, doc_title, path, start_line, end_line,
-            verbatim_text, contextualized_text, context_type, is_all_refs_resolved,
+            verbatim_text, contextualized_text,
             metadata, similarity_score, full_count
         FROM verbatim_grep(
-            $1, $2::text[], $3::ltree, $4::boolean, $5::boolean, $6::boolean, $7::int
+            $1, $2::text[], $3::ltree, $4::boolean, $5::boolean, $6::int
         );
         """
         try:
@@ -260,7 +249,6 @@ class ChunkRepository(BaseRepository):
                     query.query_pattern,
                     query.target_documents or None,
                     query.path_prefix or None,
-                    query.only_resolved,
                     query.is_regex,
                     query.case_sensitive,
                     query.match_limit,
@@ -278,8 +266,6 @@ class ChunkRepository(BaseRepository):
                         end_line=int(r["end_line"]),
                         verbatim_text=str(r["verbatim_text"]),
                         contextualized_text=str(r["contextualized_text"]),
-                        context_type=str(r["context_type"]),
-                        is_all_refs_resolved=bool(r["is_all_refs_resolved"]),
                         metadata=self._parse_metadata(r["metadata"]),
                         score=float(r["similarity_score"]),
                         dense_rank=None,
@@ -298,7 +284,7 @@ class ChunkRepository(BaseRepository):
         """Executes count for verbatim grep search."""
         sql = """
         SELECT verbatim_grep_count(
-            $1, $2::text[], $3::ltree, $4::boolean, $5::boolean, $6::boolean
+            $1, $2::text[], $3::ltree, $4::boolean, $5::boolean
         );
         """
         try:
@@ -308,7 +294,6 @@ class ChunkRepository(BaseRepository):
                     query.query_pattern,
                     query.target_documents or None,
                     query.path_prefix or None,
-                    query.only_resolved,
                     query.is_regex,
                     query.case_sensitive,
                 )
@@ -384,7 +369,6 @@ class ChunkRepository(BaseRepository):
         except (asyncpg.PostgresError, OSError, RuntimeError) as exc:
             raise self._translate_error("navigate_hierarchy", exc) from exc
 
-
     async def reindex_and_vacuum(
         self, conn: asyncpg.Connection | None = None
     ) -> None:
@@ -417,11 +401,8 @@ class ChunkRepository(BaseRepository):
             contextualized_text=str(r["contextualized_text"]),
             start_line=int(r["start_line"]),
             end_line=int(r["end_line"]),
-            context_type="SELF_CONTAINED" if r["context_type"] == "SELF_CONTAINED" else "REQUIRES_EXTERNAL_CONTEXT",
-            is_all_refs_resolved=bool(r["is_all_refs_resolved"]),
             embedding=embedding_val,
             metadata=self._parse_metadata(r["metadata"]),
             created_at=r["created_at"],
             updated_at=r["updated_at"],
         )
-

@@ -5,23 +5,25 @@ import {
   PanelRightClose,
   PanelRightOpen,
 } from 'lucide-react';
-import { StagingDocumentSession } from '../../types/staging';
+import { GraphVisualizerEdge } from '../../types/api';
 import { DocumentTreeNode, DocumentTreeResponse } from '../../types/tree';
 import { DocumentReaderEditor } from './DocumentReaderEditor';
 import { NodeInspectorPanel } from './NodeInspectorPanel';
 import { TreeOutlineExplorer } from './TreeOutlineExplorer';
 
 interface DocumentStudioContainerProps {
-  session: StagingDocumentSession;
+  docSlug: string;
   treeData: DocumentTreeResponse | null;
+  edges: GraphVisualizerEdge[];
   selectedPathProp?: string;
   onSelectPathProp?: (path: string) => void;
-  onRefreshSession?: () => void;
+  onRefresh?: () => void;
 }
 
 export const DocumentStudioContainer: React.FC<DocumentStudioContainerProps> = ({
-  session,
+  docSlug,
   treeData,
+  edges,
   selectedPathProp,
   onSelectPathProp,
 }) => {
@@ -111,9 +113,8 @@ export const DocumentStudioContainer: React.FC<DocumentStudioContainerProps> = (
         {showLeftSidebar && (
           <TreeOutlineExplorer
             rootNode={treeData?.root || null}
-            totalFinalized={treeData?.total_finalized}
-            totalPending={treeData?.total_pending}
-            progressPercent={treeData?.progress_percent}
+            totalChunks={treeData?.total_chunks}
+            totalNodes={treeData?.total_nodes}
             selectedPath={selectedPath}
             onSelectPath={handleSelectPath}
             collapsedPaths={collapsedPaths}
@@ -162,7 +163,7 @@ export const DocumentStudioContainer: React.FC<DocumentStudioContainerProps> = (
           </div>
 
           <span className="text-[11px] text-slate-500 font-mono truncate px-2">
-            {session.doc_slug}
+            {docSlug}
           </span>
 
           <button
@@ -185,7 +186,7 @@ export const DocumentStudioContainer: React.FC<DocumentStudioContainerProps> = (
             rootNode={treeData?.root || null}
             selectedPath={selectedPath}
             onSelectPath={handleSelectPath}
-            edges={session.edges}
+            edges={edges}
           />
         </div>
       </div>
@@ -200,8 +201,8 @@ export const DocumentStudioContainer: React.FC<DocumentStudioContainerProps> = (
           <NodeInspectorPanel
             selectedNode={selectedNode}
             onSelectPath={handleSelectPath}
-            edges={session.edges}
-            docSlug={session.doc_slug}
+            edges={edges}
+            docSlug={docSlug}
           />
         )}
       </div>

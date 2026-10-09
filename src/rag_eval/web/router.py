@@ -3,86 +3,52 @@ from __future__ import annotations
 import datetime
 import logging
 import re
+import uuid
 
 import asyncpg
-from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
-from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException, Request
 
 from rag_eval.db.connection import check_db_health
 from rag_eval.db.repositories import CorpusRepository
 from rag_eval.exceptions import CorpusDomainError
-from rag_eval.ingestion.staging import (
-    StagingEdge,
-    StagingManager,
-)
-from rag_eval.ingestion.staging.models import ChunkReviewStatus
-from rag_eval.ingestion.staging.session import StagingDocumentSession
 from rag_eval.retrieval.embedder import SentenceTransformerQueryEmbedder
 from rag_eval.retrieval.engine import RetrievalEngine
+from rag_eval.retrieval.enrichment import KnowledgeEnrichmentService
 from rag_eval.retrieval.reranker import CrossEncoderReranker
-from rag_eval.schemas import SearchHitDTO, VerbatimGrepQuery, sanitize_ltree_label
+from rag_eval.schemas import (
+    RelationType,
+    SearchHitDTO,
+    VerbatimGrepQuery,
+)
 from rag_eval.web.schemas import (
-    BatchPatchRequest,
-    BatchPatchResponse,
     CorpusDocumentResponse,
-    CreateEdgeRequest,
-    CreateSessionRequest,
     DocumentTreeResponse,
-    FinalizeChunksRequest,
-    FinalizeChunksResponse,
-    GenericSuccessResponse,
     GraphTraversalStepResponse,
     GraphTraverseRequest,
+    GraphVisualizerEdge,
+    GraphVisualizerNode,
+    GraphVisualizerResponse,
     HealthResponse,
-    PreFlightValidationResponse,
-    PromoteSessionRequest,
-    PromotionResultResponse,
+    LinkChunksInput,
+    LinkChunksResponse,
     RawTextResponse,
     RelationTypeCatalogResponse,
-    ReopenSessionRequest,
-    ReparentSubtreeRequest,
-    ReparentSubtreeResponse,
-    ReplayVerificationResponse,
     SearchHitResponse,
     SearchRequest,
     SearchResponse,
-    SessionDiffResponse,
-    StagingEdgeResponse,
-    StagingGrepHitResponse,
-    StagingGrepRequest,
-    StagingGrepResponse,
-    StagingSessionDetailResponse,
-    StagingSessionSummaryResponse,
-    StatusTransitionRequest,
-    UncommitSessionRequest,
-    UnfinalizeChunksRequest,
-    UnfinalizeChunksResponse,
-    UnresolvedBacklogItemResponse,
-    UnresolvedBacklogResponse,
+    UnlinkChunksInput,
+    UnlinkChunksResponse,
     VerbatimGrepHitResponse,
     VerbatimGrepRequest,
     VerbatimGrepResponse,
-    WALRecordResponse,
 )
 from rag_eval.web.services import (
-    DiffCalculator,
-    HumanPromotionEngine,
-    PreFlightValidator,
     TreeHierarchyBuilder,
-    natural_path_key,
 )
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(tags=["Corpus Staging Reviewer"])
-
-
-def _get_staging_manager(request: Request) -> StagingManager:
-    """Helper to retrieve configured StagingManager instance from app state or fallback."""
-    mgr = getattr(request.app.state, "staging_manager", None)
-    if isinstance(mgr, StagingManager):
-        return mgr
-    return StagingManager()
+router = APIRouter(tags=["Corpus Knowledge Observatory"])
 
 
 def _get_db_pool(request: Request) -> asyncpg.Pool | None:
@@ -91,14 +57,6 @@ def _get_db_pool(request: Request) -> asyncpg.Pool | None:
     if isinstance(pool, asyncpg.Pool):
         return pool
     return None
-
-
-async def _load_session_with_hydration(
-    request: Request, doc_slug: str
-) -> StagingDocumentSession:
-    mgr = _get_staging_manager(request)
-    pool = _get_db_pool(request)
-    return await mgr.load_or_hydrate_session(doc_slug=doc_slug, pool=pool)
 
 
 def _get_retrieval_engine(request: Request) -> RetrievalEngine:
@@ -185,6 +143,234 @@ def _to_hit_responses(hits: list[SearchHitDTO]) -> list[SearchHitResponse]:
     return responses
 
 
+@router.get("/health", response_model=HealthResponse)
+async def health_check(request: Request) -> HealthResponse:
+    """Health check endpoint probing database connectivity and service availability."""
+    pool = _get_db_pool(request)
+    is_healthy = await check_db_health(pool=pool)
+    db_status = "CONNECTED" if is_healthy else "UNAVAILABLE"
+    return HealthResponse(
+        status="OK",
+        database=db_status,
+        timestamp=datetime.datetime.now(datetime.UTC).isoformat(),
+    )
+
+
+@router.get("/documents", response_model=list[CorpusDocumentResponse])
+async def list_corpus_documents(request: Request) -> list[CorpusDocumentResponse]:
+    """Corpus documents catalog in PostgreSQL production."""
+    pool = _get_db_pool(request)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="Database is not connected.")
+
+    corpus_repo = CorpusRepository(pool)
+    stats_list = await corpus_repo.documents.list_with_stats()
+    return [
+        CorpusDocumentResponse(
+            doc_slug=r.doc_slug,
+            title=r.title,
+            chunk_count=r.chunk_count,
+        )
+        for r in stats_list
+    ]
+
+
+@router.get("/documents/{doc_slug}/tree", response_model=DocumentTreeResponse)
+async def get_document_tree_hierarchy(
+    request: Request, doc_slug: str
+) -> DocumentTreeResponse:
+    """Returns nested document hierarchy tree formatted for the interactive canvas visualizer."""
+    pool = _get_db_pool(request)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="Database is not connected.")
+
+    repo = CorpusRepository(pool)
+    doc = await repo.documents.get_by_slug(doc_slug)
+    if doc is None:
+        raise HTTPException(
+            status_code=404, detail=f"Document '{doc_slug}' not found in database."
+        )
+
+    chunks = await repo.chunks.list_by_document(doc.id)
+    builder = TreeHierarchyBuilder()
+    return builder.build_tree(
+        doc_slug=doc.doc_slug,
+        title=doc.title,
+        chunks=chunks,
+        metadata=doc.metadata,
+    )
+
+
+@router.get("/documents/{doc_slug}/raw", response_model=RawTextResponse)
+async def get_document_raw_text(
+    request: Request, doc_slug: str
+) -> RawTextResponse:
+    """Returns raw source text for dual-view split screen visualizer."""
+    pool = _get_db_pool(request)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="Database is not connected.")
+
+    repo = CorpusRepository(pool)
+    doc = await repo.documents.get_by_slug(doc_slug)
+    if doc is None:
+        raise HTTPException(
+            status_code=404, detail=f"Document '{doc_slug}' not found in database."
+        )
+
+    chunks = await repo.chunks.list_by_document(doc.id)
+    return RawTextResponse(
+        doc_slug=doc.doc_slug,
+        title=doc.title,
+        raw_text=doc.raw_text or "",
+        chunks_count=len(chunks),
+    )
+
+
+@router.get("/documents/{doc_slug}/graph", response_model=GraphVisualizerResponse)
+async def get_document_graph(
+    request: Request, doc_slug: str
+) -> GraphVisualizerResponse:
+    """Returns nodes and edges of the document knowledge graph for visualizer."""
+    pool = _get_db_pool(request)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="Database is not connected.")
+
+    repo = CorpusRepository(pool)
+    doc = await repo.documents.get_by_slug(doc_slug)
+    if doc is None:
+        raise HTTPException(
+            status_code=404, detail=f"Document '{doc_slug}' not found in database."
+        )
+
+    chunks = await repo.chunks.list_by_document(doc.id)
+    if not chunks:
+        return GraphVisualizerResponse(doc_slug=doc_slug, nodes=[], edges=[])
+
+    chunk_ids = [c.id for c in chunks]
+    id_to_chunk = {c.id: c for c in chunks}
+    raw_edges = await repo.graph.list_edges_for_chunks(chunk_ids)
+
+    missing_target_ids = [
+        e.target_chunk_id
+        for e in raw_edges
+        if e.target_chunk_id not in id_to_chunk
+    ]
+    target_path_map: dict[uuid.UUID, str] = {}
+    if missing_target_ids:
+        async with repo.chunks._connection_scope() as conn:
+            rows = await conn.fetch(
+                "SELECT id, path FROM chunks WHERE id = ANY($1::uuid[]);",
+                missing_target_ids,
+            )
+            for r in rows:
+                target_path_map[uuid.UUID(str(r["id"]))] = str(r["path"])
+
+    in_degrees: dict[str, int] = {c.path: 0 for c in chunks}
+    out_degrees: dict[str, int] = {c.path: 0 for c in chunks}
+    graph_edges: list[GraphVisualizerEdge] = []
+
+    for e in raw_edges:
+        src_chunk = id_to_chunk.get(e.source_chunk_id)
+        if not src_chunk:
+            continue
+        tgt_path = (
+            id_to_chunk[e.target_chunk_id].path
+            if e.target_chunk_id in id_to_chunk
+            else target_path_map.get(e.target_chunk_id)
+        )
+        if not tgt_path:
+            continue
+        rel_enum = RelationType(e.relation_type)
+
+        graph_edges.append(
+            GraphVisualizerEdge(
+                source_path=src_chunk.path,
+                target_path=tgt_path,
+                relation_type=rel_enum,
+                rationale=e.rationale,
+            )
+        )
+        out_degrees[src_chunk.path] = out_degrees.get(src_chunk.path, 0) + 1
+        if tgt_path in in_degrees:
+            in_degrees[tgt_path] += 1
+
+    nodes = [
+        GraphVisualizerNode(
+            path=c.path,
+            label=str(
+                c.metadata.get("heading_raw")
+                or c.metadata.get("title")
+                or c.path
+            ),
+            node_type=str(
+                c.metadata.get("node_type")
+                or ("TABLE" if c.metadata.get("is_table") else "PARAGRAPH")
+            ),
+            in_degree=in_degrees.get(c.path, 0),
+            out_degree=out_degrees.get(c.path, 0),
+        )
+        for c in chunks
+    ]
+    return GraphVisualizerResponse(
+        doc_slug=doc_slug,
+        nodes=nodes,
+        edges=graph_edges,
+    )
+
+
+@router.post("/documents/links", response_model=LinkChunksResponse)
+async def link_document_chunks(
+    request: Request, payload: LinkChunksInput
+) -> LinkChunksResponse:
+    """Creates or updates a semantic relationship edge between two chunks."""
+    pool = _get_db_pool(request)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="Database is not connected.")
+    service = KnowledgeEnrichmentService(pool=pool)
+    try:
+        res = await service.link_chunks(
+            source_path=payload.source_path,
+            target_path=payload.target_path,
+            relation_type=payload.relation_type,
+            rationale=payload.rationale,
+        )
+        return LinkChunksResponse(
+            status="SUCCESS",
+            source_path=res.source_path,
+            target_path=res.target_path,
+            relation_type=res.relation_type,
+            created=res.created,
+            rationale=res.rationale,
+        )
+    except CorpusDomainError as exc:
+        raise HTTPException(status_code=400, detail=exc.message) from exc
+
+
+@router.post("/documents/unlinks", response_model=UnlinkChunksResponse)
+async def unlink_document_chunks(
+    request: Request, payload: UnlinkChunksInput
+) -> UnlinkChunksResponse:
+    """Removes targeted relationship edge(s) between two chunks."""
+    pool = _get_db_pool(request)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="Database is not connected.")
+    service = KnowledgeEnrichmentService(pool=pool)
+    try:
+        res = await service.unlink_chunks(
+            source_path=payload.source_path,
+            target_path=payload.target_path,
+            relation_type=payload.relation_type,
+        )
+        return UnlinkChunksResponse(
+            status="SUCCESS",
+            source_path=res.source_path,
+            target_path=res.target_path,
+            removed_edges_count=res.removed_edges_count,
+        )
+    except CorpusDomainError as exc:
+        raise HTTPException(status_code=400, detail=exc.message) from exc
+
+
 @router.post("/search", response_model=SearchResponse)
 async def search_corpus(request: Request, payload: SearchRequest) -> SearchResponse:
     import time
@@ -202,7 +388,6 @@ async def search_corpus(request: Request, payload: SearchRequest) -> SearchRespo
             rerank=want_rerank,
             doc_slugs=payload.doc_slugs or None,
             path_prefix=payload.path_prefix or None,
-            only_resolved=payload.only_resolved,
         )
     except CorpusDomainError as exc:
         raise HTTPException(status_code=400, detail=exc.message) from exc
@@ -218,636 +403,40 @@ async def search_corpus(request: Request, payload: SearchRequest) -> SearchRespo
     )
 
 
-@router.get("/documents", response_model=list[CorpusDocumentResponse])
-async def list_corpus_documents(request: Request) -> list[CorpusDocumentResponse]:
-    """The promoted corpus, for scoping a query to chosen documents."""
+@router.get("/relations", response_model=list[RelationTypeCatalogResponse])
+async def list_relation_types_catalog(
+    request: Request,
+) -> list[RelationTypeCatalogResponse]:
+    """Retrieves active relation types catalog with descriptions and symmetry flags."""
     pool = _get_db_pool(request)
     if pool is None:
         raise HTTPException(status_code=503, detail="Database is not connected.")
 
-    from rag_eval.db.repositories import CorpusRepository
+    from rag_eval.db.repositories.graph import GraphRepository
 
-    corpus_repo = CorpusRepository(pool)
-    stats_list = await corpus_repo.documents.list_with_stats()
-    return [
-        CorpusDocumentResponse(
-            doc_slug=r.doc_slug,
-            title=r.title,
-            chunk_count=r.chunk_count,
-        )
-        for r in stats_list
-    ]
-
-
-@router.get("/health", response_model=HealthResponse)
-async def health_check(request: Request) -> HealthResponse:
-    """Health check endpoint probing database connectivity and service availability."""
-    pool = _get_db_pool(request)
-    is_healthy = await check_db_health(pool=pool)
-    db_status = "CONNECTED" if is_healthy else "UNAVAILABLE"
-    return HealthResponse(
-        status="OK",
-        database=db_status,
-        timestamp=datetime.datetime.now(datetime.UTC).isoformat(),
-    )
-
-
-@router.get("/staging", response_model=list[StagingSessionSummaryResponse])
-async def list_staging_sessions(
-    request: Request,
-) -> list[StagingSessionSummaryResponse]:
-    """Lists summary cards for all discovered staging sessions in the staging directory."""
-    mgr = _get_staging_manager(request)
-    summaries = mgr.list_sessions()
-    return [
-        StagingSessionSummaryResponse(
-            doc_slug=s.doc_slug,
-            title=s.title,
-            status=s.status,
-            total_chunks=s.total_chunks,
-            total_edges=s.total_edges,
-            created_at=s.created_at,
-            updated_at=s.updated_at,
-            committed_at=s.committed_at,
-            promoted_at=s.promoted_at,
-        )
-        for s in summaries
-    ]
-
-
-@router.post("/staging/raw", response_model=StagingSessionDetailResponse)
-async def create_staging_session_from_raw(
-    request: Request, payload: CreateSessionRequest
-) -> StagingSessionDetailResponse:
-    """Creates a fresh staging session by parsing raw text."""
-    clean_slug = sanitize_ltree_label(payload.doc_slug.strip())
-    if not clean_slug:
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid doc_slug: must contain alphanumeric characters or underscores.",
-        )
-    mgr = _get_staging_manager(request)
-    if mgr.session_exists(clean_slug):
-        raise HTTPException(
-            status_code=409,
-            detail=f"Phiên staging cho tài liệu '{clean_slug}' đã tồn tại. Vui lòng sử dụng doc_slug khác hoặc xóa phiên cũ trước.",
-        )
-    doc_meta = (payload.metadata.model_dump() if isinstance(payload.metadata, BaseModel) else payload.metadata)
-    try:
-        session = mgr.create_session_from_raw(
-            doc_slug=clean_slug,
-            title=payload.title.strip() or clean_slug,
-            raw_text=payload.raw_text,
-            metadata=doc_meta,
-        )
-    except CorpusDomainError as err:
-        raise HTTPException(status_code=400, detail=str(err)) from err
-    return StagingSessionDetailResponse.model_validate(session.model_dump())
-
-
-@router.post("/staging/upload", response_model=StagingSessionDetailResponse)
-async def upload_document_file(
-    request: Request,
-    file: UploadFile = File(...),  # noqa: B008
-    doc_slug: str = Form(...),
-    title: str = Form(""),
-) -> StagingSessionDetailResponse:
-    """Creates a fresh staging session by uploading and parsing a document file."""
-    mgr = _get_staging_manager(request)
-    content = await file.read()
-    if not content:
-        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
-
-    clean_slug = sanitize_ltree_label(doc_slug.strip())
-    if not clean_slug:
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid doc_slug: must contain alphanumeric characters or underscores.",
-        )
-    if mgr.session_exists(clean_slug):
-        raise HTTPException(
-            status_code=409,
-            detail=f"Phiên staging cho tài liệu '{clean_slug}' đã tồn tại. Vui lòng sử dụng doc_slug khác hoặc xóa phiên cũ trước.",
-        )
-    clean_title = title.strip() or clean_slug
-    file_name = file.filename or "document.bin"
-    mime_type = file.content_type
-
-    try:
-        session = mgr.create_session_from_bytes(
-            doc_slug=clean_slug,
-            title=clean_title,
-            content=content,
-            file_name=file_name,
-            mime_type=mime_type,
-        )
-    except CorpusDomainError as err:
-        raise HTTPException(status_code=400, detail=str(err)) from err
-    return StagingSessionDetailResponse.model_validate(session.model_dump())
-
-
-# Sub-resource endpoints registered BEFORE root /staging/{doc_slug} to prevent route shadowing
-
-
-@router.get("/staging/{doc_slug}/wal", response_model=list[WALRecordResponse])
-async def get_staging_wal_journal(request: Request, doc_slug: str) -> list[WALRecordResponse]:
-    """Returns complete ordered WAL journal entries for the document session."""
-    mgr = _get_staging_manager(request)
-    records = mgr.get_wal_records(doc_slug)
-    return [WALRecordResponse.model_validate(r.model_dump()) for r in records]
-
-
-@router.post("/staging/{doc_slug}/replay", response_model=ReplayVerificationResponse)
-async def replay_staging_session(
-    request: Request, doc_slug: str, up_to_lsn: int | None = Query(None)
-) -> ReplayVerificationResponse:
-    """Deterministically replays the staging session from genesis baseline to specified LSN."""
-    mgr = _get_staging_manager(request)
-    session, applied_lsn = mgr.replay_session(doc_slug, up_to_lsn=up_to_lsn)
-    return ReplayVerificationResponse(
-        status="SUCCESS",
-        doc_slug=doc_slug,
-        applied_lsn=applied_lsn,
-        is_deterministic=True,
-        total_chunks=len(session.chunks),
-        total_edges=len(session.edges),
-        message=f"Successfully replayed {applied_lsn + 1} WAL records from genesis baseline.",
-    )
-
-
-@router.post("/staging/{doc_slug}/reparent", response_model=ReparentSubtreeResponse)
-async def reparent_staging_subtree(
-    request: Request, doc_slug: str, payload: ReparentSubtreeRequest
-) -> ReparentSubtreeResponse:
-    """Migrates an entire subtree to a new parent prefix in the staging session."""
-    mgr = _get_staging_manager(request)
-    await _load_session_with_hydration(request, doc_slug)
-    session, result = mgr.reparent_node(
-        doc_slug=doc_slug,
-        old_path_prefix=payload.old_path_prefix,
-        new_path_prefix=payload.new_path_prefix,
-        dry_run=payload.dry_run,
-        actor=payload.actor,
-    )
-    return ReparentSubtreeResponse(
-        status="SUCCESS",
-        doc_slug=doc_slug,
-        dry_run=result.dry_run,
-        affected_chunks_count=result.affected_chunks_count,
-        affected_edges_count=result.affected_edges_count,
-        old_path_prefix=result.old_path_prefix,
-        new_path_prefix=result.new_path_prefix,
-        total_chunks=len(session.chunks),
-    )
-
-
-@router.get("/staging/{doc_slug}/tree", response_model=DocumentTreeResponse)
-async def get_document_tree_hierarchy(
-    request: Request, doc_slug: str
-) -> DocumentTreeResponse:
-    """Returns nested document hierarchy tree formatted for the interactive canvas visualizer."""
-    session = await _load_session_with_hydration(request, doc_slug)
-    builder = TreeHierarchyBuilder()
-    return builder.build_tree(session)
-
-
-@router.post("/staging/{doc_slug}/patch", response_model=BatchPatchResponse)
-async def batch_patch_chunks(
-    request: Request, doc_slug: str, payload: BatchPatchRequest
-) -> BatchPatchResponse:
-    """Applies surgical in-place chunk updates and removals to the staging session."""
-    mgr = _get_staging_manager(request)
-    await _load_session_with_hydration(request, doc_slug)
-    session = mgr.patch_chunks(
-        doc_slug=doc_slug,
-        updated_chunks=payload.updated_chunks,
-        removed_paths=payload.removed_paths,
-    )
-    return BatchPatchResponse(
-        status="SUCCESS",
-        doc_slug=doc_slug,
-        updated_count=len(payload.updated_chunks),
-        removed_count=len(payload.removed_paths),
-        total_chunks=len(session.chunks),
-    )
-
-
-@router.post("/staging/{doc_slug}/finalize", response_model=FinalizeChunksResponse)
-async def finalize_staging_chunks(
-    request: Request, doc_slug: str, payload: FinalizeChunksRequest
-) -> FinalizeChunksResponse:
-    """Marks specified chunk paths as finalized in the staging session."""
-    mgr = _get_staging_manager(request)
-    await _load_session_with_hydration(request, doc_slug)
-    session, count, _ = mgr.finalize_chunks(
-        doc_slug=doc_slug, paths=payload.paths, actor="HUMAN:reviewer"
-    )
-    pending_rem = sum(
-        1
-        for c in session.chunks
-        if c.review_status == ChunkReviewStatus.PENDING
-    )
-    return FinalizeChunksResponse(
-        status="SUCCESS",
-        doc_slug=doc_slug,
-        finalized_count=count,
-        pending_remaining=pending_rem,
-    )
-
-
-@router.post("/staging/{doc_slug}/unfinalize", response_model=UnfinalizeChunksResponse)
-async def unfinalize_staging_chunks(
-    request: Request, doc_slug: str, payload: UnfinalizeChunksRequest
-) -> UnfinalizeChunksResponse:
-    """Reverts specified chunk paths to PENDING review status and UNFINALIZED state."""
-    mgr = _get_staging_manager(request)
-    await _load_session_with_hydration(request, doc_slug)
-    session, count, _ = mgr.unfinalize_chunks(
-        doc_slug=doc_slug, paths=payload.paths, actor="HUMAN:reviewer"
-    )
-    pending_rem = sum(
-        1
-        for c in session.chunks
-        if c.review_status == ChunkReviewStatus.PENDING
-    )
-    return UnfinalizeChunksResponse(
-        status="SUCCESS",
-        doc_slug=doc_slug,
-        unfinalized_count=count,
-        pending_remaining=pending_rem,
-    )
-
-
-@router.get("/staging/{doc_slug}/edges", response_model=list[StagingEdgeResponse])
-async def list_staging_edges(
-    request: Request, doc_slug: str
-) -> list[StagingEdgeResponse]:
-    """Lists all relational graph edges attached to the staging session."""
-    session = await _load_session_with_hydration(request, doc_slug)
-    return [
-        StagingEdgeResponse(
-            source_path=e.source_path,
-            target_path=e.target_path,
-            relation_type=e.relation_type.value if hasattr(e.relation_type, "value") else str(e.relation_type),
-            anchor_text=e.anchor_text,
-            char_start=e.char_start,
-            char_end=e.char_end,
-        )
-        for e in session.edges
-    ]
-
-
-@router.post("/staging/{doc_slug}/edges", response_model=StagingSessionDetailResponse)
-async def add_staging_edges(
-    request: Request,
-    doc_slug: str,
-    payload: list[CreateEdgeRequest] | CreateEdgeRequest,
-) -> StagingSessionDetailResponse:
-    """Adds or updates directed relationship edges in the staging session."""
-    mgr = _get_staging_manager(request)
-    await _load_session_with_hydration(request, doc_slug)
-    items = [payload] if isinstance(payload, CreateEdgeRequest) else payload
-    edges = [
-        StagingEdge(
-            source_path=item.source_path,
-            target_path=item.target_path,
-            relation_type=item.relation_type,
-            anchor_text=item.anchor_text,
-            char_start=item.char_start,
-            char_end=item.char_end,
-        )
-        for item in items
-    ]
-    session = mgr.add_edges(doc_slug=doc_slug, edges=edges)
-    return StagingSessionDetailResponse.model_validate(session.model_dump())
-
-
-@router.delete("/staging/{doc_slug}/edges", response_model=GenericSuccessResponse)
-async def delete_staging_edge(
-    request: Request,
-    doc_slug: str,
-    source_path: str = Query(..., description="LTree path of source chunk"),
-    relation_type: str | None = Query(None, description="Relation type code"),
-    target_path: str | None = Query(None, description="LTree path of target chunk"),
-    clear_all_targets: bool = Query(False, description="Clear all targets from source_path"),
-) -> GenericSuccessResponse:
-    """Removes a relational graph edge matching source, target, and relation type via query parameters."""
-    mgr = _get_staging_manager(request)
-    await _load_session_with_hydration(request, doc_slug)
-
-    if not source_path:
-        raise HTTPException(
-            status_code=400,
-            detail="Must provide at least source_path to delete edge.",
-        )
-    if not target_path and not clear_all_targets:
-        raise HTTPException(
-            status_code=400,
-            detail="Must provide target_path to identify the edge, or set clear_all_targets=True.",
-        )
-
-    from rag_eval.ingestion.staging.models import StagingEdgeFilter
-
-    flt = StagingEdgeFilter(
-        source_path=source_path,
-        target_path=target_path,
-        relation_type=relation_type,
-        clear_all_targets=clear_all_targets,
-    )
-    _session, removed_count = mgr.remove_edges(
-        doc_slug=doc_slug,
-        filters=[flt],
-        actor="HUMAN:reviewer",
-    )
-    return GenericSuccessResponse(
-        status="SUCCESS",
-        message=f"Removed {removed_count} edge(s) from '{source_path}'.",
-        doc_slug=doc_slug,
-    )
-
-
-
-@router.post("/staging/{doc_slug}/status", response_model=StagingSessionDetailResponse)
-async def transition_staging_status(
-    request: Request, doc_slug: str, payload: StatusTransitionRequest
-) -> StagingSessionDetailResponse:
-    """Transitions staging session lifecycle status (e.g. DRAFT -> APPROVED)."""
-    await _load_session_with_hydration(request, doc_slug)
-    mgr = _get_staging_manager(request)
-    session = mgr.update_session_status(
-        doc_slug=doc_slug,
-        status=payload.status,
-        actor=payload.actor,
-        description=payload.description,
-    )
-    return StagingSessionDetailResponse.model_validate(session.model_dump())
-
-
-@router.post("/staging/{doc_slug}/reopen", response_model=StagingSessionDetailResponse)
-async def reopen_staging_session(
-    request: Request, doc_slug: str, payload: ReopenSessionRequest | None = None
-) -> StagingSessionDetailResponse:
-    """Reopens a PROMOTED staging session into AMENDMENT status, hydrating from DB if absent."""
-    mgr = _get_staging_manager(request)
-    await _load_session_with_hydration(request, doc_slug)
-
-    actor = payload.actor if payload else "HUMAN:reviewer"
-    reason = payload.reason if payload else "Reopened for amendment"
-    session = mgr.reopen_session_for_amendment(
-        doc_slug=doc_slug, actor=actor, reason=reason
-    )
-    return StagingSessionDetailResponse.model_validate(session.model_dump())
-
-
-@router.post("/staging/{doc_slug}/uncommit", response_model=StagingSessionDetailResponse)
-async def uncommit_staging_session(
-    request: Request,
-    doc_slug: str,
-    payload: UncommitSessionRequest | None = None,
-) -> StagingSessionDetailResponse:
-    """Uncommits an AGENT_COMMITTED staging session back into DRAFT or AMENDMENT status."""
-    mgr = _get_staging_manager(request)
-    await _load_session_with_hydration(request, doc_slug)
-
-    actor = payload.actor if payload else "HUMAN:reviewer"
-    reason = payload.reason if payload else ""
-    session = mgr.uncommit_session(doc_slug=doc_slug, actor=actor, reason=reason)
-    return StagingSessionDetailResponse.model_validate(session.model_dump())
-
-
-@router.get("/staging/{doc_slug}/diff", response_model=SessionDiffResponse)
-async def get_session_version_diff(
-    request: Request, doc_slug: str
-) -> SessionDiffResponse:
-    """Returns version mutation differences between initial AST baseline and current state."""
-    session = await _load_session_with_hydration(request, doc_slug)
-    calculator = DiffCalculator()
-    return calculator.compute_diff(session)
-
-
-@router.get("/staging/{doc_slug}/raw", response_model=RawTextResponse)
-async def get_raw_document_text(request: Request, doc_slug: str) -> RawTextResponse:
-    """Returns raw source text for dual-view split screen visualizer."""
-    session = await _load_session_with_hydration(request, doc_slug)
-    return RawTextResponse(
-        doc_slug=session.doc_slug,
-        title=session.title,
-        raw_text=session.raw_text or "",
-        chunks_count=len(session.chunks),
-    )
-
-
-@router.get("/staging/{doc_slug}/validate", response_model=PreFlightValidationResponse)
-@router.post("/staging/{doc_slug}/validate", response_model=PreFlightValidationResponse)
-async def run_preflight_validation(
-    request: Request, doc_slug: str
-) -> PreFlightValidationResponse:
-    """Runs automated pre-flight integrity verification checklist before promotion."""
-    session = await _load_session_with_hydration(request, doc_slug)
-    validator = PreFlightValidator()
-    return validator.validate(session)
-
-
-@router.post("/staging/{doc_slug}/promote", response_model=PromotionResultResponse)
-async def execute_human_promotion(
-    request: Request, doc_slug: str, payload: PromoteSessionRequest | None = None
-) -> PromotionResultResponse:
-    """Triggers atomic Human Promotion of approved staging session into PostgreSQL production tables."""
-    await _load_session_with_hydration(request, doc_slug)
-    mgr = _get_staging_manager(request)
-    pool = _get_db_pool(request)
-    engine = HumanPromotionEngine(staging_manager=mgr)
-
-    reviewer_notes = payload.reviewer_notes if payload else None
-    compute_emb = payload.compute_embeddings if payload else True
-
-    return await engine.promote_session(
-        doc_slug=doc_slug,
-        reviewer_notes=reviewer_notes,
-        compute_embeddings=compute_emb,
-        pool=pool,
-    )
-
-
-@router.get("/staging/{doc_slug}", response_model=StagingSessionDetailResponse)
-async def get_staging_session_detail(
-    request: Request, doc_slug: str
-) -> StagingSessionDetailResponse:
-    """Retrieves full detail, chunks, edges, and audit history for a staging document session."""
-    session = await _load_session_with_hydration(request, doc_slug)
-    data = session.model_dump(mode="json")
-    if "chunks" in data and isinstance(data["chunks"], list):
-        data["chunks"].sort(key=lambda c: natural_path_key(c.get("path", "")))
-    return StagingSessionDetailResponse.model_validate(data)
-
-
-@router.post("/staging/{doc_slug}/grep", response_model=StagingGrepResponse)
-async def grep_staging_session(
-    request: Request, doc_slug: str, payload: StagingGrepRequest
-) -> StagingGrepResponse:
-    """Searches staging session chunks in-memory using regex or substring matching."""
-    session = await _load_session_with_hydration(request, doc_slug)
-    hits = session.grep(
-        pattern=payload.pattern,
-        is_regex=payload.is_regex,
-        case_sensitive=payload.case_sensitive,
-        search_in=payload.search_in,
-        limit=payload.limit,
-    )
-    hit_responses = [
-        StagingGrepHitResponse(
-            doc_slug=h.doc_slug,
-            path=h.path,
-            field_matched=h.field_matched,
-            match_snippet=h.match_snippet,
-            verbatim_text=h.verbatim_text,
-            contextualized_text=h.contextualized_text,
-            start_line=h.start_line,
-            end_line=h.end_line,
-            char_length=h.char_length,
-            metadata=h.metadata,
-        )
-        for h in hits
-    ]
-    return StagingGrepResponse(
-        doc_slug=doc_slug,
-        pattern=payload.pattern,
-        total_hits=len(hit_responses),
-        hits=hit_responses,
-    )
-
-
-@router.get("/staging/{doc_slug}/backlog", response_model=UnresolvedBacklogResponse)
-async def get_unresolved_backlog(
-    request: Request, doc_slug: str, limit: int = 50
-) -> UnresolvedBacklogResponse:
-    """Retrieves unresolved external references for the session/document from PostgreSQL."""
-    session = await _load_session_with_hydration(request, doc_slug)
-    pool = _get_db_pool(request)
-    items: list[UnresolvedBacklogItemResponse] = []
-
-    staged_paths = {c.path for c in session.chunks}
-    sanitized_doc_slug = session.doc_slug.replace("-", "_")
-    seen_backlog_keys: set[tuple[str, str]] = set()
-
-    for edge in session.edges:
-        if (
-            edge.target_path
-            and edge.target_path not in staged_paths
-            and not edge.target_path.startswith(f"{session.doc_slug}.")
-            and not edge.target_path.startswith(f"{sanitized_doc_slug}.")
-        ):
-            key = (edge.source_path, edge.target_path)
-            if key not in seen_backlog_keys:
-                seen_backlog_keys.add(key)
-                items.append(
-                    UnresolvedBacklogItemResponse(
-                        chunk_id=edge.source_path,
-                        source_path=edge.source_path,
-                        doc_slug=session.doc_slug,
-                        doc_title=session.title,
-                        target_path=edge.target_path,
-                        context_type=edge.relation_type.value if hasattr(edge.relation_type, "value") else str(edge.relation_type),
-                    )
-                )
-
-    if pool is not None:
-        try:
-            repo = CorpusRepository(pool=pool)
-            db_backlog = await repo.context_refs.get_unresolved_backlog(doc_slug=doc_slug, limit=limit)
-            for row in db_backlog:
-                key = (row.path, row.target_path or "")
-                if key not in seen_backlog_keys:
-                    seen_backlog_keys.add(key)
-                    items.append(
-                        UnresolvedBacklogItemResponse(
-                            chunk_id=str(row.chunk_id),
-                            source_path=row.path,
-                            doc_slug=row.doc_slug,
-                            doc_title=session.title if row.doc_slug == session.doc_slug else row.doc_slug,
-                            target_path=row.target_path or "",
-                            context_type=row.context_type,
-                        )
-                    )
-        except (asyncpg.PostgresError, OSError, RuntimeError) as exc:
-            logger.warning("Could not query DB unresolved backlog for '%s': %s", doc_slug, exc)
-
-    return UnresolvedBacklogResponse(
-        doc_slug=doc_slug,
-        total_unresolved=len(items),
-        items=items,
-    )
-
-
-@router.delete("/staging/{doc_slug}", response_model=GenericSuccessResponse)
-async def delete_staging_session(
-    request: Request, doc_slug: str
-) -> GenericSuccessResponse:
-    """Deletes / discards a staging session file from disk."""
-    mgr = _get_staging_manager(request)
-    deleted = mgr.delete_session(doc_slug)
-    if not deleted:
-        raise HTTPException(
-            status_code=404, detail=f"Staging session for '{doc_slug}' not found."
-        )
-    return GenericSuccessResponse(
-        status="SUCCESS",
-        message=f"Staging session for '{doc_slug}' deleted successfully.",
-        doc_slug=doc_slug,
-    )
-
-
-@router.get("/relations", response_model=list[RelationTypeCatalogResponse])
-async def list_relation_types_catalog(request: Request) -> list[RelationTypeCatalogResponse]:
-    """Retrieves active relation types catalog with descriptions and symmetry flags."""
-    pool = _get_db_pool(request)
-    if pool is not None:
-        from rag_eval.db.repositories.graph import GraphRepository
-
-        repo = GraphRepository(pool=pool)
-        catalog = await repo.get_relation_catalog()
-        return [
-            RelationTypeCatalogResponse(
-                code=c.code,
-                description=c.description,
-                is_symmetric=c.is_symmetric,
-            )
-            for c in catalog
-        ]
-    from rag_eval.ingestion.staging.models import RelationType
-
-    descriptions = {
-        RelationType.REFERENCES: "Tham chiếu thông tin trung lập",
-        RelationType.SUPPORTS: "Cung cấp dữ liệu, số liệu, củng cố ngữ cảnh cho nút đích",
-        RelationType.CONTRADICTS: "Mâu thuẫn hoặc xung đột thông tin với nút đích",
-        RelationType.DEFINES: "Định nghĩa thuật ngữ, khái niệm hoặc thực thể được sử dụng ở nút đích",
-        RelationType.EXTENDS: "Mở rộng, bổ sung chi tiết hoặc phát triển thêm ý từ nút đích",
-        RelationType.EXEMPLIFIES: "Cung cấp ví dụ thực tế hoặc ca nghiên cứu minh họa cho nút đích",
-        RelationType.DEPENDS_ON: "Phụ thuộc tiên quyết logic hoặc kỹ thuật vào nút đích",
-        RelationType.SUPERSEDES: "Thay thế hoặc làm lỗi thời nội dung ở nút đích",
-        RelationType.SEE_ALSO: "Liên kết liên tưởng ngữ cảnh, nội dung tham khảo thêm",
-    }
+    repo = GraphRepository(pool=pool)
+    catalog = await repo.get_relation_catalog()
     return [
         RelationTypeCatalogResponse(
-            code=rt.value,
-            description=descriptions.get(rt, rt.name),
-            is_symmetric=(rt in (RelationType.CONTRADICTS, RelationType.SEE_ALSO)),
+            code=c.code,
+            description=c.description,
+            is_symmetric=c.is_symmetric,
         )
-        for rt in RelationType
+        for c in catalog
     ]
 
 
 @router.post(
-    "/staging/{doc_slug}/graph/traverse",
+    "/documents/{doc_slug}/graph/traverse",
     response_model=list[GraphTraversalStepResponse],
 )
-async def traverse_staging_graph(
+async def traverse_document_graph(
     request: Request, doc_slug: str, payload: GraphTraverseRequest
 ) -> list[GraphTraversalStepResponse]:
     """Traverses knowledge graph starting from a chunk path via PostgreSQL stored procedure."""
     pool = _get_db_pool(request)
     if pool is None:
-        return []
+        raise HTTPException(status_code=503, detail="Database is not connected.")
 
     from rag_eval.db.repositories.chunks import ChunkRepository
     from rag_eval.db.repositories.graph import GraphRepository
@@ -863,6 +452,7 @@ async def traverse_staging_graph(
         nav_direction=payload.nav_direction,
         depth_limit=payload.depth_limit,
         filter_relations=payload.filter_relations,
+        match_limit=payload.limit,
     )
     return [
         GraphTraversalStepResponse(
@@ -871,8 +461,14 @@ async def traverse_staging_graph(
             target_chunk_id=str(s.target_chunk_id),
             relation_type=s.relation_type,
             depth=s.depth,
+            source_path=s.source_path,
             target_path=s.target_path,
             target_text=s.target_text,
+            target_contextualized_text=s.target_contextualized_text,
+            target_doc_slug=s.target_doc_slug,
+            target_start_line=s.target_start_line,
+            target_end_line=s.target_end_line,
+            rationale=s.rationale,
         )
         for s in steps
     ]
@@ -882,7 +478,7 @@ async def traverse_staging_graph(
 async def grep_corpus_verbatim(
     request: Request, payload: VerbatimGrepRequest
 ) -> VerbatimGrepResponse:
-    """Exact or regex grep across promoted corpus chunks via verbatim_grep repository call."""
+    """Exact or regex grep across PostgreSQL corpus chunks via verbatim_grep repository call."""
     pool = _get_db_pool(request)
     if pool is None:
         raise HTTPException(status_code=503, detail="Database is not connected.")
@@ -892,7 +488,6 @@ async def grep_corpus_verbatim(
         query_pattern=payload.pattern,
         target_documents=None,
         path_prefix=None,
-        only_resolved=False,
         is_regex=payload.is_regex,
         case_sensitive=payload.case_sensitive,
         match_limit=payload.limit,

@@ -7,13 +7,11 @@ import asyncpg
 
 from rag_eval.db.repositories.base import BaseRepository
 from rag_eval.db.repositories.chunks import ChunkRepository
-from rag_eval.db.repositories.context_refs import ChunkContextRefRepository
 from rag_eval.db.repositories.documents import DocumentRepository
 from rag_eval.db.repositories.graph import GraphRepository
 
 __all__ = [
     "BaseRepository",
-    "ChunkContextRefRepository",
     "ChunkRepository",
     "CorpusRepository",
     "DocumentRepository",
@@ -29,7 +27,6 @@ class CorpusRepository:
         self.documents = DocumentRepository(pool)
         self.chunks = ChunkRepository(pool)
         self.graph = GraphRepository(pool)
-        self.context_refs = ChunkContextRefRepository(pool)
 
     @property
     def pool(self) -> asyncpg.Pool:

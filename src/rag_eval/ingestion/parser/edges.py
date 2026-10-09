@@ -4,13 +4,12 @@ import re
 
 from rag_eval.ingestion.parser.ast_tree import ParsedASTNode
 from rag_eval.ingestion.parser.normalizer import NormalizedDocument
-from rag_eval.ingestion.staging.models import (
-    ChunkReviewStatus,
+from rag_eval.schemas import (
+    ParsedChunkDraft,
+    ParsedEdgeDraft,
     RelationType,
-    StagingChunk,
-    StagingEdge,
+    validate_ltree_path,
 )
-from rag_eval.schemas import FinalizationState, validate_ltree_path
 
 
 def _build_node_path_map(root: ParsedASTNode) -> dict[str, list[str]]:
@@ -46,10 +45,10 @@ class LineageBreadcrumbAndEdgeExtractor:
 
     def synthesize_breadcrumbs(
         self, root_node: ParsedASTNode, leaf_nodes: list[ParsedASTNode]
-    ) -> list[StagingChunk]:
-        """Tạo danh sách StagingChunk với contextualized_text kế thừa phả hệ đầy đủ."""
+    ) -> list[ParsedChunkDraft]:
+        """Tạo danh sách ParsedChunkDraft với contextualized_text kế thừa phả hệ đầy đủ."""
         ancestor_map = _build_node_path_map(root_node)
-        chunks: list[StagingChunk] = []
+        chunks: list[ParsedChunkDraft] = []
 
         for leaf in leaf_nodes:
             ancestors = ancestor_map.get(leaf.path, [])
@@ -68,25 +67,21 @@ class LineageBreadcrumbAndEdgeExtractor:
             chunk_meta["node_type"] = leaf.node_type
 
             chunks.append(
-                StagingChunk(
+                ParsedChunkDraft(
                     path=leaf.path,
-                    node_type=leaf.node_type,
                     verbatim_text=clean_verbatim,
                     contextualized_text=contextualized_text,
                     start_line=leaf.start_line,
                     end_line=leaf.end_line,
                     metadata=chunk_meta,
-                    char_length=len(clean_verbatim),
-                    review_status=ChunkReviewStatus.PENDING,
-                    finalization_state=FinalizationState.UNFINALIZED,
                 )
             )
 
         return chunks
 
     def extract_deterministic_edges(
-        self, chunks: list[StagingChunk], normalized: NormalizedDocument
-    ) -> list[StagingEdge]:
+        self, chunks: list[ParsedChunkDraft], normalized: NormalizedDocument
+    ) -> list[ParsedEdgeDraft]:
         """Trích xuất quan hệ đồ thị với độ chính xác tuyệt đối 100% (Ràng buộc 4).
 
         Chỉ tạo quan hệ khi liên kết neo Markdown (`#anchor`) hoặc đường dẫn đích
@@ -123,7 +118,7 @@ class LineageBreadcrumbAndEdgeExtractor:
         }
 
         valid_paths = {c.path for c in chunks}
-        edges: list[StagingEdge] = []
+        edges: list[ParsedEdgeDraft] = []
         seen_edges: set[tuple[str, str, str]] = set()
 
         for c in chunks:
@@ -142,7 +137,7 @@ class LineageBreadcrumbAndEdgeExtractor:
                         if key not in seen_edges:
                             seen_edges.add(key)
                             edges.append(
-                                StagingEdge(
+                                ParsedEdgeDraft(
                                     source_path=validate_ltree_path(c.path),
                                     target_path=validate_ltree_path(target_path),
                                     relation_type=RelationType.REFERENCES,
@@ -157,7 +152,7 @@ class LineageBreadcrumbAndEdgeExtractor:
                         if key not in seen_edges:
                             seen_edges.add(key)
                             edges.append(
-                                StagingEdge(
+                                ParsedEdgeDraft(
                                     source_path=validate_ltree_path(c.path),
                                     target_path=validate_ltree_path(clean_ext_path),
                                     relation_type=RelationType.REFERENCES,

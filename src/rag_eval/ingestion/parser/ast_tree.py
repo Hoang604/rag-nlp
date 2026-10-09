@@ -185,7 +185,6 @@ class MarkdownASTParser:
                 node_meta["is_table"] = True
                 node_meta["table_summary"] = matched_table.summary
                 node_meta["headers"] = matched_table.headers
-                node_meta["table_headers"] = matched_table.headers
                 node_meta["row_count"] = matched_table.row_count
                 node_meta["col_count"] = matched_table.col_count
             elif node_type == "TABLE":

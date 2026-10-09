@@ -1,4 +1,4 @@
-export type NodeType = 'DOCUMENT' | 'SECTION' | 'PARAGRAPH' | 'TABLE' | 'LIST' | 'CODE' | 'NODE' | string;
+export type NodeType = 'DOCUMENT' | 'SECTION' | 'PARAGRAPH' | 'TABLE' | 'LIST' | 'CODE' | string;
 
 export interface DocumentTreeNode {
   path: string;
@@ -9,8 +9,6 @@ export interface DocumentTreeNode {
   start_line: number;
   end_line: number;
   metadata: Record<string, unknown>;
-  review_status?: 'PENDING' | 'REVIEWED' | string;
-  finalization_state?: string;
   children: DocumentTreeNode[];
 }
 
@@ -18,8 +16,6 @@ export interface DocumentTreeResponse {
   doc_slug: string;
   title: string;
   total_nodes: number;
-  total_finalized?: number;
-  total_pending?: number;
-  progress_percent?: number;
+  total_chunks: number;
   root: DocumentTreeNode;
 }

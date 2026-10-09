@@ -9,10 +9,9 @@ import {
 } from 'lucide-react';
 import { api } from '../../services/api';
 import { CorpusDocument, SearchHit, SearchResponse } from '../../types/api';
-import { StagingDocumentSession } from '../../types/staging';
 
 interface DryRunSearchSimulatorProps {
-  session: StagingDocumentSession | null;
+  activeDocSlug?: string;
 }
 
 const EXAMPLE_QUERIES = [
@@ -22,14 +21,11 @@ const EXAMPLE_QUERIES = [
   'Định dạng dữ liệu và giao thức tích hợp',
 ];
 
-export const DryRunSearchSimulator: React.FC<DryRunSearchSimulatorProps> = ({
-  session: _session,
-}) => {
+export const DryRunSearchSimulator: React.FC<DryRunSearchSimulatorProps> = () => {
   const [query, setQuery] = useState('');
   const [matchLimit, setMatchLimit] = useState(5);
   const [rerank, setRerank] = useState(true);
   const [pathPrefix, setPathPrefix] = useState('');
-  const [onlyResolved, setOnlyResolved] = useState(false);
   const [result, setResult] = useState<SearchResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -39,7 +35,7 @@ export const DryRunSearchSimulator: React.FC<DryRunSearchSimulatorProps> = ({
 
   useEffect(() => {
     api
-      .documents()
+      .getDocuments()
       .then(setDocs)
       .catch(() => setDocs([]));
   }, []);
@@ -57,7 +53,6 @@ export const DryRunSearchSimulator: React.FC<DryRunSearchSimulatorProps> = ({
           rerank,
           doc_slugs: scope.length > 0 ? scope : undefined,
           path_prefix: pathPrefix.trim() || undefined,
-          only_resolved: onlyResolved ? true : undefined,
         });
         setResult(response);
       } catch (err) {
@@ -67,7 +62,7 @@ export const DryRunSearchSimulator: React.FC<DryRunSearchSimulatorProps> = ({
         setLoading(false);
       }
     },
-    [matchLimit, rerank, scope, pathPrefix, onlyResolved]
+    [matchLimit, rerank, scope, pathPrefix]
   );
 
   const handleSubmit = (event: React.FormEvent) => {
@@ -133,23 +128,6 @@ export const DryRunSearchSimulator: React.FC<DryRunSearchSimulatorProps> = ({
               title="Lọc theo tiền tố LTree path (ví dụ: sec_1)"
               className="w-28 rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs font-mono text-slate-200 placeholder-slate-500 focus:border-brand-500 focus:outline-none"
             />
-
-            <label
-              title="Chỉ lấy các chunk đã giải quyết 100% tham chiếu"
-              className={`flex cursor-pointer items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-semibold transition ${
-                onlyResolved
-                  ? 'border-brand-500/50 bg-brand-600/20 text-brand-300'
-                  : 'border-slate-700 bg-slate-950 text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <input
-                type="checkbox"
-                checked={onlyResolved}
-                onChange={(e) => setOnlyResolved(e.target.checked)}
-                className="h-3 w-3 accent-brand-500"
-              />
-              <span>Đã liên kết</span>
-            </label>
 
             <label
               title="Xếp hạng lại top kết quả bằng Cross-Encoder"

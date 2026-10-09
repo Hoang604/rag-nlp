@@ -1,10 +1,10 @@
 import React from 'react';
 import { ArrowRight } from 'lucide-react';
-import { StagingEdge } from '../../types/staging';
+import { GraphVisualizerEdge } from '../../types/api';
 import { getRelationColor } from '../../utils/formatting';
 
 interface EdgeCardListProps {
-  edges: StagingEdge[];
+  edges: GraphVisualizerEdge[];
 }
 
 export const EdgeCardList: React.FC<EdgeCardListProps> = ({
@@ -13,7 +13,7 @@ export const EdgeCardList: React.FC<EdgeCardListProps> = ({
   if (!edges || edges.length === 0) {
     return (
       <div className="rounded-lg border border-slate-800 bg-slate-900/40 p-8 text-center text-xs text-slate-400">
-        Chưa có quan hệ (Graph Edge) nào được gắn vào tài liệu này.
+        Chưa có quan hệ (Graph Edge) nào được ghi nhận cho tài liệu này trong PostgreSQL.
       </div>
     );
   }
@@ -49,6 +49,13 @@ export const EdgeCardList: React.FC<EdgeCardListProps> = ({
                 {edge.target_path}
               </div>
             </div>
+
+            {edge.rationale && (
+              <div className="w-full rounded-lg bg-slate-950/80 px-3 py-1.5 text-xs text-slate-300 border border-slate-800">
+                <span className="font-semibold text-indigo-400">Luận cứ: </span>
+                {edge.rationale}
+              </div>
+            )}
           </div>
         );
       })}

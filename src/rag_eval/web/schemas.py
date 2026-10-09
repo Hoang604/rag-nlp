@@ -1,90 +1,68 @@
 from __future__ import annotations
 
-import datetime
-
 from pydantic import BaseModel, ConfigDict, Field
 
-from rag_eval.ingestion.staging import (
-    StagingChunk,
-    StagingChunkDelta,
-    StagingEdge,
-    StagingMutationRecord,
-    StagingStatus,
-)
+from rag_eval.schemas import RelationType
 
 
-class StagingSessionSummaryResponse(BaseModel):
-    """Summary response for staging sessions discovery listing."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    doc_slug: str = Field(..., description="Document slug identifier")
-    title: str = Field(..., description="Document title")
-    status: StagingStatus = Field(..., description="Current staging lifecycle status")
-    total_chunks: int = Field(..., description="Total count of candidate chunks")
-    total_edges: int = Field(..., description="Total count of relational graph edges")
-    created_at: datetime.datetime = Field(..., description="Session creation timestamp")
-    updated_at: datetime.datetime = Field(
-        ..., description="Session last updated timestamp"
-    )
-    committed_at: datetime.datetime | None = Field(
-        None, description="Agent commit timestamp"
-    )
-    promoted_at: datetime.datetime | None = Field(
-        None, description="Human promotion timestamp"
-    )
+class LinkChunksInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source_path: str = Field(..., description="Đường dẫn phân cấp LTree của chunk nguồn")
+    target_path: str = Field(..., description="Đường dẫn phân cấp LTree của chunk đích")
+    relation_type: RelationType = Field(..., description="Mã quan hệ hợp lệ trong danh mục hệ thống")
+    rationale: str | None = Field(default=None, description="Lý do / bằng chứng luận cứ kết nối hai chunk")
 
 
-class StagingSessionDetailResponse(BaseModel):
-    """Detailed response for a staging document session."""
+class LinkChunksResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    status: str = Field("SUCCESS", description="Trạng thái thao tác")
+    source_path: str
+    target_path: str
+    relation_type: RelationType
+    created: bool
+    rationale: str | None = None
 
-    model_config = ConfigDict(extra="ignore")
 
-    doc_slug: str = Field(..., description="Document slug identifier")
-    title: str = Field(..., description="Document title")
-    status: StagingStatus = Field(..., description="Current staging status")
-    created_at: datetime.datetime = Field(..., description="Session creation timestamp")
-    updated_at: datetime.datetime = Field(
-        ..., description="Session last updated timestamp"
-    )
-    committed_at: datetime.datetime | None = Field(
-        None, description="Agent commit timestamp"
-    )
-    promoted_at: datetime.datetime | None = Field(
-        None, description="Human promotion timestamp"
-    )
-    raw_text: str | None = Field(None, description="Raw source text")
-    metadata: dict[str, object] = Field(
-        default_factory=dict, description="Document metadata"
-    )
-    chunks: list[StagingChunk] = Field(
-        default_factory=list, description="Candidate chunks"
-    )
-    edges: list[StagingEdge] = Field(
-        default_factory=list, description="Relational graph edges"
-    )
-    raw_ast_snapshot: list[dict[str, object]] | None = Field(
-        None, description="Initial AST baseline snapshot"
-    )
-    raw_edge_snapshot: list[dict[str, object]] | None = Field(
-        None, description="Initial graph edges baseline snapshot"
-    )
-    mutation_history: list[StagingMutationRecord] = Field(
-        default_factory=list, description="Audit log of mutations"
+class UnlinkChunksInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source_path: str = Field(..., description="Đường dẫn phân cấp LTree của chunk nguồn")
+    target_path: str = Field(..., description="Đường dẫn phân cấp LTree của chunk đích")
+    relation_type: RelationType | None = Field(
+        default=None,
+        description="Mã loại quan hệ cần gỡ (None khi gỡ mọi quan hệ giữa 2 chunk)",
     )
 
 
-class CreateSessionRequest(BaseModel):
-    """Request payload to create a new staging session from raw text."""
+class UnlinkChunksResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    status: str = Field("SUCCESS", description="Trạng thái thao tác")
+    source_path: str
+    target_path: str
+    removed_edges_count: int
 
-    model_config = ConfigDict(extra="ignore")
 
-    doc_slug: str = Field(..., description="Unique document slug identifier")
-    title: str = Field(..., description="Full document title")
-    raw_text: str = Field(..., description="Raw text of document")
-    metadata: dict[str, object] = Field(
-        default_factory=dict, description="Dynamic document metadata"
-    )
+class GraphVisualizerNode(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    path: str
+    label: str
+    node_type: str
+    in_degree: int
+    out_degree: int
+
+
+class GraphVisualizerEdge(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source_path: str
+    target_path: str
+    relation_type: RelationType
+    rationale: str | None = None
+
+
+class GraphVisualizerResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    doc_slug: str
+    nodes: list[GraphVisualizerNode]
+    edges: list[GraphVisualizerEdge]
 
 
 class DocumentTreeNodeResponse(BaseModel):
@@ -95,8 +73,8 @@ class DocumentTreeNodeResponse(BaseModel):
     path: str = Field(..., description="Hierarchical dot-separated ltree path")
     label: str = Field(..., description="Human-readable node label")
     node_type: str = Field(
-        default="NODE",
-        description="Node division type: DOCUMENT | NODE",
+        default="SECTION",
+        description="Node division type: DOCUMENT | SECTION | PARAGRAPH | TABLE | CODE | LIST",
     )
     verbatim_text: str = Field("", description="Raw verbatim text")
     contextualized_text: str = Field("", description="Synthesized contextual text")
@@ -104,12 +82,6 @@ class DocumentTreeNodeResponse(BaseModel):
     end_line: int = Field(default=1, ge=1, description="1-indexed ending line in raw text")
     metadata: dict[str, object] = Field(
         default_factory=dict, description="Node semantic metadata"
-    )
-    review_status: str = Field(
-        default="PENDING", description="Review status of node ('PENDING' | 'REVIEWED')"
-    )
-    finalization_state: str | None = Field(
-        default=None, description="Semantic finalization state of node"
     )
     children: list[DocumentTreeNodeResponse] = Field(
         default_factory=list, description="Child nodes in hierarchy"
@@ -124,243 +96,8 @@ class DocumentTreeResponse(BaseModel):
     doc_slug: str = Field(..., description="Document slug")
     title: str = Field(..., description="Document title")
     total_nodes: int = Field(..., description="Total nodes count in hierarchy")
-    total_finalized: int = Field(default=0, description="Total finalized chunks count")
-    total_pending: int = Field(default=0, description="Total pending chunks count")
-    progress_percent: float = Field(default=0.0, description="Overall completion progress %")
+    total_chunks: int = Field(default=0, description="Total chunks count in document")
     root: DocumentTreeNodeResponse = Field(..., description="Root document node")
-
-
-class FinalizeChunksRequest(BaseModel):
-    """Request payload to mark candidate chunks as finalized."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    paths: list[str] = Field(..., min_length=1, description="List of chunk paths to finalize")
-
-
-class FinalizeChunksResponse(BaseModel):
-    """Response returned after finalizing chunks."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    status: str = Field("SUCCESS", description="Operation status")
-    doc_slug: str = Field(..., description="Document slug")
-    finalized_count: int = Field(..., description="Number of chunks finalized")
-    pending_remaining: int = Field(..., description="Remaining pending chunks in session")
-
-
-class UnfinalizeChunksRequest(BaseModel):
-    """Request payload to revert chunks back to PENDING and UNFINALIZED."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    paths: list[str] = Field(..., min_length=1, description="List of chunk LTREE paths to unfinalize")
-
-
-class UnfinalizeChunksResponse(BaseModel):
-    """Response returned after unfinalizing chunks."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    status: str = Field("SUCCESS", description="Operation status")
-    doc_slug: str = Field(..., description="Document slug identifier")
-    unfinalized_count: int = Field(..., description="Number of chunks successfully unfinalized")
-    pending_remaining: int = Field(..., description="Number of chunks currently pending review")
-
-
-class BatchPatchRequest(BaseModel):
-    """Request payload for batch updating and removing chunks."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    updated_chunks: list[StagingChunkDelta] = Field(
-        default_factory=list, description="List of chunks to add or update"
-    )
-    removed_paths: list[str] = Field(
-        default_factory=list, description="List of chunk paths to delete"
-    )
-
-
-class BatchPatchResponse(BaseModel):
-    """Response returned after applying a chunk batch patch."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    status: str = Field("SUCCESS", description="Operation status")
-    doc_slug: str = Field(..., description="Document slug")
-    updated_count: int = Field(..., description="Number of chunks updated")
-    removed_count: int = Field(..., description="Number of chunk paths removed")
-    total_chunks: int = Field(..., description="Total remaining chunks in session")
-
-
-class CreateEdgeRequest(BaseModel):
-    """Request payload to create or update a relational graph edge."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    source_path: str = Field(..., description="Source chunk ltree path")
-    target_path: str = Field(..., description="Target chunk ltree path")
-    relation_type: str = Field(..., description="Relation type enum string")
-    anchor_text: str | None = Field(None, description="Verbatim text quote from source chunk")
-    char_start: int | None = Field(None, description="Start character offset in source chunk text")
-    char_end: int | None = Field(None, description="End character offset in source chunk text")
-
-
-class DeleteEdgeRequest(BaseModel):
-    """Request payload to delete a relational graph edge."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    source_path: str = Field(..., description="Source chunk ltree path")
-    target_path: str | None = Field(None, description="Target chunk ltree path")
-    relation_type: str | None = Field(None, description="Relation type enum string")
-    clear_all_targets: bool = Field(
-        default=False,
-        description="Clear all outgoing edges from source_path regardless of target",
-    )
-
-
-class StagingEdgeResponse(BaseModel):
-    """Response model for a relational graph edge."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    source_path: str = Field(..., description="Source chunk ltree path")
-    target_path: str = Field(..., description="Target chunk ltree path")
-    relation_type: str = Field(..., description="Relation type enum string")
-    anchor_text: str | None = Field(None, description="Verbatim text quote from source chunk")
-    char_start: int | None = Field(None, description="Start character offset in source chunk text")
-    char_end: int | None = Field(None, description="End character offset in source chunk text")
-
-
-class StatusTransitionRequest(BaseModel):
-    """Request payload to transition staging session status."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    status: StagingStatus = Field(..., description="Target staging lifecycle status")
-    actor: str = Field(
-        "HUMAN:reviewer", description="Actor initiating status transition"
-    )
-    description: str = Field("", description="Reason or notes for transition")
-
-
-class ReopenSessionRequest(BaseModel):
-    """Request payload to reopen a promoted staging session into AMENDMENT status."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    actor: str = Field(
-        "HUMAN:reviewer", description="Actor initiating reopening"
-    )
-    reason: str = Field("", description="Reason or notes for reopening")
-
-
-class UncommitSessionRequest(BaseModel):
-    """Request payload to uncommit an AGENT_COMMITTED staging session back into DRAFT or AMENDMENT status."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    actor: str = Field(
-        "HUMAN:reviewer", description="Actor initiating uncommit"
-    )
-    reason: str = Field("", description="Reason or notes for uncommitting session")
-
-
-class AuditDiffEntry(BaseModel):
-    """Single item representing a detected mutation difference."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    path: str = Field(..., description="Target chunk path")
-    change_type: str = Field(..., description="'ADDED' | 'MODIFIED' | 'DELETED'")
-    field_name: str | None = Field(None, description="Specific field changed")
-    old_value: object | None = Field(None, description="Baseline / prior value")
-    new_value: object | None = Field(None, description="Current / updated value")
-    description: str = Field("", description="Human-readable summary of difference")
-
-
-class SessionDiffResponse(BaseModel):
-    """Response payload detailing version mutation differences."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    doc_slug: str = Field(..., description="Document slug")
-    total_changes: int = Field(..., description="Total count of diff entries")
-    added_chunks: list[StagingChunk] = Field(
-        default_factory=list, description="Chunks added since baseline parse"
-    )
-    modified_chunks: list[dict[str, object]] = Field(
-        default_factory=list, description="Chunks modified since baseline parse"
-    )
-    deleted_chunks: list[dict[str, object]] = Field(
-        default_factory=list, description="Chunks removed since baseline parse"
-    )
-    edge_diffs: list[dict[str, object]] = Field(
-        default_factory=list, description="Relational graph edge differences"
-    )
-    diff_entries: list[AuditDiffEntry] = Field(
-        default_factory=list, description="Detailed audit diff entries"
-    )
-
-
-class ValidationIssue(BaseModel):
-    """Represents a discrete rule check violation."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    rule: str = Field(..., description="Rule code identifier")
-    severity: str = Field("ERROR", description="'ERROR' | 'WARNING'")
-    path: str | None = Field(None, description="Affected chunk path or entity")
-    message: str = Field(..., description="Human-readable violation description")
-    blocking: bool = Field(True, description="Whether this issue blocks promotion")
-
-
-class PreFlightValidationResponse(BaseModel):
-    """Automated pre-flight integrity verification checklist results."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    status: str = Field(..., description="'PASSED' | 'FAILED'")
-    passed: bool = Field(..., description="True if all blocking checks passed")
-    total_checks: int = Field(..., description="Total automated integrity checks run")
-    issues: list[ValidationIssue] = Field(
-        default_factory=list, description="List of detected validation issues"
-    )
-    summary: dict[str, object] = Field(
-        default_factory=dict, description="Summary breakdown of check results"
-    )
-
-
-class PromoteSessionRequest(BaseModel):
-    """Request payload to trigger human promotion to PostgreSQL."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    reviewer_notes: str | None = Field(
-        None, description="Optional reviewer audit notes"
-    )
-    compute_embeddings: bool = Field(
-        True, description="Whether to compute 512-dim dense vector embeddings"
-    )
-
-
-class PromotionResultResponse(BaseModel):
-    """Result of human promotion to PostgreSQL production tables."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    status: str = Field("SUCCESS", description="'SUCCESS' | 'FAILED'")
-    doc_slug: str = Field(..., description="Promoted document slug")
-    document_id: str = Field(..., description="Authoritative PostgreSQL document UUID")
-    chunks_promoted: int = Field(
-        ..., description="Total chunks persisted into chunks table"
-    )
-    edges_promoted: int = Field(
-        ..., description="Total edges persisted into graph_edges table"
-    )
-    promoted_at: str = Field(..., description="ISO 8601 promotion timestamp")
-    message: str = Field("", description="Status message")
 
 
 class HealthResponse(BaseModel):
@@ -384,42 +121,6 @@ class RawTextResponse(BaseModel):
     chunks_count: int = Field(..., description="Total parsed chunks count")
 
 
-class GenericSuccessResponse(BaseModel):
-    """Generic status response model."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    status: str = Field("SUCCESS", description="Operation status")
-    message: str = Field("", description="Operation message")
-    doc_slug: str | None = Field(None, description="Affected document slug")
-
-
-class ReparentSubtreeRequest(BaseModel):
-    """Request payload to migrate a subtree to a new parent ltree prefix."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    old_path_prefix: str = Field(..., description="Existing ltree path prefix to move")
-    new_path_prefix: str = Field(..., description="New target ltree path prefix")
-    dry_run: bool = Field(False, description="Whether to simulate mutation")
-    actor: str = Field("HUMAN:reviewer", description="Action author")
-
-
-class ReparentSubtreeResponse(BaseModel):
-    """Response returned after subtree re-parenting."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    status: str = "SUCCESS"
-    doc_slug: str
-    dry_run: bool
-    affected_chunks_count: int
-    affected_edges_count: int
-    old_path_prefix: str
-    new_path_prefix: str
-    total_chunks: int
-
-
 class SearchRequest(BaseModel):
     """A retrieval query issued from the reviewer UI."""
 
@@ -430,7 +131,6 @@ class SearchRequest(BaseModel):
     rerank: bool | None = None
     doc_slugs: list[str] = Field(default_factory=list, max_length=32)
     path_prefix: str | None = Field(default=None, description="Optional ltree path prefix filter")
-    only_resolved: bool = Field(default=False, description="Filter for chunks with all references resolved")
 
 
 class SearchHitResponse(BaseModel):
@@ -460,105 +160,13 @@ class SearchResponse(BaseModel):
 
 
 class CorpusDocumentResponse(BaseModel):
-    """One promoted document, for the retrieval scope selector."""
+    """One document in PostgreSQL, for the retrieval scope selector and dashboard catalog."""
 
     model_config = ConfigDict(extra="ignore")
 
     doc_slug: str
     title: str
     chunk_count: int
-
-
-class WALRecordResponse(BaseModel):
-    """Response model for a single WAL record in the audit journal."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    lsn: int = Field(..., description="Log Sequence Number")
-    timestamp: datetime.datetime = Field(..., description="UTC timestamp of entry")
-    actor: str = Field(..., description="Actor who executed the operation")
-    op_type: str = Field(..., description="Operation type code")
-    description: str = Field(..., description="Human-readable summary")
-    payload: dict[str, object] = Field(default_factory=dict, description="Operation payload")
-    checksum: str = Field(..., description="SHA-256 integrity checksum")
-
-
-class ReplayVerificationResponse(BaseModel):
-    """Result of running deterministic replay from genesis baseline."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    status: str = Field("SUCCESS", description="Replay status")
-    doc_slug: str = Field(..., description="Document slug")
-    applied_lsn: int = Field(..., description="Highest LSN applied during replay")
-    is_deterministic: bool = Field(True, description="Whether replay perfectly reproduced state")
-    total_chunks: int = Field(..., description="Total chunks reconstructed")
-    total_edges: int = Field(..., description="Total edges reconstructed")
-    message: str = Field("", description="Verification message")
-
-
-class StagingGrepRequest(BaseModel):
-    """Request payload for in-memory regex grep across staging chunks."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    pattern: str = Field(..., description="Query substring or regex pattern")
-    is_regex: bool = Field(False, description="Whether pattern is a regular expression")
-    case_sensitive: bool = Field(False, description="Case-sensitive matching")
-    search_in: str = Field("ALL", description="Target field: ALL, VERBATIM, CONTEXT, PATH, METADATA")
-    limit: int = Field(50, description="Max matches to return")
-
-
-class StagingGrepHitResponse(BaseModel):
-    """A matched hit from in-memory grep."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    doc_slug: str
-    path: str
-    field_matched: str
-    match_snippet: str
-    verbatim_text: str
-    contextualized_text: str
-    start_line: int = Field(..., ge=1)
-    end_line: int = Field(..., ge=1)
-    char_length: int
-    metadata: dict[str, object] = Field(default_factory=dict)
-
-
-
-class StagingGrepResponse(BaseModel):
-    """Response containing grep results across staging session chunks."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    doc_slug: str
-    pattern: str
-    total_hits: int
-    hits: list[StagingGrepHitResponse]
-
-
-class UnresolvedBacklogItemResponse(BaseModel):
-    """An unresolved external reference in production or staging."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    chunk_id: str
-    source_path: str
-    doc_slug: str
-    doc_title: str
-    target_path: str
-    context_type: str
-
-
-class UnresolvedBacklogResponse(BaseModel):
-    """List of unresolved external references."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    doc_slug: str | None
-    total_unresolved: int
-    items: list[UnresolvedBacklogItemResponse]
 
 
 class GraphTraverseRequest(BaseModel):
@@ -574,6 +182,7 @@ class GraphTraverseRequest(BaseModel):
     filter_relations: list[str] | None = Field(
         default=None, description="Optional relation type filters"
     )
+    limit: int = Field(default=20, ge=1, le=100, description="Max traversed steps")
 
 
 class GraphTraversalStepResponse(BaseModel):
@@ -586,8 +195,14 @@ class GraphTraversalStepResponse(BaseModel):
     target_chunk_id: str
     relation_type: str
     depth: int
+    source_path: str
     target_path: str
     target_text: str
+    target_contextualized_text: str
+    target_doc_slug: str
+    target_start_line: int
+    target_end_line: int
+    rationale: str | None = None
 
 
 class VerbatimGrepRequest(BaseModel):
@@ -638,4 +253,3 @@ class RelationTypeCatalogResponse(BaseModel):
     code: str
     description: str
     is_symmetric: bool
-
