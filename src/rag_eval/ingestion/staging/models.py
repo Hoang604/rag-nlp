@@ -538,6 +538,19 @@ class StgCommitResult(BaseModel):
     message: str
 
 
+class StgUncommitResult(BaseModel):
+    """Kết quả phản hồi của thao tác mở lại phiên làm việc từ AGENT_COMMITTED về DRAFT hoặc AMENDMENT."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    doc_slug: str = Field(..., description="Mã định danh slug của tài liệu")
+    status: str = Field(..., description="Trạng thái phiên làm việc sau khi uncommit (DRAFT hoặc AMENDMENT)")
+    total_chunks: int = Field(..., description="Tổng số chunk trong phiên làm việc")
+    total_edges: int = Field(..., ge=0, description="Tổng số cạnh quan hệ trong phiên làm việc")
+    uncommitted_at: str = Field(..., description="Thời điểm uncommit phiên làm việc (ISO 8601)")
+    message: str = Field(..., description="Thông điệp kết quả")
+
+
 class ChunkProgressStats(BaseModel):
     model_config = ConfigDict(extra="ignore")
 

@@ -484,6 +484,15 @@ class StagingManager:
                     data={"unreviewed_count": len(unreviewed), "sample_paths": unreviewed[:10]},
                 )
 
+        if status in (StagingStatus.DRAFT, StagingStatus.AMENDMENT):
+            current_session = wal_store.load_materialized_session()
+            if current_session.status in (StagingStatus.PROMOTED, StagingStatus.APPROVED):
+                raise CorpusDomainError(
+                    error_code=E_CORPUS_INTEGRITY_VIOLATION,
+                    message=f"Không thể chuyển đổi trực tiếp trạng thái sang {status.value} khi phiên đang ở trạng thái '{current_session.status.value}'.",
+                    data={"doc_slug": doc_slug, "current_status": current_session.status.value},
+                )
+
         payload = {
             "new_status": status.value,
             "description": description,
@@ -697,6 +706,114 @@ class StagingManager:
             actor=actor,
             op_type="STATUS_TRANSITION_AMENDMENT",
             description=reason or f"Reopened session for '{doc_slug}' into AMENDMENT status.",
+            payload=payload,
+        )
+        return session
+
+    def commit_session(
+        self,
+        doc_slug: str,
+        actor: str = "AGENT",
+        reason: str = "",
+    ) -> StagingDocumentSession:
+        """Validates 100% chunk review gate and graph referential integrity, then commits session to AGENT_COMMITTED."""
+        wal_store = self._get_wal_store(doc_slug)
+        if not wal_store.exists():
+            raise CorpusDomainError(
+                error_code=E_CORPUS_INTEGRITY_VIOLATION,
+                message=f"Staging session for document '{doc_slug}' does not exist at {wal_store.session_dir}",
+                data={"doc_slug": doc_slug},
+            )
+
+        session = wal_store.load_materialized_session()
+        unreviewed = [
+            c.path
+            for c in session.chunks
+            if c.review_status == ChunkReviewStatus.PENDING
+        ]
+        if unreviewed:
+            raise CorpusDomainError(
+                error_code=E_AST_GROUNDING_VALIDATION,
+                message=(
+                    f"Không thể commit tài liệu '{doc_slug}': còn {len(unreviewed)}/{len(session.chunks)} "
+                    "chunk ở trạng thái PENDING. Reviewer/Agent bắt buộc phải rà soát "
+                    "100% các chunk trước khi phiên làm việc được phép cam kết."
+                ),
+                data={
+                    "doc_slug": doc_slug,
+                    "unreviewed_count": len(unreviewed),
+                    "total_chunks": len(session.chunks),
+                    "unreviewed_sample": unreviewed[:5],
+                },
+            )
+
+        chunk_paths = {c.path for c in session.chunks}
+        sanitized_slug = sanitize_ltree_label(doc_slug)
+        for edge in session.edges:
+            if edge.source_path not in chunk_paths:
+                raise CorpusDomainError(
+                    error_code=E_AST_GROUNDING_VALIDATION,
+                    message=f"Invalid edge source path '{edge.source_path}': chunk path does not exist in document '{doc_slug}'.",
+                    data={"doc_slug": doc_slug, "source_path": edge.source_path},
+                )
+            if (
+                edge.target_path
+                and (
+                    edge.target_path.startswith(f"{sanitized_slug}.")
+                    or edge.target_path.startswith(f"{doc_slug}.")
+                )
+                and edge.target_path not in chunk_paths
+            ):
+                raise CorpusDomainError(
+                    error_code=E_AST_GROUNDING_VALIDATION,
+                    message=f"Invalid edge target path '{edge.target_path}': internal chunk path does not exist in document '{doc_slug}'.",
+                    data={"doc_slug": doc_slug, "target_path": edge.target_path},
+                )
+
+        return self.update_session_status(
+            doc_slug=doc_slug,
+            status=StagingStatus.AGENT_COMMITTED,
+            actor=actor,
+            description=reason or f"Agent completed staging session review and committed for {doc_slug}.",
+        )
+
+    def uncommit_session(
+        self,
+        doc_slug: str,
+        actor: str = "AGENT",
+        reason: str = "",
+    ) -> StagingDocumentSession:
+        """Reopens an AGENT_COMMITTED staging session back into DRAFT or AMENDMENT status (Origin-Aware)."""
+        wal_store = self._get_wal_store(doc_slug)
+        if not wal_store.exists():
+            raise CorpusDomainError(
+                error_code=E_CORPUS_INTEGRITY_VIOLATION,
+                message=f"Staging session for document '{doc_slug}' does not exist at {wal_store.session_dir}",
+                data={"doc_slug": doc_slug},
+            )
+
+        session = wal_store.load_materialized_session()
+        if session.status in (StagingStatus.DRAFT, StagingStatus.AMENDMENT):
+            return session
+        if session.status != StagingStatus.AGENT_COMMITTED:
+            raise CorpusDomainError(
+                error_code=E_CORPUS_INTEGRITY_VIOLATION,
+                message=f"Chỉ phiên ở trạng thái AGENT_COMMITTED mới có thể mở lại để tiếp tục hiệu chỉnh. Hiện tại: '{session.status.value}'.",
+                data={"doc_slug": doc_slug, "status": session.status.value},
+            )
+
+        has_amendment = bool(session.metadata.get("amendment_baseline_snapshot"))
+        target_status = StagingStatus.AMENDMENT if has_amendment else StagingStatus.DRAFT
+
+        payload = {
+            "previous_status": session.status.value,
+            "new_status": target_status.value,
+            "reason": reason or f"Uncommitted session back to {target_status.value}",
+        }
+        _, session = wal_store.append_record(
+            actor=actor,
+            op_type=f"STATUS_TRANSITION_{target_status.value}",
+            description=reason or f"Uncommitted session for '{doc_slug}' back to {target_status.value}.",
             payload=payload,
         )
         return session

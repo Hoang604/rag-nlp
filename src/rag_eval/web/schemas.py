@@ -256,6 +256,17 @@ class ReopenSessionRequest(BaseModel):
     reason: str = Field("", description="Reason or notes for reopening")
 
 
+class UncommitSessionRequest(BaseModel):
+    """Request payload to uncommit an AGENT_COMMITTED staging session back into DRAFT or AMENDMENT status."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    actor: str = Field(
+        "HUMAN:reviewer", description="Actor initiating uncommit"
+    )
+    reason: str = Field("", description="Reason or notes for uncommitting session")
+
+
 class AuditDiffEntry(BaseModel):
     """Single item representing a detected mutation difference."""
 

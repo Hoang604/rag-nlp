@@ -24,7 +24,6 @@ from rag_eval.ingestion.staging.models import (
     StagingEdge,
     StagingEdgeFilter,
     StagingEdgeInput,
-    StagingStatus,
     StagingStatusFilter,
     StgAddEdgesResult,
     StgCommitResult,
@@ -39,11 +38,11 @@ from rag_eval.ingestion.staging.models import (
     StgRemoveEdgesResult,
     StgReopenResult,
     StgReparentResult,
+    StgUncommitResult,
     StgUnfinalizeResult,
 )
 from rag_eval.ingestion.staging.session import StagingDocumentSession
 from rag_eval.schemas import (
-    sanitize_ltree_label,
     validate_ltree_path,
 )
 
@@ -234,67 +233,37 @@ class CorpusStagingTools:
         return result
 
     async def stg_commit(self, doc_slug: str) -> StgCommitResult:
-        session = await self._ensure_session(doc_slug)
-
-        unreviewed = [
-            c.path
-            for c in session.chunks
-            if c.review_status == ChunkReviewStatus.PENDING
-        ]
-        if unreviewed:
-            raise CorpusDomainError(
-                error_code=E_AST_GROUNDING_VALIDATION,
-                message=(
-                    f"Không thể commit tài liệu '{doc_slug}': còn {len(unreviewed)}/{len(session.chunks)} "
-                    "chunk ở trạng thái PENDING. Reviewer/Agent bắt buộc phải rà soát "
-                    "100% các chunk trước khi phiên làm việc được phép cam kết."
-                ),
-                data={
-                    "doc_slug": doc_slug,
-                    "unreviewed_count": len(unreviewed),
-                    "total_chunks": len(session.chunks),
-                    "unreviewed_sample": unreviewed[:5],
-                },
-            )
-
-        chunk_paths = {c.path for c in session.chunks}
-        sanitized_slug = sanitize_ltree_label(doc_slug)
-        for edge in session.edges:
-            if edge.source_path not in chunk_paths:
-                raise CorpusDomainError(
-                    error_code=E_AST_GROUNDING_VALIDATION,
-                    message=f"Invalid edge source path '{edge.source_path}': chunk path does not exist in document '{doc_slug}'.",
-                    data={"doc_slug": doc_slug, "source_path": edge.source_path},
-                )
-            if (
-                edge.target_path
-                and (
-                    edge.target_path.startswith(f"{sanitized_slug}.")
-                    or edge.target_path.startswith(f"{doc_slug}.")
-                )
-                and edge.target_path not in chunk_paths
-            ):
-                raise CorpusDomainError(
-                    error_code=E_AST_GROUNDING_VALIDATION,
-                    message=f"Invalid edge target path '{edge.target_path}': internal chunk path does not exist in document '{doc_slug}'.",
-                    data={"doc_slug": doc_slug, "target_path": edge.target_path},
-                )
-
         now = datetime.datetime.now(datetime.UTC)
-        session = self._staging.update_session_status(
-            doc_slug=doc_slug,
-            status=StagingStatus.AGENT_COMMITTED,
-            actor="AGENT",
-            description=f"Agent completed staging session review and committed for {doc_slug}.",
-        )
-
+        await self._ensure_session(doc_slug)
+        session = self._staging.commit_session(doc_slug=doc_slug, actor="AGENT")
         return StgCommitResult(
             doc_slug=session.doc_slug,
-            status=StagingStatus.AGENT_COMMITTED.value,
+            status=session.status.value,
             total_chunks=len(session.chunks),
             total_edges=len(session.edges),
             committed_at=now.isoformat(),
             message=f"Phiên làm việc cho tài liệu '{doc_slug}' đã được chuyển sang trạng thái AGENT_COMMITTED. Dữ liệu đã được ghi nhận và sẵn sàng cho rà soát, lưu trữ.",
+        )
+
+    async def stg_uncommit(
+        self,
+        doc_slug: str,
+        reason: str = "",
+    ) -> StgUncommitResult:
+        now = datetime.datetime.now(datetime.UTC)
+        await self._ensure_session(doc_slug)
+        session = self._staging.uncommit_session(
+            doc_slug=doc_slug,
+            actor="AGENT",
+            reason=reason or "Agent uncommitted session",
+        )
+        return StgUncommitResult(
+            doc_slug=session.doc_slug,
+            status=session.status.value,
+            total_chunks=len(session.chunks),
+            total_edges=len(session.edges),
+            uncommitted_at=now.isoformat(),
+            message=f"Phiên làm việc cho tài liệu '{doc_slug}' đã được mở lại ở trạng thái {session.status.value}. Các công cụ stg_patch, stg_add_edges, stg_finalize_chunks đã sẵn sàng.",
         )
 
     async def stg_poll_pending_chunks(

@@ -96,10 +96,11 @@ async def test_mcp_server_handle_unknown_method() -> None:
 
 @pytest.mark.asyncio
 async def test_mcp_tool_definitions_and_instructions_clean_of_infrastructure_buzzwords() -> None:
-    """Verifies all 19 tools and server instructions are free of database/infrastructure buzzwords."""
+    """Verifies all 20 tools and server instructions are free of database/infrastructure buzzwords."""
     server = CorpusMCPServer()
     instructions = await server.get_instructions()
     tools = await server.get_tool_definitions()
+    assert len(tools) == 20
 
     forbidden_keywords = [
         "Trigram GIN",

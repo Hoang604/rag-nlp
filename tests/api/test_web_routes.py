@@ -321,3 +321,52 @@ async def test_search_corpus_endpoint_returns_ranking_floats(
             only_resolved=False,
         )
 
+
+@pytest.mark.asyncio
+async def test_uncommit_staging_session_endpoint(
+    test_app_and_manager: tuple[FastAPI, StagingManager],
+) -> None:
+    """Verifies S-07: POST /staging/{doc_slug}/uncommit reverts AGENT_COMMITTED session to DRAFT."""
+    app, mgr = test_app_and_manager
+    doc_slug = "uncommit_route_test"
+
+    session = mgr.create_session_from_raw(
+        doc_slug=doc_slug,
+        title="Uncommit Route Test",
+        raw_text="Paragraph 1\n\nParagraph 2",
+    )
+    for c in session.chunks:
+        mgr.patch_chunks(
+            doc_slug=doc_slug,
+            updated_chunks=[
+                StagingChunkDelta(path=c.path, context_type=ContextType.SELF_CONTAINED)
+            ],
+        )
+        session = mgr.load_session(doc_slug)
+        session.get_chunk(c.path)
+        mgr.save_session(session)
+    mgr.finalize_chunks(doc_slug=doc_slug, paths=[c.path for c in session.chunks])
+    mgr.commit_session(doc_slug=doc_slug, actor="AGENT")
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        resp = await client.post(
+            f"/api/staging/{doc_slug}/uncommit",
+            json={"reason": "Operator requested rework"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["doc_slug"] == doc_slug
+        assert data["status"] == "DRAFT"
+        assert data["committed_at"] is None
+
+        # Verify WAL records actor as HUMAN:reviewer (default)
+        wal_resp = await client.get(f"/api/staging/{doc_slug}/wal")
+        assert wal_resp.status_code == 200
+        wal_data = wal_resp.json()
+        last_record = wal_data[-1]
+        assert last_record["op_type"] == "STATUS_TRANSITION_DRAFT"
+        assert last_record["actor"] == "HUMAN:reviewer"
+

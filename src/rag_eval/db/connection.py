@@ -12,7 +12,7 @@ from pgvector.asyncpg import register_vector
 logger = logging.getLogger(__name__)
 
 DEFAULT_DATABASE_URL: Final[str] = (
-    "postgresql://postgres:postgres@localhost:15432/rag_db"
+    "postgresql://postgres:postgres@localhost:1542/rag_db"
 )
 
 _pool: asyncpg.Pool | None = None

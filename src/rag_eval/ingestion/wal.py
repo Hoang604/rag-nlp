@@ -528,6 +528,8 @@ class WALSessionStore:
                     session.committed_at = record.timestamp
                 elif new_status == StagingStatus.PROMOTED:
                     session.promoted_at = record.timestamp
+                elif new_status in (StagingStatus.DRAFT, StagingStatus.AMENDMENT):
+                    session.committed_at = None
             if "amendment_baseline_snapshot" in record.payload:
                 session.metadata["amendment_baseline_snapshot"] = record.payload[
                     "amendment_baseline_snapshot"

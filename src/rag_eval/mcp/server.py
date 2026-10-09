@@ -71,7 +71,8 @@ Retrieval direction is governed by token specificity and contextual completeness
 - Edge Topology: `SELF_CONTAINED` chunks must possess exactly zero outgoing relation edges. `REQUIRES_EXTERNAL_CONTEXT` chunks must possess at least one directed outgoing edge anchored directly to the chunk that resolves the dependency.
 - Two-Tier Finality Gate:
   1. Chunk Finalization: A chunk transitions to `REVIEWED` via `stg_finalize_chunks` exclusively after explicit textual inspection (`inspected`), semantic classification, and topological edge consistency are satisfied.
-  2. Session Commitment: The staging session transitions to `AGENT_COMMITTED` via `stg_commit` exclusively after pre-flight validation (`stg_validate`) confirms zero topological or integrity violations."""
+  2. Session Commitment: The staging session transitions to `AGENT_COMMITTED` via `stg_commit` exclusively after pre-flight validation (`stg_validate`) confirms zero topological or integrity violations.
+- Rollback Gate (Uncommit): An `AGENT_COMMITTED` session can be safely unlocked back to an editable status (`DRAFT` or `AMENDMENT`) via `stg_uncommit`. Uncommitting cleanses the commit timestamp while strictly preserving 100% of reviewed chunks and attached graph edges, enabling targeted remediation without re-evaluating unmodified chunks."""
 
 
 def render_server_instructions(

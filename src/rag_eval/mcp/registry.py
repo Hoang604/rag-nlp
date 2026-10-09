@@ -36,13 +36,14 @@ from rag_eval.mcp.tools import (
     StgRemoveEdgesResult,
     StgReopenResult,
     StgReparentResult,
+    StgUncommitResult,
     StgUnfinalizeResult,
     VerbatimGrepResult,
 )
 
 
 def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
-    """Registers all 19 canonical Agent-First corpus tools onto the MCPServer instance."""
+    """Registers all 20 canonical Agent-First corpus tools onto the MCPServer instance."""
 
     @server.tool(
         name="stg_validate",
@@ -448,6 +449,30 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
     ) -> StgCommitResult:
         return await tool_impl.stg_commit(
             doc_slug=doc_slug,
+        )
+
+    @server.tool(
+        name="stg_uncommit",
+        description="Mở lại phiên làm việc từ trạng thái AGENT_COMMITTED về trạng thái mở (DRAFT hoặc AMENDMENT) để tiếp tục hiệu chỉnh hoặc nghiệm thu lại chunk.",
+    )
+    async def stg_uncommit(
+        doc_slug: Annotated[
+            str,
+            Field(
+                description="Mã định danh doc_slug của phiên làm việc cần mở lại từ AGENT_COMMITTED.",
+            ),
+        ],
+        reason: Annotated[
+            str,
+            Field(
+                default="",
+                description="Lý do mở lại phiên làm việc phục vụ nhật ký kiểm toán.",
+            ),
+        ] = "",
+    ) -> StgUncommitResult:
+        return await tool_impl.stg_uncommit(
+            doc_slug=doc_slug,
+            reason=reason,
         )
 
     @server.tool(

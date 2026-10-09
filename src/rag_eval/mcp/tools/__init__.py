@@ -30,6 +30,7 @@ from rag_eval.ingestion.staging.models import (
     StgPollPendingResult,
     StgRemoveEdgesResult,
     StgReopenResult,
+    StgUncommitResult,
     StgUnfinalizeResult,
 )
 from rag_eval.mcp.tools.sensors import (
@@ -247,6 +248,13 @@ class CorpusMCPTools:
     async def stg_commit(self, doc_slug: str) -> StgCommitResult:
         return await self._staging.stg_commit(doc_slug=doc_slug)
 
+    async def stg_uncommit(
+        self,
+        doc_slug: str,
+        reason: str = "",
+    ) -> StgUncommitResult:
+        return await self._staging.stg_uncommit(doc_slug=doc_slug, reason=reason)
+
     async def stg_list_sessions(
         self, status: StagingStatusFilter | None = None
     ) -> StgListSessionsResult:
@@ -317,6 +325,7 @@ __all__ = [
     "StgRemoveEdgesResult",
     "StgReopenResult",
     "StgReparentResult",
+    "StgUncommitResult",
     "StgUnfinalizeResult",
     "VerbatimGrepResult",
 ]

@@ -54,6 +54,7 @@ from rag_eval.web.schemas import (
     StagingSessionDetailResponse,
     StagingSessionSummaryResponse,
     StatusTransitionRequest,
+    UncommitSessionRequest,
     UnfinalizeChunksRequest,
     UnfinalizeChunksResponse,
     UnresolvedBacklogItemResponse,
@@ -595,6 +596,22 @@ async def reopen_staging_session(
     session = mgr.reopen_session_for_amendment(
         doc_slug=doc_slug, actor=actor, reason=reason
     )
+    return StagingSessionDetailResponse.model_validate(session.model_dump())
+
+
+@router.post("/staging/{doc_slug}/uncommit", response_model=StagingSessionDetailResponse)
+async def uncommit_staging_session(
+    request: Request,
+    doc_slug: str,
+    payload: UncommitSessionRequest | None = None,
+) -> StagingSessionDetailResponse:
+    """Uncommits an AGENT_COMMITTED staging session back into DRAFT or AMENDMENT status."""
+    mgr = _get_staging_manager(request)
+    await _load_session_with_hydration(request, doc_slug)
+
+    actor = payload.actor if payload else "HUMAN:reviewer"
+    reason = payload.reason if payload else ""
+    session = mgr.uncommit_session(doc_slug=doc_slug, actor=actor, reason=reason)
     return StagingSessionDetailResponse.model_validate(session.model_dump())
 
 
