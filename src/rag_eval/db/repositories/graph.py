@@ -72,15 +72,16 @@ class GraphRepository(BaseRepository):
 
         query = """
         INSERT INTO graph_edges (
-            id, source_chunk_id, target_chunk_id, relation_type, rationale
+            id, source_chunk_id, target_chunk_id, relation_type, rationale, citation_text
         )
-        SELECT r.id, r.source_chunk_id, r.target_chunk_id, r.relation_type, r.rationale
-        FROM unnest($1::uuid[], $2::uuid[], $3::uuid[], $4::varchar(32)[], $5::text[]) 
-            AS r(id, source_chunk_id, target_chunk_id, relation_type, rationale)
+        SELECT r.id, r.source_chunk_id, r.target_chunk_id, r.relation_type, r.rationale, r.citation_text
+        FROM unnest($1::uuid[], $2::uuid[], $3::uuid[], $4::varchar(32)[], $5::text[], $6::text[]) 
+            AS r(id, source_chunk_id, target_chunk_id, relation_type, rationale, citation_text)
         ON CONFLICT (source_chunk_id, target_chunk_id, relation_type) 
         DO UPDATE SET 
             relation_type = EXCLUDED.relation_type,
-            rationale = COALESCE(EXCLUDED.rationale, graph_edges.rationale)
+            rationale = COALESCE(EXCLUDED.rationale, graph_edges.rationale),
+            citation_text = EXCLUDED.citation_text
         RETURNING id, source_chunk_id, target_chunk_id, relation_type;
         """
         deduped: dict[tuple[uuid.UUID, uuid.UUID, str], GraphEdgeEntity] = {}
@@ -95,10 +96,11 @@ class GraphRepository(BaseRepository):
         target_ids = [e.target_chunk_id for e in unique_edges]
         relations: list[str] = [e.relation_type for e in unique_edges]
         rationales: list[str | None] = [e.rationale for e in unique_edges]
+        citation_texts: list[str] = [e.citation_text for e in unique_edges]
 
         try:
             async with self._connection_scope(conn) as c:
-                rows = await c.fetch(query, edge_ids, source_ids, target_ids, relations, rationales)
+                rows = await c.fetch(query, edge_ids, source_ids, target_ids, relations, rationales, citation_texts)
                 return {
                     (
                         uuid.UUID(str(r["source_chunk_id"])),
@@ -139,6 +141,28 @@ class GraphRepository(BaseRepository):
         except (asyncpg.PostgresError, OSError, RuntimeError) as exc:
             raise self._translate_error("delete_directed_edge", exc) from exc
 
+    async def delete_edges_by_source_chunks(
+        self,
+        source_chunk_ids: list[uuid.UUID],
+        relation_type: str | None = None,
+        conn: asyncpg.Connection | None = None,
+    ) -> int:
+        """Deletes outgoing graph edges originating from specified source chunks, optionally filtered by relation_type."""
+        if not source_chunk_ids:
+            return 0
+        if relation_type is not None:
+            query = "DELETE FROM graph_edges WHERE source_chunk_id = ANY($1::uuid[]) AND relation_type = $2;"
+            params = [source_chunk_ids, relation_type]
+        else:
+            query = "DELETE FROM graph_edges WHERE source_chunk_id = ANY($1::uuid[]);"
+            params = [source_chunk_ids]
+        try:
+            async with self._connection_scope(conn) as c:
+                status = await c.execute(query, *params)
+                return int(status.rsplit(" ", 1)[-1] or 0)
+        except (asyncpg.PostgresError, OSError, RuntimeError) as exc:
+            raise self._translate_error("delete_edges_by_source_chunks", exc) from exc
+
     async def list_edges_for_chunks(
         self, chunk_ids: list[uuid.UUID], conn: asyncpg.Connection | None = None
     ) -> list[GraphEdgeEntity]:
@@ -146,7 +170,7 @@ class GraphRepository(BaseRepository):
         if not chunk_ids:
             return []
         query = """
-        SELECT id, source_chunk_id, target_chunk_id, relation_type, created_at, rationale
+        SELECT id, source_chunk_id, target_chunk_id, relation_type, created_at, rationale, citation_text
         FROM graph_edges
         WHERE source_chunk_id = ANY($1::uuid[]);
         """
@@ -161,6 +185,7 @@ class GraphRepository(BaseRepository):
                         relation_type=str(r["relation_type"]),
                         created_at=r["created_at"],
                         rationale=str(r["rationale"]) if r["rationale"] is not None else None,
+                        citation_text=str(r["citation_text"]),
                     )
                     for r in rows
                 ]
@@ -179,7 +204,7 @@ class GraphRepository(BaseRepository):
         """Traverses knowledge graph bidirectionally for symmetric edges via traverse_knowledge_graph."""
         sql = """
         SELECT id, source_chunk_id, target_chunk_id, relation_type, depth, source_path, target_path, target_text,
-               target_contextualized_text, target_doc_slug, target_start_line, target_end_line, rationale
+               target_contextualized_text, target_doc_slug, target_start_line, target_end_line, rationale, citation_text
         FROM traverse_knowledge_graph($1::uuid, $2::text, $3::int, $4::varchar(32)[], $5::int);
         """
         try:
@@ -207,6 +232,7 @@ class GraphRepository(BaseRepository):
                         target_start_line=int(r["target_start_line"]),
                         target_end_line=int(r["target_end_line"]),
                         rationale=str(r["rationale"]) if r["rationale"] is not None else None,
+                        citation_text=str(r["citation_text"]),
                     )
                     for r in rows
                 ]

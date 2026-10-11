@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from rag_eval.schemas import RelationType
+from rag_eval.schemas import AgentVennHit, RelationType
 
 
 class LinkChunksInput(BaseModel):
@@ -10,6 +10,11 @@ class LinkChunksInput(BaseModel):
     source_path: str = Field(..., description="Đường dẫn phân cấp LTree của chunk nguồn")
     target_path: str = Field(..., description="Đường dẫn phân cấp LTree của chunk đích")
     relation_type: RelationType = Field(..., description="Mã quan hệ hợp lệ trong danh mục hệ thống")
+    citation_text: str = Field(
+        ...,
+        min_length=1,
+        description="Đoạn văn trích dẫn nguyên văn từ chunk nguồn chứng minh quan hệ",
+    )
     rationale: str | None = Field(default=None, description="Lý do / bằng chứng luận cứ kết nối hai chunk")
 
 
@@ -19,6 +24,7 @@ class LinkChunksResponse(BaseModel):
     source_path: str
     target_path: str
     relation_type: RelationType
+    citation_text: str
     created: bool
     rationale: str | None = None
 
@@ -122,41 +128,47 @@ class RawTextResponse(BaseModel):
 
 
 class SearchRequest(BaseModel):
-    """A retrieval query issued from the reviewer UI."""
+    """A dual-channel Venn retrieval query issued from the reviewer UI."""
 
     model_config = ConfigDict(extra="ignore")
 
-    query: str = Field(min_length=1, max_length=500)
-    limit: int = Field(default=5, ge=1, le=20)
-    rerank: bool | None = None
-    doc_slugs: list[str] = Field(default_factory=list, max_length=32)
-    path_prefix: str | None = Field(default=None, description="Optional ltree path prefix filter")
-
-
-class SearchHitResponse(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    rank: int
-    doc_slug: str
-    doc_title: str
-    path: str
-    verbatim_text: str
-    contextualized_text: str
-    score: float
-    dense_similarity: float = 0.0
-    keyword_matched: bool = True
-    rerank_score: float | None = None
-    is_table: bool = False
-    table_summary: str | None = None
+    query: str = Field(
+        ...,
+        min_length=1,
+        max_length=500,
+        description="Ngữ cảnh / ý niệm cần tìm kiếm (dense vector + sparse FTS)",
+    )
+    pattern: str = Field(
+        ...,
+        min_length=1,
+        max_length=500,
+        description="Từ khóa neo cứng, mã số hiệu cần khớp chính xác (verbatim grep)",
+    )
+    is_regex: bool = Field(default=False, description="Bật chế độ đánh giá biểu thức chính quy POSIX")
+    case_sensitive: bool = Field(default=False, description="Phân biệt chữ hoa / chữ thường")
+    order_by_reading_order: bool = Field(
+        default=False,
+        description="Sắp xếp kết quả verbatim theo thứ tự đọc trong tài liệu thay vì điểm tương đồng",
+    )
+    limit: int = Field(default=10, ge=1, le=50, description="Số lượng kết quả tối đa cho mỗi nhánh tìm kiếm")
+    rerank: bool | None = Field(default=None, description="Bật hoặc tắt bước xếp hạng lại kết quả")
+    doc_slugs: list[str] = Field(default_factory=list, max_length=32, description="Giới hạn phạm vi doc_slug")
+    path_prefix: str | None = Field(default=None, description="Giới hạn phân cấp LTree")
 
 
 class SearchResponse(BaseModel):
+    """Dual-channel Venn search response returning disjoint hit partitions."""
+
     model_config = ConfigDict(extra="ignore")
 
     query: str
+    pattern: str
     elapsed_ms: float
     confidence: str = "high"
-    hits: list[SearchHitResponse]
+    total_unique_hits: int = 0
+    both_hits: list[AgentVennHit] = Field(default_factory=list)
+    semantic_only_hits: list[AgentVennHit] = Field(default_factory=list)
+    verbatim_only_hits: list[AgentVennHit] = Field(default_factory=list)
 
 
 class CorpusDocumentResponse(BaseModel):
@@ -203,46 +215,9 @@ class GraphTraversalStepResponse(BaseModel):
     target_start_line: int
     target_end_line: int
     rationale: str | None = None
+    citation_text: str = Field(..., description="Trích dẫn nguyên văn chứng thực quan hệ")
 
 
-class VerbatimGrepRequest(BaseModel):
-    """Request payload for exact / trigram grep across production corpus."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    pattern: str = Field(..., min_length=1, description="Text pattern to match")
-    is_regex: bool = Field(default=False, description="Regex match enabled")
-    case_sensitive: bool = Field(default=False, description="Case-sensitive matching")
-    limit: int = Field(default=20, ge=1, le=100, description="Max matches")
-
-
-class VerbatimGrepHitResponse(BaseModel):
-    """A match hit from verbatim_grep stored procedure."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    chunk_id: str
-    doc_slug: str
-    path: str
-    start_line: int
-    end_line: int
-    char_offset: int
-    match_snippet: str
-    verbatim_text: str
-    metadata: dict[str, object] = Field(default_factory=dict)
-
-
-class VerbatimGrepResponse(BaseModel):
-    """Response returned from verbatim grep search."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    pattern: str
-    is_regex: bool
-    total_matches: int
-    returned: int
-    truncated: bool
-    matches: list[VerbatimGrepHitResponse]
 
 
 class RelationTypeCatalogResponse(BaseModel):

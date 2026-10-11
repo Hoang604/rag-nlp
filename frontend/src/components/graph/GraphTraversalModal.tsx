@@ -264,6 +264,14 @@ export const GraphTraversalModal: React.FC<GraphTraversalModalProps> = ({
                     </span>
                   </div>
 
+                  {/* Verbatim Citation Proof */}
+                  {step.citation_text && (
+                    <div className="rounded-lg bg-emerald-950/30 p-2.5 text-xs text-emerald-200 border border-emerald-800/40">
+                      <span className="font-semibold text-emerald-400">Trích dẫn chứng thực: </span>
+                      <span className="font-mono text-[11px]">&ldquo;{step.citation_text}&rdquo;</span>
+                    </div>
+                  )}
+
                   {/* Rationale if present */}
                   {step.rationale && (
                     <div className="rounded-lg bg-indigo-950/40 p-2.5 text-xs text-indigo-200 border border-indigo-800/50">

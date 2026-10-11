@@ -42,6 +42,7 @@ export interface LinkChunksPayload {
   source_path: string;
   target_path: string;
   relation_type: string;
+  citation_text: string;
   rationale?: string | null;
 }
 
@@ -50,6 +51,7 @@ export interface LinkChunksResponse {
   source_path: string;
   target_path: string;
   relation_type: string;
+  citation_text: string;
   created: boolean;
   rationale?: string | null;
 }
@@ -69,32 +71,39 @@ export interface UnlinkChunksResponse {
 
 export interface SearchPayload {
   query: string;
+  pattern: string;
   limit?: number;
   rerank?: boolean | null;
   doc_slugs?: string[];
   path_prefix?: string;
+  is_regex?: boolean;
+  case_sensitive?: boolean;
+  order_by_reading_order?: boolean;
 }
 
-export interface SearchHit {
-  rank: number;
-  doc_slug: string;
-  doc_title: string;
+export interface AgentVennHit {
   path: string;
-  verbatim_text: string;
-  contextualized_text: string;
-  score: number;
-  dense_similarity: number;
-  keyword_matched: boolean;
-  rerank_score: number | null;
-  is_table: boolean;
-  table_summary: string | null;
+  start_line: number;
+  end_line: number;
+  context: string;
+  text: string;
+  metadata?: Record<string, unknown>;
+  semantic_rank?: number | null;
+  verbatim_rank?: number | null;
+  semantic_score?: number | null;
+  verbatim_score?: number | null;
+  rerank_score?: number | null;
 }
 
 export interface SearchResponse {
   query: string;
+  pattern: string;
   elapsed_ms: number;
   confidence: 'high' | 'medium' | 'low' | 'none' | string;
-  hits: SearchHit[];
+  total_unique_hits: number;
+  both_hits: AgentVennHit[];
+  semantic_only_hits: AgentVennHit[];
+  verbatim_only_hits: AgentVennHit[];
 }
 
 export interface RelationTypeCatalogItem {
@@ -124,33 +133,8 @@ export interface GraphTraversalStep {
   target_doc_slug: string;
   target_start_line: number;
   target_end_line: number;
+  citation_text: string;
   rationale?: string | null;
 }
 
-export interface CorpusGrepPayload {
-  pattern: string;
-  is_regex?: boolean;
-  case_sensitive?: boolean;
-  limit?: number;
-}
 
-export interface CorpusGrepHit {
-  chunk_id: string;
-  doc_slug: string;
-  path: string;
-  start_line: number;
-  end_line: number;
-  char_offset: number;
-  match_snippet: string;
-  verbatim_text: string;
-  metadata?: Record<string, unknown>;
-}
-
-export interface CorpusGrepResponse {
-  pattern: string;
-  is_regex: boolean;
-  total_matches: number;
-  returned: number;
-  truncated: boolean;
-  matches: CorpusGrepHit[];
-}

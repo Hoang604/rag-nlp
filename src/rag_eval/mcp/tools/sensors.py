@@ -11,6 +11,7 @@ from rag_eval.db.connection import get_db_pool
 from rag_eval.db.repositories import CorpusRepository
 from rag_eval.exceptions import (
     E_AST_GROUNDING_VALIDATION,
+    E_CORPUS_INTEGRITY_VIOLATION,
     E_INVALID_DOCUMENT_HIERARCHY,
     CorpusDomainError,
 )
@@ -18,9 +19,16 @@ from rag_eval.retrieval.embedder import QueryEmbedder
 from rag_eval.retrieval.engine import RetrievalEngine
 from rag_eval.retrieval.reranker import CorpusReranker
 from rag_eval.schemas import (
+    AgentGraphTraversalStep,
+    AgentHierarchyNode,
     AgentVennHit,
+    GraphTraverseResult,
     HierarchicalDirection,
+    HierarchyNodeDTO,
+    RawDocumentSliceResult,
     VennSearchResult,
+    clean_node_metadata,
+    split_context_and_text,
     validate_ltree_path,
 )
 
@@ -32,6 +40,7 @@ HIERARCHICAL_DIRECTION_DOCS: Final[dict[HierarchicalDirection, str]] = {
     HierarchicalDirection.CHILDREN: "Lấy các nút con trực tiếp (cấp nlevel + 1).",
     HierarchicalDirection.PARENT_CHAIN: "Lấy chuỗi tổ tiên từ tài liệu gốc xuống đến nút cha trực tiếp.",
     HierarchicalDirection.SIBLINGS: "Lấy các nút anh em cùng cấp dưới cùng một nút cha.",
+    HierarchicalDirection.SUBTREE: "Lấy toàn bộ cây con hậu duệ theo đúng thứ tự đọc của tài liệu (start_line ASC, path ASC).",
 }
 
 HIERARCHICAL_DIRECTION_DESCRIPTION: Final = (
@@ -40,25 +49,12 @@ HIERARCHICAL_DIRECTION_DESCRIPTION: Final = (
 )
 
 RERANK_POOL: Final[int] = 10
+MAX_RAW_LINES: Final[int] = 200
 
 
 # ---------------------------------------------------------------------------
 # Canonical Agent-First Models & Result Containers
 # ---------------------------------------------------------------------------
-
-
-
-class AgentHierarchyNode(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    path: str
-    doc_slug: str
-    start_line: int = Field(..., ge=1, description="Số dòng bắt đầu trong tài liệu")
-    end_line: int = Field(..., ge=1, description="Số dòng kết thúc trong tài liệu")
-    verbatim_text: str
-    contextualized_text: str
-    metadata: dict[str, object] = Field(default_factory=dict)
-    relative_depth: int = 0
 
 
 class HierarchicalNavigateResult(BaseModel):
@@ -71,29 +67,6 @@ class HierarchicalNavigateResult(BaseModel):
         default_factory=list,
         description="Danh sách phẳng các nút được sắp xếp theo đúng thứ tự đọc của tài liệu",
     )
-
-
-class AgentGraphTraversalStep(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    source_path: str = Field(..., min_length=1, description="Đường dẫn LTree của chunk nguồn")
-    target_path: str = Field(..., min_length=1, description="Đường dẫn LTree của chunk đích")
-    relation_type: str = Field(..., description="Loại quan hệ giữa 2 chunk")
-    depth: int = Field(..., ge=1, description="Độ sâu bước nhảy trên đồ thị")
-    target_text: str = Field(..., description="Nội dung văn bản gốc của chunk đích")
-    target_contextualized_text: str = Field(..., min_length=1, description="Đoạn văn đầy đủ ngữ cảnh để trích dẫn trực tiếp")
-    target_doc_slug: str = Field(..., min_length=1, description="Mã định danh tài liệu chứa chunk đích")
-    target_start_line: int = Field(..., ge=1, description="Số dòng bắt đầu trong tài liệu gốc")
-    target_end_line: int = Field(..., ge=1, description="Số dòng kết thúc trong tài liệu gốc")
-    rationale: str | None = Field(default=None, description="Luận cứ ngữ nghĩa kết nối hai nút")
-
-
-class GraphTraverseResult(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    source_path: str
-    total_paths: int
-    paths: list[AgentGraphTraversalStep]
 
 
 # ---------------------------------------------------------------------------
@@ -170,6 +143,7 @@ class CorpusRuntimeSensors:
         path_prefix: str | None = None,
         is_regex: bool = False,
         case_sensitive: bool = False,
+        order_by_reading_order: bool = False,
     ) -> VennSearchResult:
         """Executes generalized dual-channel Venn retrieval via RetrievalEngine."""
         try:
@@ -184,6 +158,7 @@ class CorpusRuntimeSensors:
                 path_prefix=path_prefix,
                 is_regex=is_regex,
                 case_sensitive=case_sensitive,
+                order_by_reading_order=order_by_reading_order,
             )
         except (OSError, RuntimeError, CorpusDomainError, TypeError, ValueError) as exc:
             logger.error("hybrid_search failed: %s", exc)
@@ -202,29 +177,93 @@ class CorpusRuntimeSensors:
         clean_path = validate_ltree_path(path)
         origin_chunk = await repo.chunks.get_by_path(clean_path)
         if not origin_chunk:
+            parts = clean_path.split(".")
+            matched_doc = None
+            for start_idx in range(len(parts)):
+                for end_idx in range(len(parts), start_idx, -1):
+                    cand = ".".join(parts[start_idx:end_idx])
+                    doc = await repo.documents.get_by_slug(cand)
+                    if doc:
+                        matched_doc = doc
+                        break
+                if matched_doc:
+                    break
+
+            if matched_doc:
+                doc_chunks = await repo.chunks.list_by_document(matched_doc.id)
+                matching = [c for c in doc_chunks if c.path.startswith(clean_path) or c.path == clean_path]
+                if matching:
+                    origin_chunk = min(matching, key=lambda c: c.start_line)
+                elif doc_chunks:
+                    origin_chunk = min(doc_chunks, key=lambda c: c.start_line)
+
+            if not origin_chunk:
+                for start_idx in range(len(parts)):
+                    prefix_cand = ".".join(parts[start_idx:])
+                    matching_docs = await repo.documents.list_by_prefix(prefix_cand)
+                    if matching_docs:
+                        matched_doc = matching_docs[0]
+                        doc_chunks = await repo.chunks.list_by_document(matched_doc.id)
+                        if doc_chunks:
+                            origin_chunk = min(doc_chunks, key=lambda c: c.start_line)
+                            break
+
+        if not origin_chunk:
             raise CorpusDomainError(
                 error_code=E_INVALID_DOCUMENT_HIERARCHY,
                 message=f"Không tìm thấy chunk tương ứng với path='{clean_path}'.",
             )
 
         dir_val = direction.value
-        nodes_dto = await repo.chunks.navigate_hierarchy(
-            origin_chunk.document_id, origin_chunk.path, dir_val
-        )
-
-        agent_nodes = [
-            AgentHierarchyNode(
-                path=n.path,
-                doc_slug=n.doc_slug,
-                start_line=n.start_line,
-                end_line=n.end_line,
-                verbatim_text=n.verbatim_text,
-                contextualized_text=n.contextualized_text,
-                metadata=dict(n.metadata),
-                relative_depth=n.relative_depth,
+        nav_anchor = (
+            clean_path
+            if (
+                direction in (HierarchicalDirection.CHILDREN, HierarchicalDirection.SUBTREE)
+                and clean_path != origin_chunk.path
+                and origin_chunk.path.startswith(clean_path)
             )
-            for n in nodes_dto
-        ]
+            else origin_chunk.path
+        )
+        nodes_dto = await repo.chunks.navigate_hierarchy(
+            origin_chunk.document_id, nav_anchor, dir_val
+        )
+        if not nodes_dto and direction == HierarchicalDirection.CHILDREN:
+            doc = await repo.documents.get_by_id(origin_chunk.document_id)
+            doc_slug_val = doc.doc_slug if doc else clean_path
+            all_doc_chunks = await repo.chunks.list_by_document(origin_chunk.document_id)
+            matching_children = [
+                c for c in all_doc_chunks
+                if c.path.startswith(clean_path) and c.path != clean_path
+            ]
+            if matching_children:
+                nodes_dto = [
+                    HierarchyNodeDTO(
+                        chunk_id=c.id,
+                        path=c.path,
+                        doc_slug=doc_slug_val,
+                        start_line=c.start_line,
+                        end_line=c.end_line,
+                        verbatim_text=c.verbatim_text,
+                        contextualized_text=c.contextualized_text,
+                        metadata=c.metadata,
+                        relative_depth=1,
+                    )
+                    for c in matching_children[:10]
+                ]
+
+        agent_nodes: list[AgentHierarchyNode] = []
+        for n in nodes_dto:
+            ctx, txt = split_context_and_text(n.contextualized_text, n.verbatim_text)
+            agent_nodes.append(
+                AgentHierarchyNode(
+                    path=n.path,
+                    start_line=n.start_line,
+                    end_line=n.end_line,
+                    context=ctx,
+                    text=txt,
+                    metadata=clean_node_metadata(n.metadata),
+                )
+            )
 
         return HierarchicalNavigateResult(
             anchor_path=origin_chunk.path,
@@ -259,21 +298,23 @@ class CorpusRuntimeSensors:
             match_limit=limit,
         )
 
-        agent_steps: list[AgentGraphTraversalStep] = [
-            AgentGraphTraversalStep(
-                source_path=s.source_path,
-                target_path=s.target_path,
-                relation_type=s.relation_type,
-                depth=s.depth,
-                target_text=s.target_text,
-                target_contextualized_text=s.target_contextualized_text,
-                target_doc_slug=s.target_doc_slug,
-                target_start_line=s.target_start_line,
-                target_end_line=s.target_end_line,
-                rationale=s.rationale,
+        agent_steps: list[AgentGraphTraversalStep] = []
+        for s in steps_dto:
+            ctx, txt = split_context_and_text(s.target_contextualized_text, s.target_text)
+            agent_steps.append(
+                AgentGraphTraversalStep(
+                    source_path=s.source_path,
+                    target_path=s.target_path,
+                    relation_type=s.relation_type,
+                    depth=s.depth,
+                    target_start_line=s.target_start_line,
+                    target_end_line=s.target_end_line,
+                    target_context=ctx,
+                    target_text=txt,
+                    rationale=s.rationale,
+                    citation_text=s.citation_text,
+                )
             )
-            for s in steps_dto
-        ]
 
         return GraphTraverseResult(
             source_path=clean_path,
@@ -281,10 +322,114 @@ class CorpusRuntimeSensors:
             paths=agent_steps,
         )
 
+    async def get_raw(
+        self,
+        path_or_slug: str,
+        start_line: int = 1,
+        end_line: int | None = None,
+    ) -> RawDocumentSliceResult:
+        """Retrieves raw unparsed slice of document text within [start_line, end_line] (max 200 lines)."""
+        clean_input = path_or_slug.strip()
+        if not clean_input:
+            raise CorpusDomainError(
+                error_code=E_AST_GROUNDING_VALIDATION,
+                message="Tham số 'path_or_slug' không được để trống.",
+            )
+
+        repo = await self._get_repo()
+
+        # 1. Resolve document by slug directly
+        doc = await repo.documents.get_by_slug(clean_input)
+
+        # 2. If not found, resolve via chunk LTree path
+        if not doc:
+            try:
+                clean_path = validate_ltree_path(clean_input)
+                origin_chunk = await repo.chunks.get_by_path(clean_path)
+                if origin_chunk:
+                    doc = await repo.documents.get_by_id(origin_chunk.document_id)
+            except ValueError:
+                origin_chunk = None
+
+        # 3. If still not found, try matching document by prefix or substring
+        if not doc:
+            matching_docs = await repo.documents.list_by_prefix(clean_input)
+            if matching_docs:
+                doc = matching_docs[0]
+
+        if not doc:
+            raise CorpusDomainError(
+                error_code=E_INVALID_DOCUMENT_HIERARCHY,
+                message=f"Không tìm thấy tài liệu hoặc chunk tương ứng với '{clean_input}'.",
+            )
+
+        if doc.raw_text is None:
+            raise CorpusDomainError(
+                error_code=E_CORPUS_INTEGRITY_VIOLATION,
+                message=f"Tài liệu '{doc.doc_slug}' không có raw_text trong cơ sở dữ liệu.",
+            )
+
+        lines = doc.raw_text.splitlines()
+        total_lines = len(lines)
+
+        if start_line < 1:
+            raise CorpusDomainError(
+                error_code=E_AST_GROUNDING_VALIDATION,
+                message=f"start_line ({start_line}) phải >= 1.",
+            )
+
+        if total_lines == 0:
+            return RawDocumentSliceResult(
+                doc_slug=doc.doc_slug,
+                title=doc.title,
+                start_line=1,
+                end_line=1,
+                total_lines=0,
+                raw_text="",
+            )
+
+        if start_line > total_lines:
+            raise CorpusDomainError(
+                error_code=E_AST_GROUNDING_VALIDATION,
+                message=f"start_line ({start_line}) vượt quá tổng số dòng của tài liệu ({total_lines}).",
+            )
+
+        if end_line is None:
+            effective_end = min(total_lines, start_line + MAX_RAW_LINES - 1)
+        else:
+            if end_line < start_line:
+                raise CorpusDomainError(
+                    error_code=E_AST_GROUNDING_VALIDATION,
+                    message=f"end_line ({end_line}) không được nhỏ hơn start_line ({start_line}).",
+                )
+            requested_span = end_line - start_line + 1
+            if requested_span > MAX_RAW_LINES:
+                raise CorpusDomainError(
+                    error_code=E_AST_GROUNDING_VALIDATION,
+                    message=(
+                        f"Phạm vi yêu cầu ({requested_span} dòng) vượt quá giới hạn tối đa cho phép "
+                        f"là {MAX_RAW_LINES} dòng mỗi lần gọi. Vui lòng thu hẹp khoảng [start_line, end_line]."
+                    ),
+                )
+            effective_end = min(total_lines, end_line)
+
+        sliced_lines = lines[start_line - 1 : effective_end]
+        raw_slice = "\n".join(sliced_lines)
+
+        return RawDocumentSliceResult(
+            doc_slug=doc.doc_slug,
+            title=doc.title,
+            start_line=start_line,
+            end_line=effective_end,
+            total_lines=total_lines,
+            raw_text=raw_slice,
+        )
+
 
 __all__ = [
     "HIERARCHICAL_DIRECTION_DESCRIPTION",
     "HIERARCHICAL_DIRECTION_DOCS",
+    "MAX_RAW_LINES",
     "RERANK_POOL",
     "AgentGraphTraversalStep",
     "AgentHierarchyNode",
@@ -294,5 +439,6 @@ __all__ = [
     "GraphTraverseResult",
     "HierarchicalDirection",
     "HierarchicalNavigateResult",
+    "RawDocumentSliceResult",
     "VennSearchResult",
 ]

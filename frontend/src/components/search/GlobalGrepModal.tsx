@@ -51,19 +51,22 @@ export const GlobalGrepModal: React.FC<GlobalGrepModalProps> = ({
       setLoading(true);
       setErrorMsg(null);
       try {
-        const resp = await api.grepCorpus({
-          pattern,
+        const resp = await api.search({
+          query: pattern,
+          pattern: pattern,
           is_regex: isRegex,
           case_sensitive: caseSensitive,
+          order_by_reading_order: true,
           limit: 30,
         });
+        const allHits = [...resp.both_hits, ...resp.verbatim_only_hits];
         setResults(
-          (resp.matches || []).map((m) => ({
+          allHits.map((m) => ({
             path: m.path,
-            doc_slug: m.doc_slug,
+            doc_slug: m.path.split('.')[0],
             field_matched: `LINE ${m.start_line}-${m.end_line}`,
-            match_snippet: m.match_snippet,
-            verbatim_text: m.verbatim_text,
+            match_snippet: m.text.substring(0, 150),
+            verbatim_text: m.text,
           }))
         );
       } catch (err: unknown) {

@@ -119,7 +119,8 @@ CREATE OR REPLACE FUNCTION verbatim_grep(
     path_prefix LTREE,
     is_regex BOOLEAN,
     case_sensitive BOOLEAN,
-    match_limit INT
+    match_limit INT,
+    order_by_reading_order BOOLEAN DEFAULT FALSE
 )
 RETURNS TABLE (
     chunk_id UUID,
@@ -173,7 +174,11 @@ BEGIN
             OR d.doc_slug = ANY(target_documents)
         )
         AND (path_prefix IS NULL OR c.path <@ path_prefix)
-        ORDER BY similarity_score DESC
+        ORDER BY 
+            CASE WHEN order_by_reading_order THEN d.doc_slug ELSE NULL END ASC,
+            CASE WHEN order_by_reading_order THEN c.start_line ELSE NULL END ASC,
+            CASE WHEN order_by_reading_order THEN c.path::text ELSE NULL END ASC,
+            CASE WHEN NOT order_by_reading_order THEN similarity_score ELSE NULL END DESC
         LIMIT match_limit;
     ELSE
         RETURN QUERY
@@ -209,7 +214,11 @@ BEGIN
             OR d.doc_slug = ANY(target_documents)
         )
         AND (path_prefix IS NULL OR c.path <@ path_prefix)
-        ORDER BY similarity_score DESC
+        ORDER BY 
+            CASE WHEN order_by_reading_order THEN d.doc_slug ELSE NULL END ASC,
+            CASE WHEN order_by_reading_order THEN c.start_line ELSE NULL END ASC,
+            CASE WHEN order_by_reading_order THEN c.path::text ELSE NULL END ASC,
+            CASE WHEN NOT order_by_reading_order THEN similarity_score ELSE NULL END DESC
         LIMIT match_limit;
     END IF;
 END;

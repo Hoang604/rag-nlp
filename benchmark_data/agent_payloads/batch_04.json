@@ -1,0 +1,102 @@
+[
+  {
+    "id": "TC-BATCH04-001",
+    "issue_file": "issue_56253.md",
+    "issue_summary": "Lỗi Page missing exported function generateStaticParams khi sử dụng output: export kết hợp dynamicParams hoặc dynamic force-static trong App Router",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "Static HTML export with dynamic routes generateStaticParams dynamic and dynamicParams configuration",
+      "pattern": "generateStaticParams"
+    }
+  },
+  {
+    "id": "TC-BATCH04-002",
+    "issue_file": "issue_56368.md",
+    "issue_summary": "Lỗi TypeError Cannot read properties of undefined reading bind khi chạy standalone build có middleware bằng next start thay vì server.js",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "standalone output deployment with custom server and middleware using server.js",
+      "pattern": "standalone"
+    }
+  },
+  {
+    "id": "TC-BATCH04-003",
+    "issue_file": "issue_57632.md",
+    "issue_summary": "fetch revalidation với next: { revalidate } không cập nhật cache khi điều hướng client-side do cơ chế Router Cache",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "time-based revalidation using fetch with next revalidate and Router Cache behavior during navigation",
+      "pattern": "revalidate"
+    }
+  },
+  {
+    "id": "TC-BATCH04-004",
+    "issue_file": "issue_59218.md",
+    "issue_summary": "Người dùng bị redirect về /login sau khi đăng nhập thành công do Router Cache lưu trữ trang được prefetch trước khi xác thực",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "middleware authentication redirect cookie session and client router cache invalidation router.refresh",
+      "pattern": "router.refresh"
+    }
+  },
+  {
+    "id": "TC-BATCH04-005",
+    "issue_file": "issue_59883.md",
+    "issue_summary": "On-demand revalidation bằng revalidatePath không cập nhật các trang tĩnh đã pre-render trong quá trình build",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "on-demand revalidation using revalidatePath for pre-rendered static pages and dynamic routes",
+      "pattern": "revalidatePath"
+    }
+  },
+  {
+    "id": "TC-BATCH04-006",
+    "issue_file": "issue_62228.md",
+    "issue_summary": "Trang 404 không được server render khi gọi hàm notFound() từ next/navigation trong App Router",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "notFound function in next navigation and custom 404 not-found file server rendering",
+      "pattern": "notFound"
+    }
+  },
+  {
+    "id": "TC-BATCH04-007",
+    "issue_file": "issue_64409.md",
+    "issue_summary": "Lệnh next lint gặp lỗi khi sử dụng ESLint 9 do các tùy chọn cũ bị loại bỏ và yêu cầu cấu hình Flat Config",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "configuring next lint CLI options and eslint-config-next ESLint flat config migration",
+      "pattern": "next lint"
+    }
+  },
+  {
+    "id": "TC-BATCH04-008",
+    "issue_file": "issue_65335.md",
+    "issue_summary": "Yêu cầu RSC payload sinh ra hash _rsc khác nhau và Vary headers làm giảm hiệu quả cache CDN khi self-host Next.js",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "React Server Components RSC payload CDN caching headers and self-hosting configuration",
+      "pattern": "RSC"
+    }
+  },
+  {
+    "id": "TC-BATCH04-009",
+    "issue_file": "issue_65814.md",
+    "issue_summary": "Route handler luôn trả về X-Vercel-Cache: STALE trên Vercel do cấu hình dynamic và revalidate caching",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "Route Handlers caching behavior dynamic segment config and response cache headers",
+      "pattern": "Route Handlers"
+    }
+  },
+  {
+    "id": "TC-BATCH04-010",
+    "issue_file": "issue_74343.md",
+    "issue_summary": "Cảnh báo Props must be serializable for components in use client file khi truyền props hàm hoặc non-serializable qua client boundary",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "passing props across Server and Client Components boundary serialization requirements use client",
+      "pattern": "serializable"
+    }
+  }
+]

@@ -8,7 +8,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { api } from '../../services/api';
-import { CorpusDocument, SearchHit, SearchResponse } from '../../types/api';
+import { AgentVennHit, CorpusDocument, SearchResponse } from '../../types/api';
 
 interface DryRunSearchSimulatorProps {
   activeDocSlug?: string;
@@ -23,6 +23,8 @@ const EXAMPLE_QUERIES = [
 
 export const DryRunSearchSimulator: React.FC<DryRunSearchSimulatorProps> = () => {
   const [query, setQuery] = useState('');
+  const [pattern, setPattern] = useState('');
+  const [orderReadingOrder, setOrderReadingOrder] = useState(false);
   const [matchLimit, setMatchLimit] = useState(5);
   const [rerank, setRerank] = useState(true);
   const [pathPrefix, setPathPrefix] = useState('');
@@ -41,18 +43,21 @@ export const DryRunSearchSimulator: React.FC<DryRunSearchSimulatorProps> = () =>
   }, []);
 
   const runSearch = useCallback(
-    async (text: string) => {
-      const trimmed = text.trim();
-      if (!trimmed) return;
+    async (text: string, pat: string) => {
+      const trimmedQuery = text.trim();
+      const trimmedPattern = pat.trim() || trimmedQuery;
+      if (!trimmedQuery) return;
       setLoading(true);
       setError(null);
       try {
         const response = await api.search({
-          query: trimmed,
+          query: trimmedQuery,
+          pattern: trimmedPattern,
           limit: matchLimit,
           rerank,
           doc_slugs: scope.length > 0 ? scope : undefined,
           path_prefix: pathPrefix.trim() || undefined,
+          order_by_reading_order: orderReadingOrder,
         });
         setResult(response);
       } catch (err) {
@@ -62,20 +67,24 @@ export const DryRunSearchSimulator: React.FC<DryRunSearchSimulatorProps> = () =>
         setLoading(false);
       }
     },
-    [matchLimit, rerank, scope, pathPrefix]
+    [matchLimit, rerank, scope, pathPrefix, orderReadingOrder]
   );
 
   const handleSubmit = (event: React.FormEvent) => {
     event.preventDefault();
-    void runSearch(query);
+    void runSearch(query, pattern);
   };
 
   const pickExample = (example: string) => {
     setQuery(example);
-    void runSearch(example);
+    void runSearch(example, example);
   };
 
-  const hits: SearchHit[] = result?.hits ?? [];
+  const hits: AgentVennHit[] = [
+    ...(result?.both_hits ?? []),
+    ...(result?.semantic_only_hits ?? []),
+    ...(result?.verbatim_only_hits ?? []),
+  ];
 
   const CONFIDENCE_NOTE: Record<string, { title: string; body: string; tone: string }> = {
     none: {
@@ -107,19 +116,30 @@ export const DryRunSearchSimulator: React.FC<DryRunSearchSimulatorProps> = () =>
           </div>
         </div>
 
-        <form onSubmit={handleSubmit} className="mt-4 flex flex-col gap-3 sm:flex-row">
-          <div className="relative flex-1">
-            <Search className="absolute left-3.5 top-3 h-4 w-4 text-slate-400" />
-            <input
-              type="text"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Nhập câu hỏi hoặc ngữ cảnh cần truy cứu..."
-              className="w-full rounded-xl border border-slate-700 bg-slate-950 py-2.5 pl-10 pr-4 text-xs font-medium text-slate-100 shadow-inner focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
-            />
+        <form onSubmit={handleSubmit} className="mt-4 flex flex-col gap-3">
+          <div className="flex flex-col gap-3 sm:flex-row">
+            <div className="relative flex-1">
+              <Search className="absolute left-3.5 top-3 h-4 w-4 text-slate-400" />
+              <input
+                type="text"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Câu hỏi / ngữ cảnh ngữ nghĩa (dense vector + sparse FTS)..."
+                className="w-full rounded-xl border border-slate-700 bg-slate-950 py-2.5 pl-10 pr-4 text-xs font-medium text-slate-100 shadow-inner focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+              />
+            </div>
+            <div className="relative flex-1">
+              <input
+                type="text"
+                value={pattern}
+                onChange={(e) => setPattern(e.target.value)}
+                placeholder="Từ khóa neo cứng / regex pattern (mặc định lấy theo câu hỏi)..."
+                className="w-full rounded-xl border border-slate-700 bg-slate-950 py-2.5 px-4 text-xs font-medium text-slate-100 shadow-inner focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500 font-mono"
+              />
+            </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <input
               type="text"
               value={pathPrefix}
@@ -144,6 +164,23 @@ export const DryRunSearchSimulator: React.FC<DryRunSearchSimulatorProps> = () =>
                 className="h-3 w-3 accent-emerald-500"
               />
               <span>Rerank</span>
+            </label>
+
+            <label
+              title="Sắp xếp kết quả verbatim theo thứ tự đọc trong tài liệu"
+              className={`flex cursor-pointer items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-semibold transition ${
+                orderReadingOrder
+                  ? 'border-brand-500/50 bg-brand-600/20 text-brand-300'
+                  : 'border-slate-700 bg-slate-950 text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <input
+                type="checkbox"
+                checked={orderReadingOrder}
+                onChange={(e) => setOrderReadingOrder(e.target.checked)}
+                className="h-3 w-3 accent-brand-500"
+              />
+              <span>Thứ tự đọc</span>
             </label>
 
             <select
@@ -302,7 +339,11 @@ export const DryRunSearchSimulator: React.FC<DryRunSearchSimulatorProps> = () =>
                 </div>
               </div>
             )}
-            {hits.map((hit) => {
+            {hits.map((hit, idx) => {
+              const rank = hit.semantic_rank ?? hit.verbatim_rank ?? (idx + 1);
+              const docSlug = hit.path.split('.')[0];
+              const isTable = Boolean(hit.metadata?.is_table);
+              const tableSummary = typeof hit.metadata?.table_summary === 'string' ? hit.metadata.table_summary : null;
               return (
                 <div
                   key={hit.path}
@@ -311,29 +352,39 @@ export const DryRunSearchSimulator: React.FC<DryRunSearchSimulatorProps> = () =>
                   <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="flex h-5 w-5 items-center justify-center rounded-full bg-brand-500/20 font-mono text-[11px] font-bold text-brand-300">
-                        #{hit.rank}
+                        #{rank}
                       </span>
                       <span className="rounded border border-slate-700 bg-slate-950 px-2 py-0.5 font-mono text-[10px] font-bold text-slate-200">
-                        {hit.doc_slug}
+                        {docSlug}
                       </span>
                       <span className="text-xs font-bold text-slate-100 font-mono">
                         {hit.path}
                       </span>
-                      <span
-                        title={
-                          hit.rerank_score !== null
-                            ? `Điểm cross-encoder ${hit.rerank_score.toFixed(2)} quyết định thứ hạng; điểm RRF ${hit.score.toFixed(4)}`
-                            : 'Điểm hoà trộn RRF'
-                        }
-                        className="rounded border border-brand-800/80 bg-slate-950 px-2 py-0.5 font-mono text-[10px] font-bold text-brand-400"
-                      >
-                        {hit.rerank_score !== null
-                          ? `Rerank: ${hit.rerank_score.toFixed(2)}`
-                          : `RRF: ${hit.score.toFixed(4)}`}
-                      </span>
-                      {hit.is_table && (
+                      {hit.rerank_score !== null && hit.rerank_score !== undefined ? (
                         <span
-                          title={hit.table_summary ?? 'Đoạn này là một phần của bảng'}
+                          title={`Điểm cross-encoder ${hit.rerank_score.toFixed(2)} quyết định thứ hạng`}
+                          className="rounded border border-brand-800/80 bg-slate-950 px-2 py-0.5 font-mono text-[10px] font-bold text-brand-400"
+                        >
+                          Rerank: {hit.rerank_score.toFixed(2)}
+                        </span>
+                      ) : hit.semantic_score !== null && hit.semantic_score !== undefined ? (
+                        <span
+                          title="Điểm tương đồng semantic"
+                          className="rounded border border-brand-800/80 bg-slate-950 px-2 py-0.5 font-mono text-[10px] font-bold text-brand-400"
+                        >
+                          Semantic: {hit.semantic_score.toFixed(4)}
+                        </span>
+                      ) : hit.verbatim_score !== null && hit.verbatim_score !== undefined ? (
+                        <span
+                          title="Điểm tương đồng verbatim"
+                          className="rounded border border-brand-800/80 bg-slate-950 px-2 py-0.5 font-mono text-[10px] font-bold text-brand-400"
+                        >
+                          Verbatim: {hit.verbatim_score.toFixed(4)}
+                        </span>
+                      ) : null}
+                      {isTable && (
+                        <span
+                          title={tableSummary ?? 'Đoạn này là một phần của bảng'}
                           className="rounded border border-violet-800/80 bg-violet-950/60 px-2 py-0.5 text-[10px] font-semibold text-violet-300"
                         >
                           bảng
@@ -342,24 +393,15 @@ export const DryRunSearchSimulator: React.FC<DryRunSearchSimulatorProps> = () =>
                     </div>
                   </div>
 
-                  <p className="mb-2 font-mono text-[10px] text-slate-500">
-                    {hit.doc_title} · {hit.path}
-                  </p>
+                  {hit.context && (
+                    <p className="mb-2 font-mono text-[10px] text-slate-500">
+                      {hit.context} · {hit.path}
+                    </p>
+                  )}
 
                   <div className="mb-2 whitespace-pre-wrap rounded-lg border border-slate-800/80 bg-slate-950/80 p-3 font-mono text-xs leading-relaxed text-slate-200">
-                    {hit.verbatim_text}
+                    {hit.text}
                   </div>
-
-                  {hit.contextualized_text && hit.contextualized_text !== hit.verbatim_text && (
-                    <details className="text-[11px] text-slate-400">
-                      <summary className="cursor-pointer select-none font-medium text-brand-400/90 hover:text-slate-200">
-                        Xem văn cảnh ngữ cảnh tổng hợp
-                      </summary>
-                      <div className="mt-1.5 whitespace-pre-wrap rounded border border-slate-800 bg-slate-900/90 p-2.5 font-mono leading-relaxed text-slate-300">
-                        {hit.contextualized_text}
-                      </div>
-                    </details>
-                  )}
                 </div>
               );
             })}

@@ -8,6 +8,7 @@ import typer
 from rich.console import Console
 
 from rag_eval.console import use_utf8_stdout
+from rag_eval.ingestion.loader import DEFAULT_EMBEDDING_MODEL
 
 app = typer.Typer(name="rag-eval", help="Agentic RAG CLI")
 console = Console()
@@ -40,7 +41,7 @@ def ingest(
     file_path: Annotated[
         Path,
         typer.Argument(
-            help="Path to document file to ingest (PDF, DOCX, Markdown, HTML, TXT)",
+            help="Path to technical documentation file to ingest (.md, .mdx)",
             exists=True,
             file_okay=True,
             dir_okay=False,
@@ -84,9 +85,9 @@ def ingest(
     from rag_eval.db.connection import close_db_pool, get_db_pool
     from rag_eval.exceptions import CorpusDomainError
     from rag_eval.ingestion.pipeline import DirectIngestionCoordinator
-    from rag_eval.schemas import sanitize_ltree_label
+    from rag_eval.schemas import canonicalize_ltree_path
 
-    doc_slug = sanitize_ltree_label(slug) if slug else sanitize_ltree_label(file_path.stem)
+    doc_slug = canonicalize_ltree_path(slug) if slug else canonicalize_ltree_path(file_path.stem)
     doc_title = title if title else file_path.stem
 
     console.print(f"[cyan]Ingesting document '{file_path.name}' directly into PostgreSQL as '{doc_slug}'...[/cyan]")
@@ -164,10 +165,7 @@ def ingest_all(
     import asyncio
 
     from rag_eval.db.connection import close_db_pool, get_db_pool
-    from rag_eval.db.repositories import CorpusRepository
-    from rag_eval.exceptions import CorpusDomainError
     from rag_eval.ingestion.pipeline import DirectIngestionCoordinator
-    from rag_eval.schemas import sanitize_ltree_label
 
     target_dir = dir_option or dir_path or Path("data")
     if not target_dir.exists() or not target_dir.is_dir():
@@ -175,20 +173,16 @@ def ingest_all(
         raise typer.Exit(code=1)
 
     supported_extensions = {
-        ".pdf",
-        ".docx",
         ".md",
+        ".mdx",
         ".markdown",
         ".mdown",
-        ".html",
-        ".htm",
-        ".txt",
-        ".text",
     }
 
+    glob_pattern = pattern if "**" in pattern else f"**/{pattern}"
     files = [
         p
-        for p in sorted(target_dir.glob(pattern), key=lambda p: p.name.lower())
+        for p in sorted(target_dir.glob(glob_pattern), key=lambda p: p.as_posix().lower())
         if p.is_file() and not p.name.startswith(".") and p.suffix.lower() in supported_extensions
     ]
 
@@ -205,61 +199,131 @@ def ingest_all(
     async def _run() -> None:
         pool = await get_db_pool()
         try:
-            corpus_repo = CorpusRepository(pool)
             coordinator = DirectIngestionCoordinator(pool=pool, compute_embeddings=embed)
+            console.print(f"[cyan]Running two-pass ingestion on {len(files)} files (embed={embed})...[/cyan]")
+            summary = await coordinator.ingest_corpus(
+                file_paths=files,
+                corpus_root=target_dir,
+                overwrite=not skip_existing,
+            )
+            console.print(
+                f"[bold green]✔ Ingest completed: {summary.total_documents} documents ingested "
+                f"({summary.total_chunks} chunks, {summary.total_edges} edges), "
+                f"{summary.skipped_documents} skipped.[/bold green]"
+            )
+        except Exception as exc:
+            console.print(f"[red]✖ Error during corpus ingestion:[/red] {exc}")
+            raise typer.Exit(code=1) from exc
+        finally:
+            await close_db_pool()
 
-            success_count = 0
-            skipped_count = 0
-            failed_count = 0
-            total_chunks = 0
-            total_edges = 0
+    asyncio.run(_run())
 
-            for idx, file_path in enumerate(files, start=1):
-                doc_slug = sanitize_ltree_label(file_path.stem)
-                doc_title = file_path.stem
 
-                existing = await corpus_repo.documents.get_by_slug(doc_slug)
-                if existing is not None and skip_existing:
-                    console.print(
-                        f"[yellow]({idx}/{len(files)}) Skipping '{file_path.name}' "
-                        f"(document '{doc_slug}' already exists in database).[/yellow]"
-                    )
-                    skipped_count += 1
-                    continue
+@app.command(name="embed-chunks")
+def embed_chunks(
+    batch_size: Annotated[
+        int,
+        typer.Option(
+            "--batch-size",
+            "-b",
+            help="Number of chunks to embed per forward pass",
+        ),
+    ] = 8,
+    model_name: Annotated[
+        str,
+        typer.Option(
+            "--model",
+            "-m",
+            help="SentenceTransformer model name to compute dense embeddings",
+        ),
+    ] = DEFAULT_EMBEDDING_MODEL,
+    limit: Annotated[
+        int | None,
+        typer.Option(
+            "--limit",
+            "-l",
+            help="Maximum number of chunks to process (defaults to all)",
+        ),
+    ] = None,
+) -> None:
+    """Computes and updates dense vector embeddings for chunks missing embeddings in PostgreSQL."""
+    import asyncio
+    import os
+    import time
 
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
+    from rich.progress import (
+        BarColumn,
+        Progress,
+        SpinnerColumn,
+        TaskProgressColumn,
+        TextColumn,
+        TimeRemainingColumn,
+    )
+
+    from rag_eval.db.connection import close_db_pool, get_db_pool
+    from rag_eval.db.repositories import CorpusRepository
+    from rag_eval.ingestion.loader import compute_chunk_embeddings
+
+    async def _run() -> None:
+        pool = await get_db_pool()
+        try:
+            corpus_repo = CorpusRepository(pool)
+            unembedded = await corpus_repo.chunks.list_unembedded(limit=limit)
+            total = len(unembedded)
+            if total == 0:
                 console.print(
-                    f"[cyan]({idx}/{len(files)}) Ingesting '{file_path.name}' as '{doc_slug}'...[/cyan]"
+                    "[green]✔ All chunks already have vector embeddings. Nothing to do.[/green]"
                 )
-                try:
-                    res = await coordinator.ingest_file(
-                        file_path=file_path,
-                        doc_slug=doc_slug,
-                        title=doc_title,
-                        overwrite=True,
-                    )
-                    chunks_count = res.chunks_count
-                    edges_count = res.edges_count
-                    total_chunks += chunks_count
-                    total_edges += edges_count
-                    success_count += 1
-                    console.print(
-                        f"[green]✔ ({idx}/{len(files)}) Successfully ingested '{res.doc_slug}' "
-                        f"({chunks_count} chunks, {edges_count} edges).[/green]"
-                    )
-                except (CorpusDomainError, Exception) as exc:
-                    failed_count += 1
-                    msg = exc.message if isinstance(exc, CorpusDomainError) else str(exc)
-                    console.print(f"[red]✖ ({idx}/{len(files)}) Error ingesting '{file_path.name}':[/red] {msg}")
-                    if stop_on_error:
-                        raise typer.Exit(code=1) from exc
+                return
 
             console.print(
-                f"[bold green]✔ Ingest completed: {success_count} succeeded "
-                f"({total_chunks} chunks, {total_edges} edges), "
-                f"{skipped_count} skipped, {failed_count} failed.[/bold green]"
+                f"[cyan]Found {total} chunk(s) without embeddings. Computing embeddings with '{model_name}' (batch_size={batch_size})...[/cyan]"
             )
-            if failed_count > 0:
-                raise typer.Exit(code=1)
+
+            processed = 0
+            t0 = time.time()
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TaskProgressColumn(),
+                TimeRemainingColumn(),
+                console=console,
+            ) as progress:
+                task = progress.add_task("[cyan]Embedding chunks...", total=total)
+                for i in range(0, total, batch_size):
+                    batch = unembedded[i : i + batch_size]
+                    batch_ids = [b[0] for b in batch]
+                    batch_texts = [b[1] for b in batch]
+
+                    embs = await asyncio.to_thread(
+                        compute_chunk_embeddings,
+                        batch_texts,
+                        model_name=model_name,
+                        batch_size=len(batch_texts),
+                    )
+                    updates = list(zip(batch_ids, embs, strict=True))
+                    await corpus_repo.chunks.update_embeddings_batch(updates)
+                    processed += len(batch)
+                    progress.update(task, advance=len(batch))
+
+                    if processed % 64 == 0:
+                        try:
+                            import torch
+
+                            if torch.cuda.is_available():
+                                torch.cuda.empty_cache()
+                        except (ImportError, AttributeError):
+                            pass
+
+            duration = time.time() - t0
+            speed = processed / duration if duration > 0 else 0.0
+            console.print(
+                f"[bold green]✔ Successfully embedded and updated {processed} chunk(s) in {duration:.1f}s ({speed:.1f} chunks/sec).[/bold green]"
+            )
         finally:
             await close_db_pool()
 

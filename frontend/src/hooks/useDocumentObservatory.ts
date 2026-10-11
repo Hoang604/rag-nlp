@@ -67,11 +67,19 @@ export function useDocumentObservatory() {
   }, [activeDocSlug, loadDocumentData]);
 
   const linkChunks = useCallback(
-    async (sourcePath: string, targetPath: string, relationType: string) => {
+    async (
+      sourcePath: string,
+      targetPath: string,
+      relationType: string,
+      citationText: string,
+      rationale?: string | null
+    ) => {
       await api.linkChunks({
         source_path: sourcePath,
         target_path: targetPath,
         relation_type: relationType,
+        citation_text: citationText,
+        rationale: rationale,
       });
       if (activeDocSlug) {
         await loadDocumentData(activeDocSlug);

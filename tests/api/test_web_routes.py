@@ -91,10 +91,30 @@ async def test_link_endpoint_contract(test_app: FastAPI) -> None:
                 "source_path": "test_doc.p_1",
                 "target_path": "test_doc.p_2",
                 "relation_type": "REFERENCES",
+                "citation_text": "Sample citation text",
                 "rationale": "Sample rationale for link",
             },
         )
         assert resp.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_link_endpoint_rejects_empty_citation(test_app: FastAPI) -> None:
+    """Verifies S-05 / I-04: /api/documents/links rejects missing or empty citation_text with 422."""
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=test_app),
+        base_url="http://testserver",
+    ) as client:
+        resp = await client.post(
+            "/api/documents/links",
+            json={
+                "source_path": "test_doc.p_1",
+                "target_path": "test_doc.p_2",
+                "relation_type": "REFERENCES",
+                "citation_text": "",
+            },
+        )
+        assert resp.status_code == 422
 
 
 @pytest.mark.asyncio
@@ -110,21 +130,26 @@ async def test_api_v1_route_not_found(test_app: FastAPI) -> None:
 
 @pytest.mark.asyncio
 async def test_search_endpoint_schema_contract(test_app: FastAPI) -> None:
-    """Verifies that /api/search fails fast with 503 without pool and accepts clean payload."""
+    """Verifies that /api/search fails fast with 503 without pool and accepts unified dual-channel payload."""
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=test_app),
         base_url="http://testserver",
     ) as client:
         resp = await client.post(
             "/api/search",
-            json={"query": "test query", "limit": 5},
+            json={
+                "query": "test query",
+                "pattern": "test pattern",
+                "limit": 5,
+                "order_by_reading_order": True,
+            },
         )
         assert resp.status_code == 503
 
 
 @pytest.mark.asyncio
-async def test_corpus_grep_endpoint_contract(test_app: FastAPI) -> None:
-    """Verifies that /api/corpus/grep fails fast with 503 without pool and accepts clean payload."""
+async def test_obsolete_corpus_grep_endpoint_rejected(test_app: FastAPI) -> None:
+    """Verifies that retired /api/corpus/grep route rejects POST requests."""
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=test_app),
         base_url="http://testserver",
@@ -133,6 +158,6 @@ async def test_corpus_grep_endpoint_contract(test_app: FastAPI) -> None:
             "/api/corpus/grep",
             json={"pattern": "quic", "limit": 10},
         )
-        assert resp.status_code == 503
+        assert resp.status_code in (404, 405)
 
 

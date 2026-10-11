@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 import uuid
 
@@ -48,7 +47,7 @@ class DocumentRepository(BaseRepository):
                     doc.doc_slug,
                     doc.title,
                     doc.raw_text,
-                    json.dumps(meta_payload),
+                    meta_payload,
                 )
                 return uuid.UUID(str(doc_id))
         except (asyncpg.PostgresError, OSError, RuntimeError) as exc:
@@ -72,6 +71,24 @@ class DocumentRepository(BaseRepository):
         except (asyncpg.PostgresError, OSError, RuntimeError) as exc:
             raise self._translate_error(f"get_document_by_slug({slug})", exc) from exc
 
+    async def get_by_id(
+        self, doc_id: uuid.UUID, conn: asyncpg.Connection | None = None
+    ) -> DocumentEntity | None:
+        """Retrieves a document entity by primary key UUID."""
+        query = """
+        SELECT id, doc_slug, title, raw_text, metadata, created_at, updated_at
+        FROM documents
+        WHERE id = $1;
+        """
+        try:
+            async with self._connection_scope(conn) as c:
+                row = await c.fetchrow(query, doc_id)
+                if not row:
+                    return None
+                return self._row_to_entity(row)
+        except (asyncpg.PostgresError, OSError, RuntimeError) as exc:
+            raise self._translate_error(f"get_document_by_id({doc_id})", exc) from exc
+
 
     async def list_active(
         self,
@@ -89,6 +106,23 @@ class DocumentRepository(BaseRepository):
                 return [self._row_to_entity(r) for r in rows]
         except (asyncpg.PostgresError, OSError, RuntimeError) as exc:
             raise self._translate_error("list_active_documents", exc) from exc
+
+    async def list_by_prefix(
+        self, prefix: str, conn: asyncpg.Connection | None = None
+    ) -> list[DocumentEntity]:
+        """Lists documents whose doc_slug matches a given prefix or contains it."""
+        query = """
+        SELECT id, doc_slug, title, raw_text, metadata, created_at, updated_at
+        FROM documents
+        WHERE doc_slug LIKE $1 || '.%' OR doc_slug = $1 OR doc_slug LIKE '%' || $1 || '%'
+        ORDER BY doc_slug ASC;
+        """
+        try:
+            async with self._connection_scope(conn) as c:
+                rows = await c.fetch(query, prefix)
+                return [self._row_to_entity(r) for r in rows]
+        except (asyncpg.PostgresError, OSError, RuntimeError) as exc:
+            raise self._translate_error(f"list_by_prefix({prefix})", exc) from exc
 
     async def list_with_stats(
         self, conn: asyncpg.Connection | None = None

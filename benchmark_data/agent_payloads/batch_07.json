@@ -1,0 +1,102 @@
+[
+  {
+    "id": "TC-BATCH07-001",
+    "issue_file": "issue_so_78392748.md",
+    "issue_summary": "Stripe webhook endpoint /api/webhooks/stripe returns 401 Unauthorized on Vercel deployment before Route Handler execution.",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "Next.js App Router Route Handlers webhook POST request 401 Unauthorized authentication",
+      "pattern": "Route Handlers"
+    }
+  },
+  {
+    "id": "TC-BATCH07-002",
+    "issue_file": "issue_so_78770329.md",
+    "issue_summary": "Client Navbar and layout session state not updating after redirect in Server Action due to Router Cache preserving layouts.",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "Server Actions redirect session cookies layout not updating router cache revalidatePath",
+      "pattern": "revalidatePath"
+    }
+  },
+  {
+    "id": "TC-BATCH07-003",
+    "issue_file": "issue_so_78776048.md",
+    "issue_summary": "NextAuth Credentials provider in Server Action throws CallbackRouteError instead of CredentialsSignin error on invalid credentials.",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "NextAuth signIn CredentialsSignin AuthError error handling in Next.js Server Actions",
+      "pattern": "AuthError"
+    }
+  },
+  {
+    "id": "TC-BATCH07-004",
+    "issue_file": "issue_so_78968613.md",
+    "issue_summary": "revalidatePath causes cache miss and slow response on immediate subsequent request instead of background revalidation.",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "revalidatePath on-demand revalidation stale while revalidate Full Route Cache Data Cache",
+      "pattern": "revalidatePath"
+    }
+  },
+  {
+    "id": "TC-BATCH07-005",
+    "issue_file": "issue_so_79143162.md",
+    "issue_summary": "Next.js 15 error: Route used params.locale where params should be awaited before using its properties.",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "Route params should be awaited before using its properties Next.js 15 sync dynamic APIs",
+      "pattern": "sync-dynamic-apis"
+    }
+  },
+  {
+    "id": "TC-BATCH07-006",
+    "issue_file": "issue_so_79197012.md",
+    "issue_summary": "Parallel and Intercepting Routes work in dev but crash in production build with DOM exception due to missing default fallback.",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "Parallel Routes Intercepting Routes modal slot default.js fallback unmatched slot production build",
+      "pattern": "default.js"
+    }
+  },
+  {
+    "id": "TC-BATCH07-007",
+    "issue_file": "issue_so_79217222.md",
+    "issue_summary": "Root level dynamic modal intercepted route (.)[post] intercepts all static routes like /contact and /gallery.",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "Intercepting Routes dynamic route segment catching other routes modal parallel route matching",
+      "pattern": "Intercepting Routes"
+    }
+  },
+  {
+    "id": "TC-BATCH07-008",
+    "issue_file": "issue_so_79256760.md",
+    "issue_summary": "Middleware authentication causes CORS errors on subdomain API requests missing Access-Control-Allow-Origin headers.",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "Configuring CORS headers in Next.js middleware for cross-origin subdomain API requests NextResponse",
+      "pattern": "Access-Control-Allow-Origin"
+    }
+  },
+  {
+    "id": "TC-BATCH07-009",
+    "issue_file": "issue_so_79418651.md",
+    "issue_summary": "ISR cache with fetch revalidate interval not refreshing because internal GET Route Handler is statically cached.",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "App Router Route Handlers GET caching ISR fetch revalidate force-dynamic segment config",
+      "pattern": "force-dynamic"
+    }
+  },
+  {
+    "id": "TC-BATCH07-010",
+    "issue_file": "issue_so_79823260.md",
+    "issue_summary": "Server Component tRPC prefetch fails with 401 Unauthorized because cookies and headers are not forwarded to internal Route Handler.",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "Server Components calling internal Route Handlers cookies headers not forwarded next/headers",
+      "pattern": "next/headers"
+    }
+  }
+]

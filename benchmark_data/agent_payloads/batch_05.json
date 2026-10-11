@@ -1,0 +1,102 @@
+[
+  {
+    "id": "TC-B05-001",
+    "issue_file": "issue_75541.md",
+    "issue_summary": "Client cannot recover from version skew when invoking Server Action from older deployment",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "Server Actions version skew handling and deployment skew recovery",
+      "pattern": "Failed to find Server Action"
+    }
+  },
+  {
+    "id": "TC-B05-002",
+    "issue_file": "issue_86122.md",
+    "issue_summary": "proxy.ts does not execute in production when deployed behind Cloudflare Proxy in standalone mode",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "proxy file convention replacement for middleware standalone output configuration",
+      "pattern": "proxy.ts"
+    }
+  },
+  {
+    "id": "TC-B05-003",
+    "issue_file": "issue_so_71987976.md",
+    "issue_summary": "Custom Server in Next.js disables Automatic Static Optimization and serverless functions",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "custom server disabling Automatic Static Optimization and page prerendering",
+      "pattern": "Automatic Static Optimization"
+    }
+  },
+  {
+    "id": "TC-B05-004",
+    "issue_file": "issue_so_76231982.md",
+    "issue_summary": "Navigating away and dismissing modal intercepted route using Link component in App Router",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "how to dismiss modal intercepted routes with Link component and parallel routes",
+      "pattern": "dismiss the modal"
+    }
+  },
+  {
+    "id": "TC-B05-005",
+    "issue_file": "issue_so_76322066.md",
+    "issue_summary": "Configuring cache revalidation in App Router for server-side functions not using fetch",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "revalidate data fetching without fetch third-party SDK route segment config",
+      "pattern": "export const revalidate"
+    }
+  },
+  {
+    "id": "TC-B05-006",
+    "issue_file": "issue_so_76439415.md",
+    "issue_summary": "Intercepting routes modal not rendering when clicking Link in App Router",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "intercepting routes modal not rendering parallel route slot in layout",
+      "pattern": "Intercepting Routes"
+    }
+  },
+  {
+    "id": "TC-B05-007",
+    "issue_file": "issue_so_76629695.md",
+    "issue_summary": "Caching dynamic routes with streaming Suspense and CDN cache in App Router",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "caching dynamic routes with streaming Suspense and route segment config",
+      "pattern": "dynamicParams"
+    }
+  },
+  {
+    "id": "TC-B05-008",
+    "issue_file": "issue_so_76841250.md",
+    "issue_summary": "Stale results after calling revalidatePath in Server Action when navigating via Link",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "revalidatePath server action stale data client side router cache navigation",
+      "pattern": "revalidatePath"
+    }
+  },
+  {
+    "id": "TC-B05-009",
+    "issue_file": "issue_so_76895309.md",
+    "issue_summary": "Route Handler POST throws TypeError ERR_INVALID_THIS Value of this must be of type EventTarget",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "App Router Route Handlers POST request handling and NextResponse",
+      "pattern": "export async function POST"
+    }
+  },
+  {
+    "id": "TC-B05-010",
+    "issue_file": "issue_so_76901046.md",
+    "issue_summary": "Caching behavior of fetch next revalidate when external API returns error responses",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "fetch revalidate error responses HTTP status codes Data Cache",
+      "pattern": "revalidate"
+    }
+  }
+]

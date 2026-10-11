@@ -1,0 +1,102 @@
+[
+  {
+    "id": "TC-BATCH-001",
+    "issue_file": "issue_38171.md",
+    "issue_summary": "Router throws handleHardNavigation invariant attempted to hard navigate to the same URL when rewriting dynamic routes in middleware",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "handleHardNavigation invariant attempted to hard navigate to the same URL middleware rewrite dynamic route",
+      "pattern": "handleHardNavigation"
+    }
+  },
+  {
+    "id": "TC-BATCH-002",
+    "issue_file": "issue_39262.md",
+    "issue_summary": "Middleware causes request abort on API routes when streaming raw request bodies greater than 16 KiB with custom bodyParser false",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "API routes config bodyParser false streaming raw request body with middleware multipart form-data",
+      "pattern": "bodyParser"
+    }
+  },
+  {
+    "id": "TC-BATCH-003",
+    "issue_file": "issue_42991.md",
+    "issue_summary": "next/link does not re-fetch from server for subsequent navigations on dynamic routes due to client-side Router Cache",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "client side router cache dynamic routes prefetch next/link subsequent navigation hard navigation",
+      "pattern": "Router Cache"
+    }
+  },
+  {
+    "id": "TC-BATCH-004",
+    "issue_file": "issue_43077.md",
+    "issue_summary": "searchParams object prop is empty in production builds for static pages in Next.js 13 App Router",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "page props searchParams empty in production app directory dynamic rendering static prerendering",
+      "pattern": "searchParams"
+    }
+  },
+  {
+    "id": "TC-BATCH-005",
+    "issue_file": "issue_43548.md",
+    "issue_summary": "Link navigation with loading.tsx is delayed rather than instant for dynamic pages in App Router",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "instant loading states loading.js dynamic routes suspense navigation delay link prefetching",
+      "pattern": "loading.js"
+    }
+  },
+  {
+    "id": "TC-BATCH-006",
+    "issue_file": "issue_45371.md",
+    "issue_summary": "Invariant error method expects to have requestAsyncStorage when accessing cookies from next/headers in server components",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "cookies next/headers requestAsyncStorage server components turbopack runtime error",
+      "pattern": "requestAsyncStorage"
+    }
+  },
+  {
+    "id": "TC-BATCH-007",
+    "issue_file": "issue_45508.md",
+    "issue_summary": "High number of jest-worker processChild.js processes remain alive after next build when getInitialProps is used",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "next build hanging worker processes jest-worker processChild getInitialProps static generation",
+      "pattern": "jest-worker"
+    }
+  },
+  {
+    "id": "TC-BATCH-008",
+    "issue_file": "issue_48096.md",
+    "issue_summary": "SyntaxError unexpected end of JSON input when calling request.json() in DELETE route handler in App Router",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "route handlers DELETE method request.json unexpected end of JSON input NextRequest body",
+      "pattern": "request.json"
+    }
+  },
+  {
+    "id": "TC-BATCH-009",
+    "issue_file": "issue_49279.md",
+    "issue_summary": "Framer Motion shared layout animations with layoutId prop not working properly across App Router navigations",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "App Router Framer Motion layoutId shared layout animations page transitions template",
+      "pattern": "layoutId"
+    }
+  },
+  {
+    "id": "TC-BATCH-010",
+    "issue_file": "issue_49298.md",
+    "issue_summary": "Error NEXT_REDIRECT caught by try catch block when calling redirect() inside Server Actions",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "redirect NEXT_REDIRECT error try catch server actions app router navigation",
+      "pattern": "NEXT_REDIRECT"
+    }
+  }
+]

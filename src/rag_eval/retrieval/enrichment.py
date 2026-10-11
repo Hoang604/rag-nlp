@@ -7,6 +7,7 @@ import asyncpg
 
 from rag_eval.db.repositories import CorpusRepository
 from rag_eval.exceptions import (
+    E_AST_GROUNDING_VALIDATION,
     E_INVALID_DOCUMENT_HIERARCHY,
     CorpusDomainError,
 )
@@ -15,6 +16,7 @@ from rag_eval.schemas import (
     RelationType,
     validate_ltree_path,
 )
+from rag_eval.text import find_normalized_span
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +26,7 @@ class LinkResult:
     source_path: str
     target_path: str
     relation_type: RelationType
+    citation_text: str
     created: bool
     rationale: str | None = None
 
@@ -51,9 +54,10 @@ class KnowledgeEnrichmentService:
         source_path: str,
         target_path: str,
         relation_type: RelationType | str,
+        citation_text: str,
         rationale: str | None = None,
     ) -> LinkResult:
-        """Thiết lập cạnh quan hệ giữa 2 chunk dựa trên LTree path."""
+        """Thiết lập cạnh quan hệ giữa 2 chunk dựa trên LTree path và bằng chứng trích dẫn nguyên văn."""
         norm_source = validate_ltree_path(source_path)
         norm_target = validate_ltree_path(target_path)
 
@@ -61,6 +65,14 @@ class KnowledgeEnrichmentService:
             raise CorpusDomainError(
                 error_code=E_INVALID_DOCUMENT_HIERARCHY,
                 message=f"Self-loop relations prohibited: source '{norm_source}' equals target '{norm_target}'.",
+                data={"source_path": norm_source, "target_path": norm_target},
+            )
+
+        clean_citation = citation_text.strip()
+        if not clean_citation:
+            raise CorpusDomainError(
+                error_code=E_AST_GROUNDING_VALIDATION,
+                message="Citation text cannot be empty. All knowledge graph links must be grounded in source text.",
                 data={"source_path": norm_source, "target_path": norm_target},
             )
 
@@ -76,17 +88,26 @@ class KnowledgeEnrichmentService:
         else:
             rel_enum = relation_type
 
-        # Resolve chunk UUIDs
-        path_map = await self.corpus_repo.chunks.resolve_paths_batch([norm_source, norm_target])
-        src_id = path_map.get(norm_source)
-        tgt_id = path_map.get(norm_target)
-
-        if src_id is None:
+        # Retrieve source chunk to verify citation grounding
+        src_chunk = await self.corpus_repo.chunks.get_by_path(norm_source)
+        if src_chunk is None:
             raise CorpusDomainError(
                 error_code=E_INVALID_DOCUMENT_HIERARCHY,
                 message=f"Source chunk not found for path: '{norm_source}'.",
                 data={"source_path": norm_source},
             )
+
+        span = find_normalized_span(src_chunk.verbatim_text, clean_citation)
+        if span is None:
+            raise CorpusDomainError(
+                error_code=E_AST_GROUNDING_VALIDATION,
+                message=f"Citation text is not grounded in source chunk '{norm_source}' verbatim text.",
+                data={"source_path": norm_source, "citation_text": clean_citation},
+            )
+
+        # Resolve target chunk UUID
+        path_map = await self.corpus_repo.chunks.resolve_paths_batch([norm_target])
+        tgt_id = path_map.get(norm_target)
         if tgt_id is None:
             raise CorpusDomainError(
                 error_code=E_INVALID_DOCUMENT_HIERARCHY,
@@ -95,10 +116,11 @@ class KnowledgeEnrichmentService:
             )
 
         edge = GraphEdgeEntity(
-            source_chunk_id=src_id,
+            source_chunk_id=src_chunk.id,
             target_chunk_id=tgt_id,
             relation_type=rel_enum.value,
             rationale=rationale,
+            citation_text=clean_citation,
         )
         await self.corpus_repo.graph.upsert_edges([edge])
 
@@ -106,9 +128,11 @@ class KnowledgeEnrichmentService:
             source_path=norm_source,
             target_path=norm_target,
             relation_type=rel_enum,
+            citation_text=clean_citation,
             created=True,
             rationale=rationale,
         )
+
 
     async def unlink_chunks(
         self,

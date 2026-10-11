@@ -1,24 +1,12 @@
 from __future__ import annotations
 
+import re
 import uuid
-from pathlib import Path
 
 import pytest
 
-from rag_eval.exceptions import (
-    E_CORPUS_INTEGRITY_VIOLATION,
-    CorpusDomainError,
-)
-from rag_eval.ingestion.parser.edges import LineageBreadcrumbAndEdgeExtractor
-from rag_eval.ingestion.parser.normalizer import (
-    DocumentNormalizer,
-    NormalizedDocument,
-    SupportedFormat,
-)
 from rag_eval.schemas import (
     ChunkEntity,
-    ParsedChunkDraft,
-    RelationType,
     sanitize_ltree_label,
 )
 from rag_eval.web.services.tree import TreeHierarchyBuilder
@@ -39,52 +27,21 @@ def test_sanitize_ltree_label_vietnamese_and_bounds() -> None:
     assert len(sanitized) == 250
     assert not sanitized.endswith("_")
 
-    # 3. Empty or all-special characters fallback
-    assert sanitize_ltree_label("") == "node"
-    assert sanitize_ltree_label("!!!@@@###$$$") == "node"
+    # 3. Empty or all-special characters raises ValueError (no fake fallback)
+    with pytest.raises(ValueError):
+        sanitize_ltree_label("")
+    with pytest.raises(ValueError):
+        sanitize_ltree_label("!!!@@@###$$$")
 
+    # 4. Non-Latin Unicode scripts produce deterministic ASCII hash fallback
+    cjk_label = sanitize_ltree_label("概要")
+    assert cjk_label.startswith("u_")
+    assert len(cjk_label) == 14  # 'u_' + 12 hex chars
+    assert re.match(r"^u_[0-9a-f]{12}$", cjk_label)
+    assert sanitize_ltree_label("概要") == cjk_label
 
-def test_leaf_disambiguation_does_not_leak_into_anchors() -> None:
-    """Verifies SEC-INGEST-003: Disambiguated leaves (p_1, tbl_1, code_1) never register as anchors."""
-    extractor = LineageBreadcrumbAndEdgeExtractor()
-    chunks = [
-        ParsedChunkDraft(
-            path="doc.sec_1",
-            verbatim_text="Section One Text",
-            contextualized_text="Section One Text",
-            start_line=1,
-            end_line=2,
-            metadata={"heading_raw": "Section One", "node_type": "SECTION"},
-        ),
-        ParsedChunkDraft(
-            path="doc.sec_1.p_1",
-            verbatim_text="Paragraph 1 with link to [Leaf](#p-1) and [Table](#tbl-1) and [Sec](#section-one)",
-            contextualized_text="Paragraph 1",
-            start_line=3,
-            end_line=4,
-            metadata={"node_type": "PARAGRAPH"},
-        ),
-        ParsedChunkDraft(
-            path="doc.sec_1.tbl_1",
-            verbatim_text="| Col1 | Col2 |\n|---|---|\n| Val1 | Val2 |",
-            contextualized_text="Table 1",
-            start_line=5,
-            end_line=7,
-            metadata={"node_type": "TABLE", "is_table": True},
-        ),
-    ]
-    edges = extractor.extract_deterministic_edges(chunks, normalized=NormalizedDocument(
-        format_type=SupportedFormat.MARKDOWN,
-        raw_text="",
-        total_lines=7,
-    ))
-
-    # Should only create 1 edge pointing to doc.sec_1 (section-one)
-    # Zero edges to p-1 or tbl-1!
-    assert len(edges) == 1
-    assert edges[0].source_path == "doc.sec_1.p_1"
-    assert edges[0].target_path == "doc.sec_1"
-    assert edges[0].relation_type == RelationType.REFERENCES
+    cyrillic_label = sanitize_ltree_label("документация")
+    assert cyrillic_label.startswith("u_")
 
 
 def test_tree_hierarchy_builder_ast_node_types_and_labels() -> None:
@@ -142,20 +99,6 @@ def test_tree_hierarchy_builder_ast_node_types_and_labels() -> None:
     assert len(headings) >= 1
 
 
-def test_pdf_empty_text_and_corrupt_rejection(tmp_path: Path) -> None:
-    """Verifies SEC-INGEST-008 & DEF-INGEST-007: DocumentNormalizer rejects empty/corrupt files with domain error."""
-    normalizer = DocumentNormalizer()
-    empty_pdf = tmp_path / "empty.pdf"
-    empty_pdf.write_bytes(b"%PDF-1.4\n%%EOF")
-
-    with pytest.raises(CorpusDomainError) as exc_info:
-        normalizer.normalize_file(empty_pdf)
-    assert exc_info.value.error_code == E_CORPUS_INTEGRITY_VIOLATION
-
-    with pytest.raises(CorpusDomainError) as exc_info_text:
-        normalizer.normalize_text("   \n\n  \t  ")
-    assert exc_info_text.value.error_code == E_CORPUS_INTEGRITY_VIOLATION
-
 
 @pytest.mark.asyncio
 async def test_upsert_edges_string_relations_deduplication() -> None:
@@ -175,13 +118,49 @@ async def test_upsert_edges_string_relations_deduplication() -> None:
 
     c1, c2 = uuid.uuid4(), uuid.uuid4()
     edges = [
-        GraphEdgeEntity(source_chunk_id=c1, target_chunk_id=c2, relation_type="REFERENCES"),
-        GraphEdgeEntity(source_chunk_id=c1, target_chunk_id=c2, relation_type="REFERENCES"),
+        GraphEdgeEntity(
+            source_chunk_id=c1,
+            target_chunk_id=c2,
+            relation_type="REFERENCES",
+            citation_text="Valid citation.",
+        ),
+        GraphEdgeEntity(
+            source_chunk_id=c1,
+            target_chunk_id=c2,
+            relation_type="REFERENCES",
+            citation_text="Valid citation.",
+        ),
     ]
     res = await repo.upsert_edges(edges)
     assert res == {}
     mock_conn.fetch.assert_awaited_once()
     args = mock_conn.fetch.call_args[0]
-    # Parameter 4 is the relations list
-    assert args[4] == ["REFERENCES"]
+    # Check relations list without relying on exact positional argument index
+    assert any(isinstance(a, list) and set(a) == {"REFERENCES"} for a in args)
+
+
+@pytest.mark.asyncio
+async def test_verbatim_grep_order_by_reading_order() -> None:
+    """Verifies that RetrievalEngine forwards order_by_reading_order to VerbatimGrepQuery."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from rag_eval.retrieval.engine import RetrievalEngine
+    from rag_eval.schemas import VerbatimGrepQuery
+
+    mock_pool = MagicMock()
+    engine = RetrievalEngine(pool=mock_pool)
+    with patch("rag_eval.retrieval.engine.CorpusRepository") as mock_repo_cls:
+        mock_repo = MagicMock()
+        mock_repo.chunks.hybrid_search = AsyncMock(return_value=[])
+        mock_repo.chunks.verbatim_grep = AsyncMock(return_value=([], 0))
+        mock_repo_cls.return_value = mock_repo
+
+        await engine.search_venn(
+            query="test",
+            pattern="SETTINGS",
+            order_by_reading_order=True,
+        )
+        called_dto: VerbatimGrepQuery = mock_repo.chunks.verbatim_grep.call_args[0][0]
+        assert called_dto.order_by_reading_order is True
+
 

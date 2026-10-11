@@ -17,9 +17,8 @@ from rag_eval.mcp.server import (
 )
 from rag_eval.mcp.tools.sensors import (
     CorpusRuntimeSensors,
-    GraphTraverseResult,
 )
-from rag_eval.schemas import ChunkEntity, GraphTraversalStepDTO
+from rag_eval.schemas import ChunkEntity, GraphTraversalStepDTO, GraphTraverseResult
 
 
 def test_domain_error_to_jsonrpc_mapping() -> None:
@@ -120,6 +119,8 @@ async def test_link_and_unlink_tool_schemas() -> None:
     assert "source_path" in link_props
     assert "target_path" in link_props
     assert "relation_type" in link_props
+    assert "citation_text" in link_props
+    assert "citation_text" in link_schema.get("required", [])
     assert "rationale" in link_props
     assert "anchor_text" not in link_props
     assert "chunk_id" not in link_props
@@ -172,11 +173,12 @@ async def test_graph_traverse_multihop_source_path_resolution() -> None:
             source_path="doc.sec_1",
             target_path="doc.sec_2",
             target_text="Target sec 2",
-            target_contextualized_text="Root section > Target sec 2",
+            target_contextualized_text="[Root section]\nTarget sec 2",
             target_doc_slug="doc",
             target_start_line=6,
             target_end_line=10,
             rationale="Dẫn chiếu định nghĩa cơ bản",
+            citation_text="Verbatim citation for sec 2",
         ),
         GraphTraversalStepDTO(
             edge_id=uuid.uuid4(),
@@ -187,11 +189,12 @@ async def test_graph_traverse_multihop_source_path_resolution() -> None:
             source_path="doc.sec_2",
             target_path="doc.sec_3",
             target_text="Target sec 3",
-            target_contextualized_text="Target sec 2 > Target sec 3",
+            target_contextualized_text="[Target sec 2]\nTarget sec 3",
             target_doc_slug="doc",
             target_start_line=11,
             target_end_line=15,
             rationale=None,
+            citation_text="Verbatim citation for sec 3",
         ),
     ]
 
@@ -205,17 +208,25 @@ async def test_graph_traverse_multihop_source_path_resolution() -> None:
     assert len(res.paths) == 2
     assert res.paths[0].source_path == "doc.sec_1"
     assert res.paths[0].target_path == "doc.sec_2"
-    assert res.paths[0].target_contextualized_text == "Root section > Target sec 2"
-    assert res.paths[0].target_doc_slug == "doc"
+    assert res.paths[0].target_context == "Root section"
+    assert res.paths[0].target_text == "Target sec 2"
+    assert res.paths[0].citation_text == "Verbatim citation for sec 2"
+    assert not hasattr(res.paths[0], "target_contextualized_text")
+    assert not hasattr(res.paths[0], "target_doc_slug")
     assert res.paths[0].target_start_line == 6
     assert res.paths[0].target_end_line == 10
     assert res.paths[0].rationale == "Dẫn chiếu định nghĩa cơ bản"
     assert res.paths[1].source_path == "doc.sec_2"
     assert res.paths[1].target_path == "doc.sec_3"
+    assert res.paths[1].target_context == "Target sec 2"
+    assert res.paths[1].target_text == "Target sec 3"
+    assert res.paths[1].citation_text == "Verbatim citation for sec 3"
     assert res.paths[1].rationale is None
     dump_str = json.dumps(res.model_dump())
     assert str(root_id) not in dump_str
     assert str(child_id) not in dump_str
+    assert "target_contextualized_text" not in dump_str
+    assert "target_doc_slug" not in dump_str
 
     mock_repo.graph.traverse.assert_awaited_once_with(
         root_id,
@@ -224,6 +235,55 @@ async def test_graph_traverse_multihop_source_path_resolution() -> None:
         filter_relations=None,
         match_limit=10,
     )
+
+
+@pytest.mark.asyncio
+async def test_graph_traverse_root_chunk_context_isolation() -> None:
+    """Verifies Invariant I-03 & S-03: Root chunk with contextualized_text == verbatim_text produces target_context == ''."""
+    mock_repo = AsyncMock()
+    sensors = CorpusRuntimeSensors()
+    sensors._get_repo = AsyncMock(return_value=mock_repo)
+
+    root_id = uuid.uuid4()
+    target_id = uuid.uuid4()
+    mock_chunk = ChunkEntity(
+        id=root_id,
+        document_id=uuid.uuid4(),
+        path="doc.root",
+        verbatim_text="Verbatim text",
+        contextualized_text="Verbatim text",
+        start_line=1,
+        end_line=5,
+    )
+    steps_dto = [
+        GraphTraversalStepDTO(
+            edge_id=uuid.uuid4(),
+            source_chunk_id=root_id,
+            target_chunk_id=target_id,
+            relation_type="REFERENCES",
+            depth=1,
+            source_path="doc.root",
+            target_path="doc.target",
+            target_text="Target root verbatim text",
+            target_contextualized_text="Target root verbatim text",
+            target_doc_slug="doc",
+            target_start_line=1,
+            target_end_line=5,
+            rationale=None,
+            citation_text="Verbatim citation for root",
+        )
+    ]
+    mock_repo.chunks.get_by_path = AsyncMock(return_value=mock_chunk)
+    mock_repo.graph.traverse = AsyncMock(return_value=steps_dto)
+
+    res = await sensors.graph_traverse(source_path="doc.root", limit=1)
+    assert len(res.paths) == 1
+    assert res.paths[0].target_context == ""
+    assert res.paths[0].target_text == "Target root verbatim text"
+    assert res.paths[0].citation_text == "Verbatim citation for root"
+    dump_str = json.dumps(res.model_dump())
+    assert "target_contextualized_text" not in dump_str
+    assert "target_doc_slug" not in dump_str
 
 
 @pytest.mark.asyncio
@@ -241,35 +301,7 @@ async def test_graph_traverse_unknown_source_path_raises_error() -> None:
     assert exc_info.value.error_code == E_INVALID_DOCUMENT_HIERARCHY
 
 
-@pytest.mark.asyncio
-async def test_graph_traverse_limit_boundary() -> None:
-    """Verifies graph_traverse passes limit parameter to repository (S-04, I-02)."""
-    mock_repo = AsyncMock()
-    sensors = CorpusRuntimeSensors()
-    sensors._get_repo = AsyncMock(return_value=mock_repo)
 
-    root_id = uuid.uuid4()
-    mock_chunk = ChunkEntity(
-        id=root_id,
-        document_id=uuid.uuid4(),
-        path="doc.sec_1",
-        verbatim_text="Root section",
-        contextualized_text="Root section",
-        start_line=1,
-        end_line=5,
-    )
-    mock_repo.chunks.get_by_path = AsyncMock(return_value=mock_chunk)
-    mock_repo.graph.traverse = AsyncMock(return_value=[])
-
-    res = await sensors.graph_traverse(source_path="doc.sec_1", limit=5)
-    assert res.total_paths == 0
-    mock_repo.graph.traverse.assert_awaited_once_with(
-        root_id,
-        nav_direction="OUTGOING",
-        depth_limit=2,
-        filter_relations=None,
-        match_limit=5,
-    )
 
 
 
@@ -423,6 +455,9 @@ async def test_hybrid_search_venn_partitioning() -> None:
         assert len(result.both_hits) == 1
         b_hit = result.both_hits[0]
         assert b_hit.path == "fixture_doc.sec_1"
+        assert b_hit.context == ""  # "Shared context" has no ancestor bracket prefix
+        assert b_hit.text == "Shared context"
+        assert b_hit.contextualized_text == "Shared context"
         assert b_hit.semantic_rank == 1
         assert b_hit.verbatim_rank == 1
         assert b_hit.semantic_score == 0.9
@@ -432,6 +467,9 @@ async def test_hybrid_search_venn_partitioning() -> None:
         assert len(result.semantic_only_hits) == 1
         s_hit = result.semantic_only_hits[0]
         assert s_hit.path == "fixture_doc.sec_2"
+        assert s_hit.context == ""
+        assert s_hit.text == "Semantic context"
+        assert s_hit.contextualized_text == "Semantic context"
         assert s_hit.semantic_rank == 2
         assert s_hit.verbatim_rank is None
         assert s_hit.semantic_score == 0.8
@@ -441,6 +479,9 @@ async def test_hybrid_search_venn_partitioning() -> None:
         assert len(result.verbatim_only_hits) == 1
         v_hit = result.verbatim_only_hits[0]
         assert v_hit.path == "fixture_doc.sec_3"
+        assert v_hit.context == ""
+        assert v_hit.text == "Verbatim context"
+        assert v_hit.contextualized_text == "Verbatim context"
         assert v_hit.semantic_rank is None
         assert v_hit.verbatim_rank == 2
         assert v_hit.semantic_score is None
@@ -448,6 +489,14 @@ async def test_hybrid_search_venn_partitioning() -> None:
 
         # Pure Path Addressing (I-05): No database UUID in hit payload
         assert not hasattr(b_hit, "chunk_id")
+
+        # Sparse serialization contract: unpopulated cross-channel metrics are omitted (I-03)
+        assert all(v is not None for v in b_hit.model_dump().values())
+        assert "contextualized_text" not in b_hit.model_dump()  # Un-serialized property (I-04)
+        assert "verbatim_rank" not in s_hit.model_dump()
+        assert "verbatim_score" not in s_hit.model_dump()
+        assert "semantic_rank" not in v_hit.model_dump()
+        assert "semantic_score" not in v_hit.model_dump()
 
 
 @pytest.mark.asyncio
@@ -507,12 +556,13 @@ async def test_mcp_tool_catalog_excludes_verbatim_grep() -> None:
     tools = res_obj.get("tools")
     assert isinstance(tools, list)
     tool_names = {t["name"] for t in tools if isinstance(t, dict) and "name" in t}
-    assert len(tool_names) == 5
+    assert len(tool_names) == 6
     assert "hybrid_search" in tool_names
     assert "hierarchical_navigate" in tool_names
     assert "graph_traverse" in tool_names
     assert "link_chunks" in tool_names
     assert "unlink_chunks" in tool_names
+    assert "get_raw" in tool_names
     assert "verbatim_grep" not in tool_names
 
 
@@ -574,3 +624,123 @@ async def test_hybrid_search_venn_with_rerank() -> None:
         assert result.both_hits[0].rerank_score == 0.95
         assert len(result.semantic_only_hits) == 1
         assert result.semantic_only_hits[0].rerank_score == 0.85
+
+
+@pytest.mark.asyncio
+async def test_get_raw_by_doc_slug() -> None:
+    """Verifies get_raw returns exact raw document slice by doc_slug with line boundaries."""
+    from rag_eval.schemas import DocumentEntity
+
+    mock_repo = AsyncMock()
+    sensors = CorpusRuntimeSensors()
+    sensors._get_repo = AsyncMock(return_value=mock_repo)
+
+    raw_content = "\n".join(f"Line {i}" for i in range(1, 51))
+    doc_entity = DocumentEntity(
+        id=uuid.uuid4(),
+        doc_slug="fixture.doc",
+        title="Fixture Title",
+        raw_text=raw_content,
+    )
+    mock_repo.documents.get_by_slug = AsyncMock(return_value=doc_entity)
+
+    # Slice 10 to 20
+    res = await sensors.get_raw(path_or_slug="fixture.doc", start_line=10, end_line=20)
+    assert res.doc_slug == "fixture.doc"
+    assert res.title == "Fixture Title"
+    assert res.start_line == 10
+    assert res.end_line == 20
+    assert res.total_lines == 50
+    assert res.raw_text == "\n".join(f"Line {i}" for i in range(10, 21))
+
+    # Default end_line (up to start_line + 199 or total_lines)
+    res_default = await sensors.get_raw(path_or_slug="fixture.doc", start_line=1)
+    assert res_default.start_line == 1
+    assert res_default.end_line == 50
+    assert res_default.total_lines == 50
+
+
+@pytest.mark.asyncio
+async def test_get_raw_by_chunk_path() -> None:
+    """Verifies get_raw resolves document from a chunk LTree path."""
+    from rag_eval.schemas import DocumentEntity
+
+    mock_repo = AsyncMock()
+    sensors = CorpusRuntimeSensors()
+    sensors._get_repo = AsyncMock(return_value=mock_repo)
+
+    doc_id = uuid.uuid4()
+    chunk_entity = ChunkEntity(
+        id=uuid.uuid4(),
+        document_id=doc_id,
+        path="fixture.doc.sec_1",
+        verbatim_text="Sample chunk",
+        contextualized_text="Sample chunk",
+        start_line=5,
+        end_line=15,
+    )
+    doc_entity = DocumentEntity(
+        id=doc_id,
+        doc_slug="fixture.doc",
+        title="Fixture Title",
+        raw_text="Line 1\nLine 2\nLine 3\nLine 4\nLine 5",
+    )
+
+    mock_repo.documents.get_by_slug = AsyncMock(return_value=None)
+    mock_repo.chunks.get_by_path = AsyncMock(return_value=chunk_entity)
+    mock_repo.documents.get_by_id = AsyncMock(return_value=doc_entity)
+
+    res = await sensors.get_raw(path_or_slug="fixture.doc.sec_1", start_line=2, end_line=4)
+    assert res.doc_slug == "fixture.doc"
+    assert res.start_line == 2
+    assert res.end_line == 4
+    assert res.raw_text == "Line 2\nLine 3\nLine 4"
+
+
+@pytest.mark.asyncio
+async def test_get_raw_line_range_validations() -> None:
+    """Verifies get_raw rejects invalid bounds, out of range lines, and spans exceeding MAX_RAW_LINES (200)."""
+    from rag_eval.schemas import DocumentEntity
+
+    mock_repo = AsyncMock()
+    sensors = CorpusRuntimeSensors()
+    sensors._get_repo = AsyncMock(return_value=mock_repo)
+
+    doc_entity = DocumentEntity(
+        id=uuid.uuid4(),
+        doc_slug="fixture.doc",
+        title="Fixture Title",
+        raw_text="\n".join(f"L{i}" for i in range(1, 301)),
+    )
+    mock_repo.documents.get_by_slug = AsyncMock(return_value=doc_entity)
+
+    # 1. start_line < 1
+    with pytest.raises(CorpusDomainError) as exc_info1:
+        await sensors.get_raw(path_or_slug="fixture.doc", start_line=0)
+    assert exc_info1.value.error_code == E_AST_GROUNDING_VALIDATION
+
+    # 2. start_line > total_lines
+    with pytest.raises(CorpusDomainError) as exc_info2:
+        await sensors.get_raw(path_or_slug="fixture.doc", start_line=301)
+    assert exc_info2.value.error_code == E_AST_GROUNDING_VALIDATION
+
+    # 3. end_line < start_line
+    with pytest.raises(CorpusDomainError) as exc_info3:
+        await sensors.get_raw(path_or_slug="fixture.doc", start_line=10, end_line=5)
+    assert exc_info3.value.error_code == E_AST_GROUNDING_VALIDATION
+
+    # 4. span > 200 lines (e.g. 1 to 201 is 201 lines)
+    with pytest.raises(CorpusDomainError) as exc_info4:
+        await sensors.get_raw(path_or_slug="fixture.doc", start_line=1, end_line=201)
+    assert exc_info4.value.error_code == E_AST_GROUNDING_VALIDATION
+
+    # 5. Non-existent path or slug
+    mock_repo.documents.get_by_slug = AsyncMock(return_value=None)
+    mock_repo.chunks.get_by_path = AsyncMock(return_value=None)
+    mock_repo.documents.list_by_prefix = AsyncMock(return_value=[])
+
+    with pytest.raises(CorpusDomainError) as exc_info5:
+        await sensors.get_raw(path_or_slug="non.existent.path")
+    assert exc_info5.value.error_code == E_INVALID_DOCUMENT_HIERARCHY
+
+

@@ -1,0 +1,102 @@
+[
+  {
+    "id": "TC-BATCH06-001",
+    "issue_file": "issue_so_77026672.md",
+    "issue_summary": "In Next.js App Router, how to access HttpOnly cookies inside a Server Action and forward them in a fetch request to a backend API.",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "access and read request cookies in Server Actions and forward in fetch headers next/headers",
+      "pattern": "cookies"
+    }
+  },
+  {
+    "id": "TC-BATCH06-002",
+    "issue_file": "issue_so_77107973.md",
+    "issue_summary": "Next.js App Router error 'TypeError: Cannot redefine property: $$id' in action-proxy loader when exporting Server Action functions.",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "Server Actions export functions action-proxy TypeError Cannot redefine property $$id",
+      "pattern": "use server"
+    }
+  },
+  {
+    "id": "TC-BATCH06-003",
+    "issue_file": "issue_so_77146847.md",
+    "issue_summary": "React useState setIsLoading does not update pending/loading state properly during Server Action form submission in Next.js 13 App Router.",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "manage pending and loading state during form submission with Server Actions useFormStatus",
+      "pattern": "useFormStatus"
+    }
+  },
+  {
+    "id": "TC-BATCH06-004",
+    "issue_file": "issue_so_77228750.md",
+    "issue_summary": "Next.js 13 App Router logs 'TypeError: Response body object should not be disturbed or locked' in POST Route Handler with redirect.",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "Route Handlers POST request redirect Response body object should not be disturbed or locked NextResponse.redirect",
+      "pattern": "NextResponse.redirect"
+    }
+  },
+  {
+    "id": "TC-BATCH06-005",
+    "issue_file": "issue_so_77497897.md",
+    "issue_summary": "Invalidating and revalidating Sidebar Server Component inside layout.tsx does not update UI in Next.js 13 App Router.",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "revalidate layout Server Component cache on demand revalidatePath router refresh",
+      "pattern": "revalidatePath"
+    }
+  },
+  {
+    "id": "TC-BATCH06-006",
+    "issue_file": "issue_so_77551311.md",
+    "issue_summary": "Next.js Server Action file upload fails with fetch failed RequestContentLengthMismatchError.",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "Server Actions handle file upload FormData and configure serverActions bodySizeLimit",
+      "pattern": "bodySizeLimit"
+    }
+  },
+  {
+    "id": "TC-BATCH06-007",
+    "issue_file": "issue_so_77882079.md",
+    "issue_summary": "Handling external POST request with form-data to a page route in Next.js App Router causes runtime TypeError.",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "handle incoming POST request with form data in Next.js App Router using Route Handlers",
+      "pattern": "Route Handlers"
+    }
+  },
+  {
+    "id": "TC-BATCH06-008",
+    "issue_file": "issue_so_78266307.md",
+    "issue_summary": "Next.js Server Action receives empty FormData payload when form input fields lack name attribute inside react-hook-form Controller.",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "Server Actions forms and mutations empty FormData missing input name attribute",
+      "pattern": "FormData"
+    }
+  },
+  {
+    "id": "TC-BATCH06-009",
+    "issue_file": "issue_so_78358070.md",
+    "issue_summary": "Next.js App Router dynamic page does not re-render on client-side navigation due to Router Cache.",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "how to invalidate or opt out of client-side Router Cache on Link navigation for dynamic pages",
+      "pattern": "Router Cache"
+    }
+  },
+  {
+    "id": "TC-BATCH06-010",
+    "issue_file": "issue_so_78376253.md",
+    "issue_summary": "Server Actions redirect returns 303 See Other with x-action-redirect and results in 404 page on Vercel deployment.",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "redirect to another page after Server Action execution using next/navigation redirect",
+      "pattern": "redirect"
+    }
+  }
+]

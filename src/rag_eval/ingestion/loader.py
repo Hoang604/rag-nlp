@@ -5,6 +5,7 @@ import logging
 import os
 import threading
 import uuid
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
 import asyncpg
@@ -63,6 +64,7 @@ def get_embedding_model(
             model_kwargs=model_kwargs,
             device=device,
         )
+        model.max_seq_length = 2048
         if model.tokenizer is not None:
             model.tokenizer.padding_side = "left"
         model.eval()
@@ -88,6 +90,41 @@ def get_embedding_model(
         return None
 
 
+@dataclass(frozen=True)
+class ModelTextFormatter:
+    """Configurable instruction formatter for neural embedding models."""
+
+    query_prefix: str = ""
+    passage_prefix: str = ""
+
+    def format(self, texts: list[str], is_query: bool = False) -> list[str]:
+        prefix = self.query_prefix if is_query else self.passage_prefix
+        if not prefix:
+            return texts
+        return [
+            f"{prefix}{t}" if not t.startswith(prefix) else t
+            for t in texts
+        ]
+
+
+MODEL_FORMATTERS: dict[str, ModelTextFormatter] = {
+    "e5": ModelTextFormatter(query_prefix="query: ", passage_prefix="passage: "),
+    "bge": ModelTextFormatter(
+        query_prefix="Represent this sentence for searching relevant passages: ",
+        passage_prefix="",
+    ),
+}
+
+
+def get_model_formatter(model_name: str) -> ModelTextFormatter:
+    """Resolves the appropriate text formatter for a model family from the model registry."""
+    name_lower = model_name.lower()
+    for prefix_key, formatter in MODEL_FORMATTERS.items():
+        if prefix_key in name_lower:
+            return formatter
+    return ModelTextFormatter()
+
+
 def compute_chunk_embeddings(
     texts: list[str],
     model_name: str = DEFAULT_EMBEDDING_MODEL,
@@ -107,27 +144,42 @@ def compute_chunk_embeddings(
             data={"model_name": model_name},
         )
 
-    if "e5" in model_name.lower():
-        prefix = "query: " if is_query else "passage: "
-        formatted = [
-            f"{prefix}{t}" if not t.startswith(("query: ", "passage: ")) else t
-            for t in texts
-        ]
-    else:
-        formatted = texts
+    formatter = get_model_formatter(model_name)
+    formatted = formatter.format(texts, is_query=is_query)
 
     try:
         try:
             import torch
 
             with torch.inference_mode():
-                embeddings = model.encode(
-                    formatted,
-                    batch_size=batch_size,
-                    normalize_embeddings=True,
-                    show_progress_bar=len(texts) > 100,
-                    convert_to_numpy=True,
-                )
+                try:
+                    embeddings = model.encode(
+                        formatted,
+                        batch_size=batch_size,
+                        normalize_embeddings=True,
+                        show_progress_bar=len(texts) > 100,
+                        convert_to_numpy=True,
+                    )
+                except (torch.cuda.OutOfMemoryError, RuntimeError) as oom_exc:
+                    if "out of memory" in str(oom_exc).lower():
+                        torch.cuda.empty_cache()
+                        logger.warning(
+                            "CUDA OOM detected on batch size %d; falling back to item-by-item encoding.",
+                            batch_size,
+                        )
+                        embeddings = []
+                        for single_text in formatted:
+                            single_emb = model.encode(
+                                [single_text],
+                                batch_size=1,
+                                normalize_embeddings=True,
+                                show_progress_bar=False,
+                                convert_to_numpy=True,
+                            )
+                            embeddings.extend(single_emb)
+                            torch.cuda.empty_cache()
+                    else:
+                        raise
         except (ImportError, AttributeError):
             embeddings = model.encode(
                 formatted,
@@ -283,6 +335,7 @@ class PostgresBulkLoader:
                     target_chunk_id=e.target_chunk_id,
                     relation_type=e.relation_type,
                     rationale=e.rationale,
+                    citation_text=e.citation_text,
                 )
             )
 

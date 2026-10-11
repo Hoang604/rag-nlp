@@ -1,7 +1,5 @@
 import {
   CorpusDocument,
-  CorpusGrepPayload,
-  CorpusGrepResponse,
   GraphTraversePayload,
   GraphTraversalStep,
   GraphVisualizerResponse,
@@ -135,13 +133,6 @@ class ApiClient {
     );
   }
 
-  // 10. Corpus-wide Grep
-  async grepCorpus(payload: CorpusGrepPayload): Promise<CorpusGrepResponse> {
-    return this.request<CorpusGrepResponse>('/corpus/grep', {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
-  }
 }
 
 export const api = new ApiClient();

@@ -14,7 +14,7 @@ from rag_eval.mcp.tools import (
     HierarchicalNavigateResult,
     RelationType,
 )
-from rag_eval.schemas import VennSearchResult
+from rag_eval.schemas import RawDocumentSliceResult, VennSearchResult
 
 
 def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
@@ -58,6 +58,13 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
                 description="Phân biệt chữ hoa / chữ thường khi so khớp ký tự.",
             ),
         ] = False,
+        order_by_reading_order: Annotated[
+            bool,
+            Field(
+                default=False,
+                description="Sắp xếp kết quả verbatim theo thứ tự đọc trong tài liệu (start_line, path) thay vì điểm tương đồng.",
+            ),
+        ] = False,
         limit: Annotated[
             int,
             Field(
@@ -98,13 +105,14 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
             path_prefix=path_prefix or None,
             is_regex=is_regex,
             case_sensitive=case_sensitive,
+            order_by_reading_order=order_by_reading_order,
         )
 
     @server.tool(
         name="hierarchical_navigate",
         description=(
             "Duyệt cấu trúc cây phân cấp tài liệu xoay quanh một nút/chunk được chỉ định. "
-            "Duyệt các hướng: CHILDREN, PARENT_CHAIN, SIBLINGS."
+            "Duyệt các hướng: CHILDREN, PARENT_CHAIN, SIBLINGS, SUBTREE."
         ),
     )
     async def hierarchical_navigate(
@@ -183,6 +191,7 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
         name="link_chunks",
         description=(
             "Thiết lập cạnh quan hệ đồ thị tri thức ngữ nghĩa giữa 2 chunk dựa trên đường dẫn LTree phân cấp. "
+            "Bắt buộc cung cấp citation_text được trích dẫn chính xác từ chunk nguồn. "
             "Mã quan hệ phải thuộc danh mục hợp lệ (REFERENCES, SUPPORTS, CONTRADICTS, DEFINES, EXTENDS, EXEMPLIFIES, DEPENDS_ON, SUPERSEDES, SEE_ALSO)."
         ),
     )
@@ -205,6 +214,13 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
                 description="Mã quan hệ hệ thống hợp lệ kết nối hai chunk.",
             ),
         ],
+        citation_text: Annotated[
+            str,
+            Field(
+                min_length=1,
+                description="Đoạn văn trích dẫn nguyên văn từ chunk nguồn chứng minh quan hệ.",
+            ),
+        ],
         rationale: Annotated[
             str | None,
             Field(
@@ -217,6 +233,7 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
             source_path=source_path,
             target_path=target_path,
             relation_type=relation_type,
+            citation_text=citation_text,
             rationale=rationale,
         )
 
@@ -252,4 +269,43 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
             source_path=source_path,
             target_path=target_path,
             relation_type=relation_type,
+        )
+
+    @server.tool(
+        name="get_raw",
+        description=(
+            "Đọc văn bản gốc nguyên bản của tài liệu theo phạm vi dòng [start_line, end_line]. "
+            "Hỗ trợ truyền mã doc_slug hoặc đường dẫn LTree path của chunk để tự động nhận diện tài liệu. "
+            "Tối đa 200 dòng mỗi lần gọi để chống tràn context."
+        ),
+    )
+    async def get_raw(
+        path_or_slug: Annotated[
+            str,
+            Field(
+                min_length=1,
+                description="Mã định danh doc_slug của tài liệu hoặc LTree path của chunk bất kỳ trong tài liệu.",
+            ),
+        ],
+        start_line: Annotated[
+            int,
+            Field(
+                default=1,
+                ge=1,
+                description="Dòng bắt đầu cần đọc (1-indexed, mặc định là 1).",
+            ),
+        ] = 1,
+        end_line: Annotated[
+            int | None,
+            Field(
+                default=None,
+                ge=1,
+                description="Dòng kết thúc cần đọc (1-indexed). Để None để đọc tối đa 200 dòng kể từ start_line.",
+            ),
+        ] = None,
+    ) -> RawDocumentSliceResult:
+        return await tool_impl.get_raw(
+            path_or_slug=path_or_slug,
+            start_line=start_line,
+            end_line=end_line,
         )

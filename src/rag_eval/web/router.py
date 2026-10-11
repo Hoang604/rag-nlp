@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import datetime
 import logging
-import re
 import uuid
 
 import asyncpg
@@ -15,11 +14,7 @@ from rag_eval.retrieval.embedder import SentenceTransformerQueryEmbedder
 from rag_eval.retrieval.engine import RetrievalEngine
 from rag_eval.retrieval.enrichment import KnowledgeEnrichmentService
 from rag_eval.retrieval.reranker import CrossEncoderReranker
-from rag_eval.schemas import (
-    RelationType,
-    SearchHitDTO,
-    VerbatimGrepQuery,
-)
+from rag_eval.schemas import RelationType
 from rag_eval.web.schemas import (
     CorpusDocumentResponse,
     DocumentTreeResponse,
@@ -33,14 +28,10 @@ from rag_eval.web.schemas import (
     LinkChunksResponse,
     RawTextResponse,
     RelationTypeCatalogResponse,
-    SearchHitResponse,
     SearchRequest,
     SearchResponse,
     UnlinkChunksInput,
     UnlinkChunksResponse,
-    VerbatimGrepHitResponse,
-    VerbatimGrepRequest,
-    VerbatimGrepResponse,
 )
 from rag_eval.web.services import (
     TreeHierarchyBuilder,
@@ -74,73 +65,7 @@ def _get_retrieval_engine(request: Request) -> RetrievalEngine:
     return engine
 
 
-def _format_verbatim_grep_hits(
-    raw_hits: list[SearchHitDTO],
-    pattern: str,
-    is_regex: bool,
-    case_sensitive: bool,
-) -> list[VerbatimGrepHitResponse]:
-    """Helper trích xuất vị trí ký tự và định dạng snippet cho Web UI."""
-    hits: list[VerbatimGrepHitResponse] = []
-    for m in raw_hits:
-        offset = 0
-        match_len = len(pattern)
-        if is_regex:
-            flags = 0 if case_sensitive else re.IGNORECASE
-            try:
-                match_obj = re.search(pattern, m.verbatim_text, flags)
-                if match_obj:
-                    offset = match_obj.start()
-                    match_len = max(1, match_obj.end() - match_obj.start())
-            except re.error:
-                offset = 0
-        else:
-            if case_sensitive:
-                idx = m.verbatim_text.find(pattern)
-            else:
-                idx = m.verbatim_text.lower().find(pattern.lower())
-            offset = max(0, idx)
 
-        snippet_start = max(0, offset - 20)
-        snippet_end = min(len(m.verbatim_text), offset + match_len + 100)
-        snippet = m.verbatim_text[snippet_start:snippet_end]
-        hits.append(
-            VerbatimGrepHitResponse(
-                chunk_id=str(m.chunk_id),
-                doc_slug=m.doc_slug,
-                path=m.path,
-                start_line=m.start_line,
-                end_line=m.end_line,
-                char_offset=offset,
-                match_snippet=snippet,
-                verbatim_text=m.verbatim_text,
-                metadata=m.metadata,
-            )
-        )
-    return hits
-
-
-def _to_hit_responses(hits: list[SearchHitDTO]) -> list[SearchHitResponse]:
-    """Shapes engine hits for the wire, once, for every endpoint that returns them."""
-    responses: list[SearchHitResponse] = []
-    for rank, hit in enumerate(hits, start=1):
-        responses.append(
-            SearchHitResponse(
-                rank=rank,
-                doc_slug=hit.doc_slug,
-                doc_title=hit.doc_title,
-                path=hit.path,
-                verbatim_text=hit.verbatim_text,
-                contextualized_text=hit.contextualized_text,
-                score=hit.score,
-                dense_similarity=hit.dense_similarity,
-                keyword_matched=(hit.sparse_rank is not None and hit.sparse_rank < 999),
-                rerank_score=hit.rerank_score,
-                is_table=bool(hit.metadata.get("is_table")),
-                table_summary=str(hit.metadata["table_summary"]) if hit.metadata.get("table_summary") else None,
-            )
-        )
-    return responses
 
 
 @router.get("/health", response_model=HealthResponse)
@@ -332,6 +257,7 @@ async def link_document_chunks(
             source_path=payload.source_path,
             target_path=payload.target_path,
             relation_type=payload.relation_type,
+            citation_text=payload.citation_text,
             rationale=payload.rationale,
         )
         return LinkChunksResponse(
@@ -339,6 +265,7 @@ async def link_document_chunks(
             source_path=res.source_path,
             target_path=res.target_path,
             relation_type=res.relation_type,
+            citation_text=res.citation_text,
             created=res.created,
             rationale=res.rationale,
         )
@@ -382,24 +309,30 @@ async def search_corpus(request: Request, payload: SearchRequest) -> SearchRespo
     started = time.perf_counter()
     want_rerank = True if payload.rerank is None else payload.rerank
     try:
-        result = await engine.search(
+        result = await engine.search_venn(
             query=payload.query,
+            pattern=payload.pattern,
             limit=payload.limit,
             rerank=want_rerank,
             doc_slugs=payload.doc_slugs or None,
             path_prefix=payload.path_prefix or None,
+            is_regex=payload.is_regex,
+            case_sensitive=payload.case_sensitive,
+            order_by_reading_order=payload.order_by_reading_order,
         )
     except CorpusDomainError as exc:
         raise HTTPException(status_code=400, detail=exc.message) from exc
     elapsed = (time.perf_counter() - started) * 1000.0
 
-    hits = _to_hit_responses(result.hits)
-
     return SearchResponse(
-        query=payload.query,
+        query=result.query,
+        pattern=result.pattern,
         elapsed_ms=round(elapsed, 1),
         confidence=result.confidence,
-        hits=hits,
+        total_unique_hits=result.total_unique_hits,
+        both_hits=result.both_hits,
+        semantic_only_hits=result.semantic_only_hits,
+        verbatim_only_hits=result.verbatim_only_hits,
     )
 
 
@@ -469,38 +402,10 @@ async def traverse_document_graph(
             target_start_line=s.target_start_line,
             target_end_line=s.target_end_line,
             rationale=s.rationale,
+            citation_text=s.citation_text,
         )
         for s in steps
     ]
 
 
-@router.post("/corpus/grep", response_model=VerbatimGrepResponse)
-async def grep_corpus_verbatim(
-    request: Request, payload: VerbatimGrepRequest
-) -> VerbatimGrepResponse:
-    """Exact or regex grep across PostgreSQL corpus chunks via verbatim_grep repository call."""
-    pool = _get_db_pool(request)
-    if pool is None:
-        raise HTTPException(status_code=503, detail="Database is not connected.")
 
-    repo = CorpusRepository(pool)
-    query_dto = VerbatimGrepQuery(
-        query_pattern=payload.pattern,
-        target_documents=None,
-        path_prefix=None,
-        is_regex=payload.is_regex,
-        case_sensitive=payload.case_sensitive,
-        match_limit=payload.limit,
-    )
-    raw_hits, total_matches = await repo.chunks.verbatim_grep(query_dto)
-    hits = _format_verbatim_grep_hits(
-        raw_hits, payload.pattern, payload.is_regex, payload.case_sensitive
-    )
-    return VerbatimGrepResponse(
-        pattern=payload.pattern,
-        is_regex=payload.is_regex,
-        total_matches=total_matches,
-        returned=len(hits),
-        truncated=(total_matches > len(hits)),
-        matches=hits,
-    )

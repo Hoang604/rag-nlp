@@ -8,9 +8,11 @@ import asyncpg
 
 from rag_eval.db.repositories import CorpusRepository
 from rag_eval.ingestion.loader import DEFAULT_EMBEDDING_MODEL, PostgresBulkLoader
-from rag_eval.ingestion.parser.engine import DocumentIngestionEngine
+from rag_eval.ingestion.parsers import NextJSMDXParser
+from rag_eval.ingestion.registry import CodingParserRegistry, UnsupportedFrameworkError
 from rag_eval.schemas import (
     ChunkEntity,
+    CorpusIngestionSummary,
     DocumentEntity,
     GraphEdgeEntity,
     IngestionResult,
@@ -21,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 class DirectIngestionCoordinator:
-    """Coordinates parsing documents into draft entities and atomically upserting to PostgreSQL with embeddings."""
+    """Coordinates parsing documents into draft entities via CodingParserRegistry and atomically upserting to PostgreSQL."""
 
     def __init__(
         self,
@@ -30,7 +32,6 @@ class DirectIngestionCoordinator:
         embedding_model: str = DEFAULT_EMBEDDING_MODEL,
         corpus_repo: CorpusRepository | None = None,
         loader: PostgresBulkLoader | None = None,
-        engine: DocumentIngestionEngine | None = None,
     ) -> None:
         self.pool = pool
         self.compute_embeddings = compute_embeddings
@@ -42,7 +43,8 @@ class DirectIngestionCoordinator:
             embedding_model=embedding_model,
             corpus_repo=self.corpus_repo,
         )
-        self.engine = engine if engine is not None else DocumentIngestionEngine()
+        # Ensure default framework parsers are registered
+        CodingParserRegistry.register(NextJSMDXParser())
 
     async def _ingest_draft(
         self,
@@ -113,6 +115,7 @@ class DirectIngestionCoordinator:
                         source_chunk_id=src_id,
                         target_chunk_id=tgt_id,
                         relation_type=rel,
+                        citation_text=e.citation_text,
                     )
                 )
 
@@ -130,17 +133,22 @@ class DirectIngestionCoordinator:
     async def ingest_file(
         self,
         file_path: Path | str,
-        doc_slug: str,
-        title: str,
+        doc_slug: str | None = None,
+        title: str | None = None,
         metadata: dict[str, object] | None = None,
         overwrite: bool = True,
     ) -> IngestionResult:
-        draft = self.engine.process_file(
-            doc_slug=doc_slug,
-            title=title,
-            file_path=file_path,
-            metadata=metadata,
-        )
+        import dataclasses
+
+        path = Path(file_path).resolve()
+        parser = CodingParserRegistry.get_parser(path)
+        draft = parser.parse(file_path=path, doc_slug=doc_slug)
+        if title:
+            draft = dataclasses.replace(draft, title=title)
+        if metadata:
+            merged_meta = dict(draft.metadata)
+            merged_meta.update(metadata)
+            draft = dataclasses.replace(draft, metadata=merged_meta)
         return await self._ingest_draft(draft, overwrite=overwrite)
 
     async def ingest_raw(
@@ -151,13 +159,22 @@ class DirectIngestionCoordinator:
         metadata: dict[str, object] | None = None,
         overwrite: bool = True,
     ) -> IngestionResult:
-        draft = self.engine.process_raw(
-            doc_slug=doc_slug,
-            title=title,
-            raw_text=raw_text,
-            metadata=metadata,
-        )
-        return await self._ingest_draft(draft, overwrite=overwrite)
+        import tempfile
+
+        with tempfile.NamedTemporaryFile("w", suffix=".mdx", encoding="utf-8", delete=False) as f:
+            f.write(raw_text)
+            temp_path = Path(f.name)
+
+        try:
+            return await self.ingest_file(
+                file_path=temp_path,
+                doc_slug=doc_slug,
+                title=title,
+                metadata=metadata,
+                overwrite=overwrite,
+            )
+        finally:
+            temp_path.unlink(missing_ok=True)
 
     async def ingest_bytes(
         self,
@@ -165,16 +182,67 @@ class DirectIngestionCoordinator:
         file_name: str,
         doc_slug: str,
         title: str,
-        mime_type: str | None = None,
         metadata: dict[str, object] | None = None,
         overwrite: bool = True,
     ) -> IngestionResult:
-        draft = self.engine.process_bytes(
-            doc_slug=doc_slug,
-            title=title,
-            content=content,
-            file_name=file_name,
-            mime_type=mime_type,
-            metadata=metadata,
+        import tempfile
+
+        suffix = Path(file_name).suffix
+        if not suffix:
+            raise UnsupportedFrameworkError(
+                f"File '{file_name}' has no extension; unable to determine framework parser."
+            )
+        with tempfile.NamedTemporaryFile("wb", suffix=suffix, delete=False) as f:
+            f.write(content)
+            temp_path = Path(f.name)
+
+        try:
+            return await self.ingest_file(
+                file_path=temp_path,
+                doc_slug=doc_slug,
+                title=title,
+                metadata=metadata,
+                overwrite=overwrite,
+            )
+        finally:
+            temp_path.unlink(missing_ok=True)
+
+    async def ingest_corpus(
+        self,
+        file_paths: list[Path],
+        corpus_root: Path,
+        overwrite: bool = True,
+    ) -> CorpusIngestionSummary:
+        """Executes single-pass corpus ingestion atomically across all files via CodingParserRegistry."""
+        total_chunks = 0
+        total_docs = 0
+        skipped_docs = 0
+
+        for idx, file_path in enumerate(file_paths, start=1):
+            try:
+                parser = CodingParserRegistry.get_parser(file_path)
+                draft = parser.parse(file_path=file_path, corpus_root=corpus_root)
+                res = await self._ingest_draft(draft, overwrite=overwrite)
+                if res.skipped:
+                    skipped_docs += 1
+                    logger.info("(%d/%d) Skipped existing '%s'", idx, len(file_paths), draft.doc_slug)
+                else:
+                    total_docs += 1
+                    total_chunks += res.chunks_count
+                    logger.info(
+                        "(%d/%d) Ingested '%s' (%d chunks)",
+                        idx,
+                        len(file_paths),
+                        draft.doc_slug,
+                        res.chunks_count,
+                    )
+            except Exception as exc:
+                logger.error("Failed to ingest file %s: %s", file_path, exc)
+                raise
+
+        return CorpusIngestionSummary(
+            total_documents=total_docs,
+            total_chunks=total_chunks,
+            total_edges=0,
+            skipped_documents=skipped_docs,
         )
-        return await self._ingest_draft(draft, overwrite=overwrite)

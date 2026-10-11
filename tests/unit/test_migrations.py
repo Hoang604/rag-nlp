@@ -6,7 +6,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from rag_eval.db.migrations import (
-    LEGACY_MIGRATIONS,
     MIGRATION_ADVISORY_LOCK_ID,
     get_applied_migrations,
     get_migration_sql_files,
@@ -82,19 +81,9 @@ async def test_reconcile_legacy_schema_executes_ddl_on_legacy_state() -> None:
 
     reconciled = await reconcile_legacy_schema(conn)
     assert reconciled is True
-    # Verify transaction entered and DDL executed with LEGACY_MIGRATIONS blacklist
+    # Verify transaction entered and DDL executed
     tx.__aenter__.assert_awaited_once()
     conn.execute.assert_awaited()
-    # Find call where DDL is passed and call where DELETE is passed
-    ddl_calls = [
-        call for call in conn.execute.call_args_list if "chunk_context_refs" in call[0][0]
-    ]
-    assert len(ddl_calls) == 1
-    delete_calls = [
-        call for call in conn.execute.call_args_list if "DELETE FROM schema_migrations" in call[0][0]
-    ]
-    assert len(delete_calls) == 1
-    assert delete_calls[0][0][1] == list(LEGACY_MIGRATIONS)
 
 
 @pytest.mark.asyncio

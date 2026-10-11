@@ -55,6 +55,7 @@ STATIC_SERVER_INSTRUCTIONS = """# RAG CORPUS PROTOCOL & KNOWLEDGE GRAPH INVARIAN
 Retrieval direction is governed by token specificity and contextual completeness:
 - Dual-Channel Retrieval: Unified hybrid_search concurrently gathers semantic context (query) and literal keyword anchors (pattern), partitioned into disjoint Venn sets.
 - Contextual Expansion: When a retrieved chunk possesses an unresolved referential deficit, expand locally along the hierarchical tree (`hierarchical_navigate`) or follow semantic relations through the knowledge graph (`graph_traverse`) rather than issuing ungrounded global queries.
+- Raw Document Inspection: When chunks appear cleaved, truncated, or missing adjacent lines, inspect authentic unparsed document text via `get_raw` (up to 200 lines per call).
 
 ## 3. GROUNDING & AUTHORITATIVE CITATION CONTRACT
 - Every claim, inference, or synthesis must be explicitly grounded in retrieved leaf chunks and cited via exact hierarchical paths.

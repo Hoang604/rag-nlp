@@ -60,9 +60,63 @@ async def test_single_hit_reranking() -> None:
 
 
 def test_confidence_calibration() -> None:
-    """Verifies that confidence is accurately calibrated: high dense similarity gives 'high' even with sparse rank 999."""
-    # Test High Confidence: dense similarity >= 0.82
-    high_dense_hit = SearchHitDTO(
+    """Verifies that confidence is accurately calibrated:
+    - With confirmed sparse match (sparse_rank < 999): evaluates high (>=0.82), medium (>=0.70), or low (<0.70).
+    - Without sparse match (sparse_rank = 999): strictly gated to low (>=0.70) or none (<0.70), never high or medium.
+    - Reranker veto: overrides confirmed sparse high confidence to low if scores are below threshold.
+    """
+    # 1. Confirmed Sparse Match Cases
+    high_dense_sparse_hit = SearchHitDTO(
+        chunk_id=uuid.uuid4(),
+        doc_slug="test_doc",
+        doc_title="Technical Document",
+        path="test_doc.sec_1",
+        start_line=1,
+        end_line=2,
+        verbatim_text="Core specification content.",
+        contextualized_text="Core specification content.",
+        score=0.91,
+        dense_similarity=0.91,
+        dense_rank=1,
+        sparse_rank=1,
+    )
+    assert compute_search_confidence([high_dense_sparse_hit]) == "high"
+
+    med_dense_sparse_hit = SearchHitDTO(
+        chunk_id=uuid.uuid4(),
+        doc_slug="test_doc",
+        doc_title="Technical Document",
+        path="test_doc.sec_1",
+        start_line=1,
+        end_line=2,
+        verbatim_text="Core specification content.",
+        contextualized_text="Core specification content.",
+        score=0.75,
+        dense_similarity=0.75,
+        dense_rank=2,
+        sparse_rank=1,
+    )
+    assert compute_search_confidence([med_dense_sparse_hit]) == "medium"
+
+    low_dense_sparse_hit = SearchHitDTO(
+        chunk_id=uuid.uuid4(),
+        doc_slug="test_doc",
+        doc_title="Technical Document",
+        path="test_doc.sec_1",
+        start_line=1,
+        end_line=2,
+        verbatim_text="Core specification content.",
+        contextualized_text="Core specification content.",
+        score=0.55,
+        dense_similarity=0.55,
+        dense_rank=10,
+        sparse_rank=1,
+    )
+    assert compute_search_confidence([low_dense_sparse_hit]) == "low"
+
+    # 2. Sparse Match Gating Cases (sparse_rank = 999: no sparse match)
+    # Even with high dense similarity (0.91), absence of sparse match strictly caps confidence at "low"
+    high_dense_unsparse_hit = SearchHitDTO(
         chunk_id=uuid.uuid4(),
         doc_slug="test_doc",
         doc_title="Technical Document",
@@ -76,10 +130,9 @@ def test_confidence_calibration() -> None:
         dense_rank=1,
         sparse_rank=999,
     )
-    assert compute_search_confidence([high_dense_hit]) == "high"
+    assert compute_search_confidence([high_dense_unsparse_hit]) == "low"
 
-    # Test Medium Confidence: dense similarity between 0.70 and 0.82
-    med_dense_hit = SearchHitDTO(
+    med_dense_unsparse_hit = SearchHitDTO(
         chunk_id=uuid.uuid4(),
         doc_slug="test_doc",
         doc_title="Technical Document",
@@ -93,10 +146,10 @@ def test_confidence_calibration() -> None:
         dense_rank=2,
         sparse_rank=999,
     )
-    assert compute_search_confidence([med_dense_hit]) == "medium"
+    assert compute_search_confidence([med_dense_unsparse_hit]) == "low"
 
-    # Test None Confidence: dense < 0.70 and sparse is 999
-    low_hit = SearchHitDTO(
+    # Low dense (<0.70) without sparse match evaluates to "none"
+    low_unsparse_hit = SearchHitDTO(
         chunk_id=uuid.uuid4(),
         doc_slug="test_doc",
         doc_title="Technical Document",
@@ -110,4 +163,23 @@ def test_confidence_calibration() -> None:
         dense_rank=15,
         sparse_rank=999,
     )
-    assert compute_search_confidence([low_hit]) == "none"
+    assert compute_search_confidence([low_unsparse_hit]) == "none"
+
+    # 3. Reranker Veto Case
+    vetoed_hit = SearchHitDTO(
+        chunk_id=uuid.uuid4(),
+        doc_slug="test_doc",
+        doc_title="Technical Document",
+        path="test_doc.sec_1",
+        start_line=1,
+        end_line=2,
+        verbatim_text="Core specification content.",
+        contextualized_text="Core specification content.",
+        score=0.91,
+        dense_similarity=0.91,
+        dense_rank=1,
+        sparse_rank=1,
+        rerank_score=-1.5,
+    )
+    assert compute_search_confidence([vetoed_hit]) == "low"
+

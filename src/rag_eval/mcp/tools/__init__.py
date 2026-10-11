@@ -4,12 +4,10 @@ from rag_eval.mcp.tools.enrichment import CorpusEnrichmentTools
 from rag_eval.mcp.tools.sensors import (
     HIERARCHICAL_DIRECTION_DESCRIPTION,
     HIERARCHICAL_DIRECTION_DOCS,
+    MAX_RAW_LINES,
     RERANK_POOL,
-    AgentGraphTraversalStep,
-    AgentHierarchyNode,
     CorpusRuntimeSensors,
     GraphDirection,
-    GraphTraverseResult,
     HierarchicalNavigateResult,
 )
 from rag_eval.retrieval.embedder import (
@@ -18,8 +16,12 @@ from rag_eval.retrieval.embedder import (
 )
 from rag_eval.retrieval.reranker import CorpusReranker
 from rag_eval.schemas import (
+    AgentGraphTraversalStep,
+    AgentHierarchyNode,
     AgentVennHit,
+    GraphTraverseResult,
     HierarchicalDirection,
+    RawDocumentSliceResult,
     RelationType,
     VennSearchResult,
 )
@@ -58,6 +60,7 @@ class CorpusMCPTools:
         path_prefix: str | None = None,
         is_regex: bool = False,
         case_sensitive: bool = False,
+        order_by_reading_order: bool = False,
     ) -> VennSearchResult:
         return await self._sensors.hybrid_search(
             query=query,
@@ -69,6 +72,7 @@ class CorpusMCPTools:
             path_prefix=path_prefix,
             is_regex=is_regex,
             case_sensitive=case_sensitive,
+            order_by_reading_order=order_by_reading_order,
         )
 
     async def hierarchical_navigate(
@@ -101,12 +105,14 @@ class CorpusMCPTools:
         source_path: str,
         target_path: str,
         relation_type: RelationType | str,
+        citation_text: str,
         rationale: str | None = None,
     ) -> dict[str, object]:
         return await self._enrichment.link_chunks(
             source_path=source_path,
             target_path=target_path,
             relation_type=relation_type,
+            citation_text=citation_text,
             rationale=rationale,
         )
 
@@ -122,10 +128,23 @@ class CorpusMCPTools:
             relation_type=relation_type,
         )
 
+    async def get_raw(
+        self,
+        path_or_slug: str,
+        start_line: int = 1,
+        end_line: int | None = None,
+    ) -> RawDocumentSliceResult:
+        return await self._sensors.get_raw(
+            path_or_slug=path_or_slug,
+            start_line=start_line,
+            end_line=end_line,
+        )
+
 
 __all__ = [
     "HIERARCHICAL_DIRECTION_DESCRIPTION",
     "HIERARCHICAL_DIRECTION_DOCS",
+    "MAX_RAW_LINES",
     "RERANK_POOL",
     "AgentGraphTraversalStep",
     "AgentHierarchyNode",
@@ -139,6 +158,7 @@ __all__ = [
     "HierarchicalDirection",
     "HierarchicalNavigateResult",
     "QueryEmbedder",
+    "RawDocumentSliceResult",
     "RelationType",
     "SentenceTransformerQueryEmbedder",
     "VennSearchResult",

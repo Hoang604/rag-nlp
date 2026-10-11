@@ -40,6 +40,23 @@ services:
           cpus: '0.5'
           memory: 512M
 
+  docling:
+    image: quay.io/docling-project/docling-serve:latest
+    container_name: rag_docling
+    restart: unless-stopped
+    profiles:
+      - docling
+    ports:
+      - "5001:5001"
+    deploy:
+      resources:
+        limits:
+          cpus: '8.0'
+          memory: 14336M
+        reservations:
+          cpus: '1.0'
+          memory: 2048M
+
 volumes:
   postgres_data:
     driver: local

@@ -1,0 +1,102 @@
+[
+  {
+    "id": "TC-BATCH03-001",
+    "issue_file": "issue_51788.md",
+    "issue_summary": "Next.js 13 App Router caches Supabase fetched data even when setting 'revalidate = 0' route segment config.",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "route segment config revalidate 0 dynamic force-dynamic disable caching data fetching",
+      "pattern": "export const revalidate"
+    }
+  },
+  {
+    "id": "TC-BATCH03-002",
+    "issue_file": "issue_52711.md",
+    "issue_summary": "Vercel deployment ENOENT error for missing Shiki theme JSON files in serverless function bundle.",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "include missing node_modules files in serverless deployment output outputFileTracingIncludes",
+      "pattern": "outputFileTracingIncludes"
+    }
+  },
+  {
+    "id": "TC-BATCH03-003",
+    "issue_file": "issue_53724.md",
+    "issue_summary": "Configuring i18n in next.config.js breaks App Router routing causing 404 errors on all pages.",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "internationalization routing configuration in app router i18n next.config.js",
+      "pattern": "i18n"
+    }
+  },
+  {
+    "id": "TC-BATCH03-004",
+    "issue_file": "issue_54133.md",
+    "issue_summary": "Next.js self-hosted Docker standalone setup breaks router navigation and redirects to internal Docker IP.",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "self-hosted docker deployment output standalone middleware redirect proxy headers",
+      "pattern": "output: 'standalone'"
+    }
+  },
+  {
+    "id": "TC-BATCH03-005",
+    "issue_file": "issue_54173.md",
+    "issue_summary": "revalidatePath() does not trigger component re-render for Parallel Routes or Intercepting Routes modal.",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "revalidatePath server actions on-demand cache revalidation parallel routes",
+      "pattern": "revalidatePath"
+    }
+  },
+  {
+    "id": "TC-BATCH03-006",
+    "issue_file": "issue_54217.md",
+    "issue_summary": "Server-side locale in getServerSideProps always resolves to default locale during client-side dynamic navigation with middleware.",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "middleware internationalized routing dynamic routes getServerSideProps locale",
+      "pattern": "getServerSideProps"
+    }
+  },
+  {
+    "id": "TC-BATCH03-007",
+    "issue_file": "issue_54393.md",
+    "issue_summary": "App Router static export output fails with missing generateStaticParams error on dynamic route segments.",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "static HTML export dynamic route segments generateStaticParams output export",
+      "pattern": "generateStaticParams"
+    }
+  },
+  {
+    "id": "TC-BATCH03-008",
+    "issue_file": "issue_55648.md",
+    "issue_summary": "Next.js 13.5.1 enters 307 redirect loop when using i18n localeDetection with middleware.",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "disable automatic locale redirection localeDetection next.config.js middleware redirect loop",
+      "pattern": "localeDetection"
+    }
+  },
+  {
+    "id": "TC-BATCH03-009",
+    "issue_file": "issue_55960.md",
+    "issue_summary": "revalidateTag() behaves unpredictably when revalidating tagged fetch requests across routes.",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "on demand cache revalidation fetch tags revalidateTag app router",
+      "pattern": "revalidateTag"
+    }
+  },
+  {
+    "id": "TC-BATCH03-010",
+    "issue_file": "issue_56018.md",
+    "issue_summary": "Routes using fetch revalidation return 304 on non-conditional requests due to cached conditional response.",
+    "tool_name": "hybrid_search",
+    "arguments": {
+      "query": "time-based revalidation fetch revalidate option cache headers conditional requests",
+      "pattern": "next: { revalidate"
+    }
+  }
+]

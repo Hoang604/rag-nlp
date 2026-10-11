@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 import uuid
 
@@ -27,7 +26,7 @@ ChunkInsertTuple = tuple[
     int,
     int,
     list[float] | None,
-    str,
+    dict[str, object],
 ]
 
 
@@ -71,7 +70,7 @@ class ChunkRepository(BaseRepository):
                     c.start_line,
                     c.end_line,
                     c.embedding,
-                    json.dumps(meta),
+                    meta,
                 )
             )
 
@@ -166,6 +165,37 @@ class ChunkRepository(BaseRepository):
         except (asyncpg.PostgresError, OSError, RuntimeError) as exc:
             raise self._translate_error(f"list_chunks_by_document({document_id})", exc) from exc
 
+    async def list_unembedded(
+        self, limit: int | None = None, conn: asyncpg.Connection | None = None
+    ) -> list[tuple[uuid.UUID, str]]:
+        """Retrieves chunks that do not yet have dense vector embeddings."""
+        query = "SELECT id, contextualized_text FROM chunks WHERE embedding IS NULL ORDER BY created_at ASC"
+        if limit is not None:
+            query += f" LIMIT {int(limit)}"
+        try:
+            async with self._connection_scope(conn) as c:
+                rows = await c.fetch(query)
+                return [(uuid.UUID(str(r["id"])), str(r["contextualized_text"])) for r in rows]
+        except (asyncpg.PostgresError, OSError, RuntimeError) as exc:
+            raise self._translate_error("list_unembedded", exc) from exc
+
+    async def update_embeddings_batch(
+        self,
+        updates: list[tuple[uuid.UUID, list[float]]],
+        conn: asyncpg.Connection | None = None,
+    ) -> int:
+        """Batch updates embeddings for existing chunks by their UUIDs."""
+        if not updates:
+            return 0
+        query = "UPDATE chunks SET embedding = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2;"
+        records = [(emb, chunk_id) for chunk_id, emb in updates]
+        try:
+            async with self._connection_scope(conn) as c:
+                await c.executemany(query, records)
+                return len(records)
+        except (asyncpg.PostgresError, OSError, RuntimeError) as exc:
+            raise self._translate_error("update_embeddings_batch", exc) from exc
+
     async def delete_stale_by_paths(
         self,
         document_id: uuid.UUID,
@@ -239,7 +269,7 @@ class ChunkRepository(BaseRepository):
             verbatim_text, contextualized_text,
             metadata, similarity_score, full_count
         FROM verbatim_grep(
-            $1, $2::text[], $3::ltree, $4::boolean, $5::boolean, $6::int
+            $1, $2::text[], $3::ltree, $4::boolean, $5::boolean, $6::int, $7::boolean
         );
         """
         try:
@@ -252,6 +282,7 @@ class ChunkRepository(BaseRepository):
                     query.is_regex,
                     query.case_sensitive,
                     query.match_limit,
+                    query.order_by_reading_order,
                 )
                 if not rows:
                     return [], 0
@@ -345,6 +376,17 @@ class ChunkRepository(BaseRepository):
               AND c.path != $2::ltree
             ORDER BY c.start_line ASC, c.path ASC;
             """
+        elif dir_val == "SUBTREE":
+            query = """
+            SELECT c.id, c.path::text, d.doc_slug, c.start_line, c.end_line,
+                   c.verbatim_text, c.contextualized_text, c.metadata
+            FROM chunks c
+            JOIN documents d ON c.document_id = d.id
+            WHERE c.document_id = $1
+              AND c.path <@ $2::ltree
+              AND c.path != $2::ltree
+            ORDER BY c.start_line ASC, c.path ASC;
+            """
         else:
             raise ValueError(f"Unsupported navigation direction: '{direction}'")
 
@@ -352,6 +394,53 @@ class ChunkRepository(BaseRepository):
             async with self._connection_scope(conn) as c:
                 rows = await c.fetch(query, document_id, anchor_path)
                 anchor_level = len(anchor_path.split("."))
+                if not rows and dir_val == "PARENT_CHAIN":
+                    anchor_row = await c.fetchrow(
+                        """
+                        SELECT c.id, c.path::text, d.doc_slug, d.title as doc_title,
+                               c.start_line, c.end_line, c.metadata
+                        FROM chunks c
+                        JOIN documents d ON c.document_id = d.id
+                        WHERE c.document_id = $1 AND c.path = $2::ltree;
+                        """,
+                        document_id,
+                        anchor_path,
+                    )
+                    if anchor_row:
+                        doc_slug = str(anchor_row["doc_slug"])
+                        doc_title = str(anchor_row["doc_title"])
+                        meta = self._parse_metadata(anchor_row["metadata"])
+                        raw_ancestors = meta.get("ancestor_titles")
+                        ancestor_titles = (
+                            [str(a) for a in raw_ancestors]
+                            if isinstance(raw_ancestors, list) and raw_ancestors
+                            else ([doc_title] if doc_title else [])
+                        )
+                        path_segments = anchor_path.split(".")
+                        parent_nodes: list[HierarchyNodeDTO] = []
+                        doc_level = len(doc_slug.split("."))
+                        for lvl in range(doc_level, anchor_level):
+                            prefix_path = ".".join(path_segments[:lvl])
+                            title_idx = min(lvl - doc_level, len(ancestor_titles) - 1) if ancestor_titles else 0
+                            lvl_title = ancestor_titles[title_idx] if ancestor_titles else prefix_path
+                            node_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, f"{document_id}:{prefix_path}")
+                            h_prefix = "#" * max(1, min(6, (lvl - doc_level + 1)))
+                            verb = f"{h_prefix} {lvl_title}"
+                            parent_nodes.append(
+                                HierarchyNodeDTO(
+                                    chunk_id=node_uuid,
+                                    path=prefix_path,
+                                    doc_slug=doc_slug,
+                                    start_line=1,
+                                    end_line=int(anchor_row["end_line"]),
+                                    verbatim_text=verb,
+                                    contextualized_text=f"[{' > '.join(ancestor_titles[:title_idx+1])}]\n{verb}" if ancestor_titles else verb,
+                                    metadata={"node_type": "SECTION" if lvl > doc_level else "DOCUMENT", "title": lvl_title},
+                                    relative_depth=lvl - anchor_level,
+                                )
+                            )
+                        return parent_nodes
+
                 return [
                     HierarchyNodeDTO(
                         chunk_id=uuid.UUID(str(r["id"])),

@@ -36,6 +36,7 @@ class CorpusEnrichmentTools:
         source_path: str,
         target_path: str,
         relation_type: RelationType | str,
+        citation_text: str,
         rationale: str | None = None,
     ) -> dict[str, object]:
         """Thiết lập cạnh quan hệ giữa 2 chunk dựa trên LTree path."""
@@ -44,6 +45,7 @@ class CorpusEnrichmentTools:
             source_path=source_path,
             target_path=target_path,
             relation_type=relation_type,
+            citation_text=citation_text,
             rationale=rationale,
         )
         return {
@@ -51,6 +53,7 @@ class CorpusEnrichmentTools:
             "source_path": res.source_path,
             "target_path": res.target_path,
             "relation_type": res.relation_type.value,
+            "citation_text": res.citation_text,
             "created": res.created,
             "rationale": res.rationale,
         }

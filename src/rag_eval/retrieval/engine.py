@@ -15,6 +15,8 @@ from rag_eval.schemas import (
     SearchHitDTO,
     VennSearchResult,
     VerbatimGrepQuery,
+    clean_node_metadata,
+    split_context_and_text,
 )
 
 
@@ -101,6 +103,7 @@ class RetrievalEngine:
         path_prefix: str | None = None,
         is_regex: bool = False,
         case_sensitive: bool = False,
+        order_by_reading_order: bool = False,
     ) -> VennSearchResult:
         """Executes concurrent dual-channel search, computes disjoint Venn sets,
         evaluates CrossEncoder reranking, and dynamically computes confidence.
@@ -135,6 +138,7 @@ class RetrievalEngine:
                 is_regex=is_regex,
                 case_sensitive=case_sensitive,
                 match_limit=limit,
+                order_by_reading_order=order_by_reading_order,
             )
             hits, _ = await repo.chunks.verbatim_grep(grep_dto)
             return hits[:limit]
@@ -160,18 +164,17 @@ class RetrievalEngine:
 
         # 1. Evaluate semantic hits: route to both_hits or semantic_only_hits
         for path, (s_rank, s_hit) in semantic_map.items():
+            s_ctx, s_txt = split_context_and_text(s_hit.contextualized_text, s_hit.verbatim_text)
             if path in verbatim_map:
                 v_rank, v_hit = verbatim_map[path]
                 both_hits.append(
                     AgentVennHit(
-                        doc_slug=s_hit.doc_slug,
-                        doc_title=s_hit.doc_title,
                         path=s_hit.path,
                         start_line=s_hit.start_line,
                         end_line=s_hit.end_line,
-                        verbatim_text=s_hit.verbatim_text,
-                        contextualized_text=s_hit.contextualized_text,
-                        metadata=dict(s_hit.metadata),
+                        context=s_ctx,
+                        text=s_txt,
+                        metadata=clean_node_metadata(s_hit.metadata),
                         semantic_rank=s_rank,
                         verbatim_rank=v_rank,
                         semantic_score=float(s_hit.score),
@@ -184,14 +187,12 @@ class RetrievalEngine:
             else:
                 semantic_only_hits.append(
                     AgentVennHit(
-                        doc_slug=s_hit.doc_slug,
-                        doc_title=s_hit.doc_title,
                         path=s_hit.path,
                         start_line=s_hit.start_line,
                         end_line=s_hit.end_line,
-                        verbatim_text=s_hit.verbatim_text,
-                        contextualized_text=s_hit.contextualized_text,
-                        metadata=dict(s_hit.metadata),
+                        context=s_ctx,
+                        text=s_txt,
+                        metadata=clean_node_metadata(s_hit.metadata),
                         semantic_rank=s_rank,
                         verbatim_rank=None,
                         semantic_score=float(s_hit.score),
@@ -205,16 +206,15 @@ class RetrievalEngine:
         # 2. Evaluate verbatim hits: route remaining to verbatim_only_hits
         for path, (v_rank, v_hit) in verbatim_map.items():
             if path not in semantic_map:
+                v_ctx, v_txt = split_context_and_text(v_hit.contextualized_text, v_hit.verbatim_text)
                 verbatim_only_hits.append(
                     AgentVennHit(
-                        doc_slug=v_hit.doc_slug,
-                        doc_title=v_hit.doc_title,
                         path=v_hit.path,
                         start_line=v_hit.start_line,
                         end_line=v_hit.end_line,
-                        verbatim_text=v_hit.verbatim_text,
-                        contextualized_text=v_hit.contextualized_text,
-                        metadata=dict(v_hit.metadata),
+                        context=v_ctx,
+                        text=v_txt,
+                        metadata=clean_node_metadata(v_hit.metadata),
                         semantic_rank=None,
                         verbatim_rank=v_rank,
                         semantic_score=None,
