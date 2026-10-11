@@ -38,35 +38,29 @@ export interface GraphVisualizerResponse {
   edges: GraphVisualizerEdge[];
 }
 
-export interface LinkChunksPayload {
+export interface EdgeKey {
   source_path: string;
   target_path: string;
   relation_type: string;
+}
+
+export interface EdgeProposal extends EdgeKey {
   citation_text: string;
   rationale?: string | null;
 }
 
-export interface LinkChunksResponse {
-  status: string;
-  source_path: string;
-  target_path: string;
-  relation_type: string;
-  citation_text: string;
-  created: boolean;
-  rationale?: string | null;
+export interface CurateEdgesPayload {
+  add_edges?: EdgeProposal[] | null;
+  remove_edges?: EdgeKey[] | null;
+  reason: string;
 }
 
-export interface UnlinkChunksPayload {
-  source_path: string;
-  target_path: string;
-  relation_type?: string | null;
-}
-
-export interface UnlinkChunksResponse {
-  status: string;
-  source_path: string;
-  target_path: string;
-  removed_edges_count: number;
+export interface CurateEdgesResult {
+  added: EdgeKey[];
+  existing: EdgeKey[];
+  removed: EdgeKey[];
+  not_found: EdgeKey[];
+  message: string;
 }
 
 export interface SearchPayload {
@@ -81,18 +75,26 @@ export interface SearchPayload {
   order_by_reading_order?: boolean;
 }
 
-export interface AgentVennHit {
+export interface SearchDocument {
+  title: string;
+  doc_slug: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface SearchProvision {
   path: string;
+  text: string;
   start_line: number;
   end_line: number;
-  context: string;
-  text: string;
   metadata?: Record<string, unknown>;
-  semantic_rank?: number | null;
-  verbatim_rank?: number | null;
-  semantic_score?: number | null;
-  verbatim_score?: number | null;
-  rerank_score?: number | null;
+  found_in: 'both' | 'semantic_only' | 'verbatim_only';
+  rank: number;
+}
+
+export interface ProvisionGroup<P = SearchProvision> {
+  doc_slug: string;
+  context: string;
+  provisions: P[];
 }
 
 export interface SearchResponse {
@@ -100,10 +102,10 @@ export interface SearchResponse {
   pattern: string;
   elapsed_ms: number;
   confidence: 'high' | 'medium' | 'low' | 'none' | string;
-  total_unique_hits: number;
-  both_hits: AgentVennHit[];
-  semantic_only_hits: AgentVennHit[];
-  verbatim_only_hits: AgentVennHit[];
+  documents: Record<string, SearchDocument>;
+  groups: ProvisionGroup[];
+  verbatim_total: number;
+  verbatim_truncated: boolean;
 }
 
 export interface RelationTypeCatalogItem {

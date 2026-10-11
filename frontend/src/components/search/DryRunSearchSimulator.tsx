@@ -8,7 +8,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { api } from '../../services/api';
-import { AgentVennHit, CorpusDocument, SearchResponse } from '../../types/api';
+import { CorpusDocument, SearchProvision, SearchResponse } from '../../types/api';
 
 interface DryRunSearchSimulatorProps {
   activeDocSlug?: string;
@@ -80,11 +80,7 @@ export const DryRunSearchSimulator: React.FC<DryRunSearchSimulatorProps> = () =>
     void runSearch(example, example);
   };
 
-  const hits: AgentVennHit[] = [
-    ...(result?.both_hits ?? []),
-    ...(result?.semantic_only_hits ?? []),
-    ...(result?.verbatim_only_hits ?? []),
-  ];
+  const hits: SearchProvision[] = (result?.groups ?? []).flatMap((g) => g.provisions);
 
   const CONFIDENCE_NOTE: Record<string, { title: string; body: string; tone: string }> = {
     none: {
@@ -339,8 +335,7 @@ export const DryRunSearchSimulator: React.FC<DryRunSearchSimulatorProps> = () =>
                 </div>
               </div>
             )}
-            {hits.map((hit, idx) => {
-              const rank = hit.semantic_rank ?? hit.verbatim_rank ?? (idx + 1);
+            {hits.map((hit) => {
               const docSlug = hit.path.split('.')[0];
               const isTable = Boolean(hit.metadata?.is_table);
               const tableSummary = typeof hit.metadata?.table_summary === 'string' ? hit.metadata.table_summary : null;
@@ -352,7 +347,7 @@ export const DryRunSearchSimulator: React.FC<DryRunSearchSimulatorProps> = () =>
                   <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="flex h-5 w-5 items-center justify-center rounded-full bg-brand-500/20 font-mono text-[11px] font-bold text-brand-300">
-                        #{rank}
+                        #{hit.rank}
                       </span>
                       <span className="rounded border border-slate-700 bg-slate-950 px-2 py-0.5 font-mono text-[10px] font-bold text-slate-200">
                         {docSlug}
@@ -360,28 +355,17 @@ export const DryRunSearchSimulator: React.FC<DryRunSearchSimulatorProps> = () =>
                       <span className="text-xs font-bold text-slate-100 font-mono">
                         {hit.path}
                       </span>
-                      {hit.rerank_score !== null && hit.rerank_score !== undefined ? (
-                        <span
-                          title={`Điểm cross-encoder ${hit.rerank_score.toFixed(2)} quyết định thứ hạng`}
-                          className="rounded border border-brand-800/80 bg-slate-950 px-2 py-0.5 font-mono text-[10px] font-bold text-brand-400"
-                        >
-                          Rerank: {hit.rerank_score.toFixed(2)}
-                        </span>
-                      ) : hit.semantic_score !== null && hit.semantic_score !== undefined ? (
-                        <span
-                          title="Điểm tương đồng semantic"
-                          className="rounded border border-brand-800/80 bg-slate-950 px-2 py-0.5 font-mono text-[10px] font-bold text-brand-400"
-                        >
-                          Semantic: {hit.semantic_score.toFixed(4)}
-                        </span>
-                      ) : hit.verbatim_score !== null && hit.verbatim_score !== undefined ? (
-                        <span
-                          title="Điểm tương đồng verbatim"
-                          className="rounded border border-brand-800/80 bg-slate-950 px-2 py-0.5 font-mono text-[10px] font-bold text-brand-400"
-                        >
-                          Verbatim: {hit.verbatim_score.toFixed(4)}
-                        </span>
-                      ) : null}
+                      <span
+                        className={`rounded border px-2 py-0.5 font-mono text-[10px] font-bold ${
+                          hit.found_in === 'both'
+                            ? 'border-emerald-800/80 bg-emerald-950/60 text-emerald-300'
+                            : hit.found_in === 'semantic_only'
+                            ? 'border-brand-800/80 bg-brand-950/60 text-brand-300'
+                            : 'border-amber-800/80 bg-amber-950/60 text-amber-300'
+                        }`}
+                      >
+                        {hit.found_in}
+                      </span>
                       {isTable && (
                         <span
                           title={tableSummary ?? 'Đoạn này là một phần của bảng'}
@@ -392,12 +376,6 @@ export const DryRunSearchSimulator: React.FC<DryRunSearchSimulatorProps> = () =>
                       )}
                     </div>
                   </div>
-
-                  {hit.context && (
-                    <p className="mb-2 font-mono text-[10px] text-slate-500">
-                      {hit.context} · {hit.path}
-                    </p>
-                  )}
 
                   <div className="mb-2 whitespace-pre-wrap rounded-lg border border-slate-800/80 bg-slate-950/80 p-3 font-mono text-xs leading-relaxed text-slate-200">
                     {hit.text}

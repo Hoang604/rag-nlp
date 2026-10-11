@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { api } from '../services/api';
 import {
   CorpusDocument,
+  EdgeKey,
+  EdgeProposal,
   GraphVisualizerResponse,
   RawTextResponse,
 } from '../types/api';
@@ -66,34 +68,16 @@ export function useDocumentObservatory() {
     }
   }, [activeDocSlug, loadDocumentData]);
 
-  const linkChunks = useCallback(
+  const curateEdges = useCallback(
     async (
-      sourcePath: string,
-      targetPath: string,
-      relationType: string,
-      citationText: string,
-      rationale?: string | null
+      addEdges?: EdgeProposal[],
+      removeEdges?: EdgeKey[],
+      reason: string = 'Manual curation via observatory'
     ) => {
-      await api.linkChunks({
-        source_path: sourcePath,
-        target_path: targetPath,
-        relation_type: relationType,
-        citation_text: citationText,
-        rationale: rationale,
-      });
-      if (activeDocSlug) {
-        await loadDocumentData(activeDocSlug);
-      }
-    },
-    [activeDocSlug, loadDocumentData]
-  );
-
-  const unlinkChunks = useCallback(
-    async (sourcePath: string, targetPath: string, relationType?: string) => {
-      await api.unlinkChunks({
-        source_path: sourcePath,
-        target_path: targetPath,
-        relation_type: relationType || null,
+      await api.curateEdges({
+        add_edges: addEdges,
+        remove_edges: removeEdges,
+        reason,
       });
       if (activeDocSlug) {
         await loadDocumentData(activeDocSlug);
@@ -113,7 +97,6 @@ export function useDocumentObservatory() {
     error,
     refreshDocuments,
     loadDocumentData,
-    linkChunks,
-    unlinkChunks,
+    curateEdges,
   };
 }

@@ -6,15 +6,24 @@ from mcp.server.mcpserver import MCPServer
 from pydantic import Field
 
 from rag_eval.mcp.tools import (
-    HIERARCHICAL_DIRECTION_DESCRIPTION,
     CorpusMCPTools,
-    GraphDirection,
-    GraphTraverseResult,
-    HierarchicalDirection,
-    HierarchicalNavigateResult,
-    RelationType,
 )
-from rag_eval.schemas import RawDocumentSliceResult, VennSearchResult
+from rag_eval.schemas import (
+    CurateEdgesResult,
+    EdgeKey,
+    EdgeProposal,
+    GraphDirection,
+    HierarchicalDirection,
+    RawDocumentSliceResult,
+    RelationType,
+    UnifiedGraphTraverseResult,
+    UnifiedHierarchyResult,
+    UnifiedSearchResult,
+    format_graph_direction_docs,
+    format_hierarchical_direction_docs,
+    format_hierarchical_direction_values,
+    format_relation_type_docs,
+)
 
 
 def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
@@ -25,8 +34,7 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
         description=(
             "Truy xuất nội dung đa chiều kết hợp: Đồng thời tìm kiếm ngữ nghĩa theo `query` "
             "và đối sánh ký tự chính xác theo từ khóa neo `pattern`. "
-            "Trả về 3 nhóm kết quả Venn (both_hits, semantic_only_hits, verbatim_only_hits) "
-            "đã khử trùng 100%."
+            "Trả về kết quả hợp nhất gom nhóm theo tài liệu và ngữ cảnh với thứ hạng toàn cục 1..N."
         ),
     )
     async def hybrid_search(
@@ -95,7 +103,7 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
                 description="Bật hoặc tắt bước xếp hạng lại kết quả tìm kiếm (để None dùng cấu hình hệ thống).",
             ),
         ] = None,
-    ) -> VennSearchResult:
+    ) -> UnifiedSearchResult:
         return await tool_impl.hybrid_search(
             query=query,
             pattern=pattern,
@@ -111,33 +119,47 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
     @server.tool(
         name="hierarchical_navigate",
         description=(
-            "Duyệt cấu trúc cây phân cấp tài liệu xoay quanh một nút/chunk được chỉ định. "
-            "Duyệt các hướng: CHILDREN, PARENT_CHAIN, SIBLINGS, SUBTREE."
+            "Duyệt cấu trúc cây phân cấp tài liệu xoay quanh một nút/chunk được chỉ định "
+            f"theo các hướng {format_hierarchical_direction_values()}. "
+            "Trả về các provisions gom nhóm theo ngữ cảnh phả hệ theo thứ tự đọc tự nhiên."
         ),
     )
     async def hierarchical_navigate(
         path: Annotated[
             str,
             Field(
-                description="Đường dẫn phân cấp của nút mục tiêu.",
+                description="Đường dẫn phân cấp LTree của nút mục tiêu.",
             ),
         ],
         direction: Annotated[
             HierarchicalDirection,
             Field(
                 default=HierarchicalDirection.CHILDREN,
-                description=HIERARCHICAL_DIRECTION_DESCRIPTION,
+                description=format_hierarchical_direction_docs(),
             ),
         ] = HierarchicalDirection.CHILDREN,
-    ) -> HierarchicalNavigateResult:
+        limit: Annotated[
+            int,
+            Field(
+                default=15,
+                ge=1,
+                le=50,
+                description="Số lượng provisions tối đa trả về (mặc định 15, tối đa 50).",
+            ),
+        ] = 15,
+    ) -> UnifiedHierarchyResult:
         return await tool_impl.hierarchical_navigate(
             path=path,
             direction=direction,
+            limit=limit,
         )
 
     @server.tool(
         name="graph_traverse",
-        description="Duyệt đồ thị tri thức đệ quy qua các liên kết quan hệ giữa các chunk/nút.",
+        description=(
+            "Duyệt đồ thị tri thức đệ quy qua các liên kết quan hệ giữa các chunk/nút, "
+            "gom nhóm theo bằng chứng trích dẫn (citation_text) kèm hạn mức công bằng."
+        ),
     )
     async def graph_traverse(
         source_path: Annotated[
@@ -149,10 +171,10 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
         direction: Annotated[
             GraphDirection,
             Field(
-                default="OUTGOING",
-                description="Hướng duyệt đồ thị: 'OUTGOING', 'INCOMING', 'BOTH'.",
+                default=GraphDirection.OUTGOING,
+                description=format_graph_direction_docs(),
             ),
-        ] = "OUTGOING",
+        ] = GraphDirection.OUTGOING,
         max_depth: Annotated[
             int,
             Field(
@@ -163,112 +185,65 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
             ),
         ] = 2,
         filter_relations: Annotated[
-            list[str] | None,
+            list[RelationType] | None,
             Field(
                 default=None,
-                description="Danh sách các mã quan hệ cần lọc (REFERENCES, SUPPORTS, DEPENDS_ON, v.v.). Để None để duyệt tất cả.",
+                description=format_relation_type_docs(),
             ),
         ] = None,
-        limit: Annotated[
+        limit_per_link: Annotated[
             int,
             Field(
                 default=20,
                 ge=1,
                 le=100,
-                description="Số bước nhảy tối đa trả về.",
+                description="Hạn mức tối đa số provisions trả về cho mỗi liên kết trích dẫn.",
             ),
         ] = 20,
-    ) -> GraphTraverseResult:
+    ) -> UnifiedGraphTraverseResult:
         return await tool_impl.graph_traverse(
             source_path=source_path,
             direction=direction,
             max_depth=max_depth,
             filter_relations=filter_relations,
-            limit=limit,
+            limit_per_link=limit_per_link,
         )
 
     @server.tool(
-        name="link_chunks",
+        name="graph_curate_edges",
         description=(
-            "Thiết lập cạnh quan hệ đồ thị tri thức ngữ nghĩa giữa 2 chunk dựa trên đường dẫn LTree phân cấp. "
-            "Bắt buộc cung cấp citation_text được trích dẫn chính xác từ chunk nguồn. "
-            "Mã quan hệ phải thuộc danh mục hợp lệ (REFERENCES, SUPPORTS, CONTRADICTS, DEFINES, EXTENDS, EXEMPLIFIES, DEPENDS_ON, SUPERSEDES, SEE_ALSO)."
+            "Thực thi cập nhật quan hệ tri thức theo lô (batch proposal) nguyên tử trong một transaction: "
+            "Thêm các cạnh mới với kiểm tra neo trích dẫn (citation_text) nguyên văn và mở rộng nút container, "
+            "Gỡ bỏ các cạnh cũ đối xứng theo container, và ghi log kiểm toán bắt buộc vào graph_edge_log."
         ),
     )
-    async def link_chunks(
-        source_path: Annotated[
-            str,
-            Field(
-                description="Đường dẫn phân cấp LTree của chunk nguồn.",
-            ),
-        ],
-        target_path: Annotated[
-            str,
-            Field(
-                description="Đường dẫn phân cấp LTree của chunk đích.",
-            ),
-        ],
-        relation_type: Annotated[
-            RelationType,
-            Field(
-                description="Mã quan hệ hệ thống hợp lệ kết nối hai chunk.",
-            ),
-        ],
-        citation_text: Annotated[
+    async def graph_curate_edges(
+        reason: Annotated[
             str,
             Field(
                 min_length=1,
-                description="Đoạn văn trích dẫn nguyên văn từ chunk nguồn chứng minh quan hệ.",
+                description="Lý do / ngữ cảnh nhiệm vụ bắt buộc phục vụ kiểm toán.",
             ),
         ],
-        rationale: Annotated[
-            str | None,
+        add_edges: Annotated[
+            list[EdgeProposal] | None,
             Field(
                 default=None,
-                description="Lý do / bằng chứng luận cứ kết nối hai chunk.",
+                description="Danh sách các cạnh quan hệ đề xuất thêm kèm bằng chứng trích dẫn.",
             ),
         ] = None,
-    ) -> dict[str, object]:
-        return await tool_impl.link_chunks(
-            source_path=source_path,
-            target_path=target_path,
-            relation_type=relation_type,
-            citation_text=citation_text,
-            rationale=rationale,
-        )
-
-    @server.tool(
-        name="unlink_chunks",
-        description=(
-            "Gỡ bỏ cạnh quan hệ đồ thị tri thức giữa 2 chunk dựa trên đường dẫn LTree phân cấp. "
-            "Nếu relation_type không được cung cấp (None), toàn bộ các cạnh nối giữa 2 chunk này sẽ được gỡ bỏ."
-        ),
-    )
-    async def unlink_chunks(
-        source_path: Annotated[
-            str,
-            Field(
-                description="Đường dẫn phân cấp LTree của chunk nguồn.",
-            ),
-        ],
-        target_path: Annotated[
-            str,
-            Field(
-                description="Đường dẫn phân cấp LTree của chunk đích.",
-            ),
-        ],
-        relation_type: Annotated[
-            RelationType | None,
+        remove_edges: Annotated[
+            list[EdgeKey] | None,
             Field(
                 default=None,
-                description="Mã loại quan hệ cần gỡ (để None nếu muốn xóa toàn bộ mọi cạnh nối giữa 2 chunk).",
+                description="Danh sách các cạnh quan hệ yêu cầu gỡ bỏ.",
             ),
         ] = None,
-    ) -> dict[str, object]:
-        return await tool_impl.unlink_chunks(
-            source_path=source_path,
-            target_path=target_path,
-            relation_type=relation_type,
+    ) -> CurateEdgesResult:
+        return await tool_impl.graph_curate_edges(
+            add_edges=add_edges,
+            remove_edges=remove_edges,
+            reason=reason,
         )
 
     @server.tool(

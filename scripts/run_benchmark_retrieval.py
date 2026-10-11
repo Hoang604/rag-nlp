@@ -43,21 +43,29 @@ async def execute_tool_call(
 
 
 def extract_top_candidates(retrieval_data: dict[str, object]) -> list[dict[str, object]]:
-    """Flatten and prioritize Top candidates from both_hits, semantic_only_hits, and verbatim_only_hits."""
+    """Flatten and prioritize Top candidates from factored groups and provisions."""
     candidates: list[dict[str, object]] = []
     seen_paths: set[str] = set()
 
-    for channel in ["both_hits", "semantic_only_hits", "verbatim_only_hits"]:
-        hits = retrieval_data.get(channel)
-        if isinstance(hits, list):
-            for hit in hits:
-                if isinstance(hit, dict):
-                    path = str(hit.get("path", ""))
-                    if path and path not in seen_paths:
-                        seen_paths.add(path)
-                        candidate_item = dict(hit)
-                        candidate_item["channel"] = channel
-                        candidates.append(candidate_item)
+    groups = retrieval_data.get("groups")
+    if isinstance(groups, list):
+        for group in groups:
+            if isinstance(group, dict):
+                provisions = group.get("provisions")
+                if isinstance(provisions, list):
+                    for prov in provisions:
+                        if isinstance(prov, dict):
+                            path = str(prov.get("path", ""))
+                            if path and path not in seen_paths:
+                                seen_paths.add(path)
+                                candidate_item = dict(prov)
+                                candidate_item["channel"] = str(prov.get("found_in", "both"))
+                                candidates.append(candidate_item)
+    def _rank(c: dict[str, object]) -> int:
+        val = c.get("rank")
+        return int(val) if isinstance(val, (int, str)) else 999
+
+    candidates.sort(key=_rank)
     return candidates[:5]
 
 

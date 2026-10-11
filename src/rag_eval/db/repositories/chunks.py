@@ -100,6 +100,48 @@ class ChunkRepository(BaseRepository):
         except (asyncpg.PostgresError, OSError, RuntimeError) as exc:
             raise self._translate_error("resolve_paths_batch", exc) from exc
 
+    async def get_verbatim_by_paths(
+        self, paths: list[str], conn: asyncpg.Connection | None = None
+    ) -> dict[str, tuple[uuid.UUID, str]]:
+        """Returns mapping from ltree path -> (chunk_id, verbatim_text)."""
+        if not paths:
+            return {}
+        query = "SELECT id, path::text AS path, verbatim_text FROM chunks WHERE path = ANY($1::ltree[]);"
+        try:
+            async with self._connection_scope(conn) as c:
+                rows = await c.fetch(query, paths)
+                return {str(r["path"]): (uuid.UUID(str(r["id"])), str(r["verbatim_text"])) for r in rows}
+        except (asyncpg.PostgresError, OSError, RuntimeError) as exc:
+            raise self._translate_error("get_verbatim_by_paths", exc) from exc
+
+    async def expand_to_leaf_paths(
+        self, paths: list[str], conn: asyncpg.Connection | None = None
+    ) -> dict[str, list[tuple[str, uuid.UUID]]]:
+        """For each path: itself if it is an exact chunk, else all chunks under it, ordered by path.
+        A path with no chunk at or under it maps to an empty list.
+        """
+        if not paths:
+            return {}
+        query = """
+        SELECT q.path AS query_path, c.path::text AS path, c.id
+        FROM unnest($1::text[]) AS q(path)
+        JOIN chunks c ON c.path <@ q.path::ltree
+        ORDER BY c.path;
+        """
+        try:
+            async with self._connection_scope(conn) as c:
+                rows = await c.fetch(query, list(paths))
+        except (asyncpg.PostgresError, OSError, RuntimeError) as exc:
+            raise self._translate_error("expand_to_leaf_paths", exc) from exc
+        under: dict[str, list[tuple[str, uuid.UUID]]] = {p: [] for p in paths}
+        for r in rows:
+            under[str(r["query_path"])].append((str(r["path"]), uuid.UUID(str(r["id"]))))
+        expanded: dict[str, list[tuple[str, uuid.UUID]]] = {}
+        for p, leaves in under.items():
+            exact = [(path, cid) for path, cid in leaves if path == p]
+            expanded[p] = exact or leaves
+        return expanded
+
     async def resolve_ids_batch(
         self, chunk_ids: list[uuid.UUID], conn: asyncpg.Connection | None = None
     ) -> dict[uuid.UUID, str]:

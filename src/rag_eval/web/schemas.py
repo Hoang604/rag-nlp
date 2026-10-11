@@ -2,49 +2,21 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from rag_eval.schemas import AgentVennHit, RelationType
+from rag_eval.schemas import (
+    EdgeKey,
+    EdgeProposal,
+    ProvisionGroup,
+    RelationType,
+    SearchDocument,
+    SearchProvision,
+)
 
 
-class LinkChunksInput(BaseModel):
+class CurateEdgesRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    source_path: str = Field(..., description="Đường dẫn phân cấp LTree của chunk nguồn")
-    target_path: str = Field(..., description="Đường dẫn phân cấp LTree của chunk đích")
-    relation_type: RelationType = Field(..., description="Mã quan hệ hợp lệ trong danh mục hệ thống")
-    citation_text: str = Field(
-        ...,
-        min_length=1,
-        description="Đoạn văn trích dẫn nguyên văn từ chunk nguồn chứng minh quan hệ",
-    )
-    rationale: str | None = Field(default=None, description="Lý do / bằng chứng luận cứ kết nối hai chunk")
-
-
-class LinkChunksResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    status: str = Field("SUCCESS", description="Trạng thái thao tác")
-    source_path: str
-    target_path: str
-    relation_type: RelationType
-    citation_text: str
-    created: bool
-    rationale: str | None = None
-
-
-class UnlinkChunksInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    source_path: str = Field(..., description="Đường dẫn phân cấp LTree của chunk nguồn")
-    target_path: str = Field(..., description="Đường dẫn phân cấp LTree của chunk đích")
-    relation_type: RelationType | None = Field(
-        default=None,
-        description="Mã loại quan hệ cần gỡ (None khi gỡ mọi quan hệ giữa 2 chunk)",
-    )
-
-
-class UnlinkChunksResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    status: str = Field("SUCCESS", description="Trạng thái thao tác")
-    source_path: str
-    target_path: str
-    removed_edges_count: int
+    add_edges: list[EdgeProposal] | None = Field(default=None, description="Danh sách các cạnh đề xuất thêm")
+    remove_edges: list[EdgeKey] | None = Field(default=None, description="Danh sách các cạnh yêu cầu gỡ bỏ")
+    reason: str = Field(..., min_length=1, description="Lý do / ngữ cảnh phục vụ nhật ký kiểm toán")
 
 
 class GraphVisualizerNode(BaseModel):
@@ -157,7 +129,7 @@ class SearchRequest(BaseModel):
 
 
 class SearchResponse(BaseModel):
-    """Dual-channel Venn search response returning disjoint hit partitions."""
+    """Factored search response returning deduplicated documents and reading-order context groups."""
 
     model_config = ConfigDict(extra="ignore")
 
@@ -165,10 +137,10 @@ class SearchResponse(BaseModel):
     pattern: str
     elapsed_ms: float
     confidence: str = "high"
-    total_unique_hits: int = 0
-    both_hits: list[AgentVennHit] = Field(default_factory=list)
-    semantic_only_hits: list[AgentVennHit] = Field(default_factory=list)
-    verbatim_only_hits: list[AgentVennHit] = Field(default_factory=list)
+    documents: dict[str, SearchDocument] = Field(default_factory=dict)
+    groups: list[ProvisionGroup[SearchProvision]] = Field(default_factory=list)
+    verbatim_total: int = 0
+    verbatim_truncated: bool = False
 
 
 class CorpusDocumentResponse(BaseModel):

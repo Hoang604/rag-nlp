@@ -7,10 +7,10 @@ import unicodedata
 import uuid
 from dataclasses import dataclass
 from enum import Enum
-from typing import Final
+from typing import Final, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # ---------------------------------------------------------------------------
 # Core Enums & Domain Literals
@@ -24,6 +24,52 @@ class HierarchicalDirection(str, Enum):
     SUBTREE = "SUBTREE"
 
 
+HIERARCHICAL_DIRECTION_DESCRIPTIONS: Final[dict[HierarchicalDirection, str]] = {
+    HierarchicalDirection.CHILDREN: "Lấy các nút con trực tiếp (cấp nlevel + 1).",
+    HierarchicalDirection.PARENT_CHAIN: "Lấy chuỗi tổ tiên từ tài liệu gốc xuống đến nút cha trực tiếp.",
+    HierarchicalDirection.SIBLINGS: "Lấy các nút anh em cùng cấp dưới cùng một nút cha.",
+    HierarchicalDirection.SUBTREE: "Lấy toàn bộ cây con hậu duệ theo đúng thứ tự đọc của tài liệu (start_line ASC, path ASC).",
+}
+
+assert set(HIERARCHICAL_DIRECTION_DESCRIPTIONS) == set(HierarchicalDirection), (
+    f"Thiếu description cho HierarchicalDirection: {set(HierarchicalDirection) - set(HIERARCHICAL_DIRECTION_DESCRIPTIONS)}"
+)
+
+
+def format_hierarchical_direction_docs() -> str:
+    return "Hướng duyệt trên cây phân cấp: " + "; ".join(
+        f"'{k.value}': {desc}" for k, desc in HIERARCHICAL_DIRECTION_DESCRIPTIONS.items()
+    )
+
+
+def format_hierarchical_direction_values() -> str:
+    return ", ".join(k.value for k in HierarchicalDirection)
+
+
+class GraphDirection(str, Enum):
+    """Hướng duyệt liên kết trên đồ thị tri thức."""
+
+    OUTGOING = "OUTGOING"
+    INCOMING = "INCOMING"
+    BOTH = "BOTH"
+
+
+GRAPH_DIRECTION_DESCRIPTIONS: Final[dict[GraphDirection, str]] = {
+    GraphDirection.OUTGOING: "Các liên kết xuất phát từ nút này trỏ tới các nút khác.",
+    GraphDirection.INCOMING: "Các liên kết từ các nút khác trỏ về nút này.",
+    GraphDirection.BOTH: "Duyệt liên kết theo cả hai chiều (cả đến và đi).",
+}
+
+assert set(GRAPH_DIRECTION_DESCRIPTIONS) == set(GraphDirection), (
+    f"Thiếu description cho GraphDirection: {set(GraphDirection) - set(GRAPH_DIRECTION_DESCRIPTIONS)}"
+)
+
+
+def format_graph_direction_docs() -> str:
+    return "Hướng duyệt đồ thị: " + "; ".join(
+        f"'{k.value}': {desc}" for k, desc in GRAPH_DIRECTION_DESCRIPTIONS.items()
+    )
+
 
 class RelationType(str, Enum):
     REFERENCES = "REFERENCES"
@@ -35,6 +81,29 @@ class RelationType(str, Enum):
     DEPENDS_ON = "DEPENDS_ON"
     SUPERSEDES = "SUPERSEDES"
     SEE_ALSO = "SEE_ALSO"
+
+
+RELATION_TYPE_DESCRIPTIONS: Final[dict[RelationType, str]] = {
+    RelationType.REFERENCES: "Tham chiếu thông tin trung lập hoặc liên kết chung",
+    RelationType.SUPPORTS: "Cung cấp dữ liệu, số liệu, củng cố ngữ cảnh cho nút đích",
+    RelationType.CONTRADICTS: "Mâu thuẫn hoặc xung đột thông tin với nút đích",
+    RelationType.DEFINES: "Định nghĩa thuật ngữ, khái niệm hoặc thực thể được sử dụng ở nút đích",
+    RelationType.EXTENDS: "Mở rộng, bổ sung chi tiết hoặc phát triển thêm ý từ nút đích",
+    RelationType.EXEMPLIFIES: "Cung cấp ví dụ thực tế hoặc ca nghiên cứu minh họa cho nút đích",
+    RelationType.DEPENDS_ON: "Phụ thuộc tiên quyết logic hoặc kỹ thuật vào nút đích",
+    RelationType.SUPERSEDES: "Thay thế hoặc làm lỗi thời nội dung ở nút đích",
+    RelationType.SEE_ALSO: "Liên kết liên tưởng ngữ cảnh, nội dung tham khảo thêm",
+}
+
+assert set(RELATION_TYPE_DESCRIPTIONS) == set(RelationType), (
+    f"Thiếu description cho RelationType: {set(RelationType) - set(RELATION_TYPE_DESCRIPTIONS)}"
+)
+
+
+def format_relation_type_docs() -> str:
+    return "Lọc danh sách các mã quan hệ cần duyệt: " + "; ".join(
+        f"'{k.value}' ({desc})" for k, desc in RELATION_TYPE_DESCRIPTIONS.items()
+    ) + ". Để None để duyệt tất cả."
 
 
 @dataclass(frozen=True)
@@ -206,6 +275,53 @@ class GraphEdgeEntity(BaseModel):
     citation_text: str = Field(..., min_length=1, description="Trích dẫn nguyên văn từ chunk nguồn chứng minh quan hệ")
 
 
+class EdgeLogEntity(BaseModel):
+    """Thực thể nhật ký kiểm toán quan hệ đồ thị - Bảng `graph_edge_log` (010_graph_edge_log_audit.sql)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: UUID = Field(default_factory=uuid.uuid4, description="Khóa chính định danh dòng log")
+    action: Literal["ADDED", "REMOVED"] = Field(..., description="Hành động: ADDED hoặc REMOVED")
+    actor: str = Field(..., description="Chủ thể thực hiện (AGENT, CLI, API)")
+    source_path: str = Field(..., description="Đường dẫn LTree của chunk nguồn")
+    target_path: str = Field(..., description="Đường dẫn LTree của chunk đích")
+    relation_type: RelationType = Field(..., description="Mã quan hệ")
+    citation_text: str = Field(..., min_length=1, description="Trích dẫn nguyên văn chứng minh quan hệ")
+    reason: str = Field(..., min_length=1, description="Lý do / ngữ cảnh nhiệm vụ phục vụ kiểm toán")
+    created_at: datetime.datetime = Field(..., description="Thời điểm ghi nhận sự kiện")
+
+
+class EdgeKey(BaseModel):
+    """Định danh duy nhất một cạnh đồ thị theo bộ ba (source_path, target_path, relation_type)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_path: str = Field(..., description="Đường dẫn LTree chunk nguồn")
+    target_path: str = Field(..., description="Đường dẫn LTree chunk đích (có thể là container)")
+    relation_type: RelationType = Field(..., description="Mã quan hệ theo danh mục RelationType")
+
+
+class EdgeProposal(EdgeKey):
+    """Đề xuất thêm cạnh quan hệ tri thức từ agent với bằng chứng trích dẫn."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    citation_text: str = Field(..., min_length=1, description="Đoạn văn trích dẫn nguyên văn từ chunk nguồn")
+    rationale: str | None = Field(default=None, description="Luận cứ ngữ nghĩa kết nối hai nút")
+
+
+class CurateEdgesResult(BaseModel):
+    """Kết quả thực thi batch curation quan hệ đồ thị tri thức."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    added: list[EdgeKey] = Field(default_factory=list, description="Danh sách các cạnh đã thêm mới thành công")
+    existing: list[EdgeKey] = Field(default_factory=list, description="Danh sách các cạnh đã tồn tại từ trước")
+    removed: list[EdgeKey] = Field(default_factory=list, description="Danh sách các cạnh đã gỡ bỏ thành công")
+    not_found: list[EdgeKey] = Field(default_factory=list, description="Danh sách các cạnh yêu cầu gỡ nhưng không tồn tại")
+    message: str = Field(..., description="Thông điệp tóm tắt kết quả thực thi")
+
+
 # ---------------------------------------------------------------------------
 # Database Query DTOs (Ánh xạ 1:1 với Stored Procedures & Repo Queries)
 # ---------------------------------------------------------------------------
@@ -320,52 +436,143 @@ def split_context_and_text(contextualized_text: str, verbatim_text: str) -> tupl
     return "", clean_ctx or clean_verb
 
 
-class AgentVennHit(BaseModel):
-    """Lean Venn hit payload for MCP hybrid search with discrete context breadcrumbs."""
+# ---------------------------------------------------------------------------
+# Factored Agent-First Retrieval Models & Context Groups
+# ---------------------------------------------------------------------------
 
-    model_config = ConfigDict(extra="ignore")
+SearchFoundIn = Literal["both", "semantic_only", "verbatim_only"]
 
-    path: str = Field(..., description="Đường dẫn phân cấp LTree của chunk")
-    start_line: int = Field(..., ge=1, description="Số dòng bắt đầu trong tài liệu")
-    end_line: int = Field(..., ge=1, description="Số dòng kết thúc trong tài liệu")
-    context: str = Field(default="", description="Ngữ cảnh tiêu đề tổ tiên (breadcrumbs)")
+
+class SearchDocument(BaseModel):
+    """Mô tả tài liệu xuất hiện trong kết quả truy xuất (được phát ra duy nhất 1 lần)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(..., description="Tiêu đề tài liệu")
+    doc_slug: str = Field(..., description="Mã slug định danh duy nhất của tài liệu")
+    metadata: dict[str, object] = Field(default_factory=dict, description="Metadata mở rộng của tài liệu")
+
+
+class ProvisionText(BaseModel):
+    """Nội dung văn bản thuần của một chunk/provision (không lặp lại context cha)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: str = Field(..., description="Đường dẫn LTree phân cấp")
     text: str = Field(..., description="Nội dung văn bản thực tế của chunk")
-    metadata: dict[str, object] = Field(default_factory=dict, description="Metadata kỹ thuật sạch")
-    semantic_rank: int | None = Field(default=None, ge=1)
-    verbatim_rank: int | None = Field(default=None, ge=1)
-    semantic_score: float | None = None
-    verbatim_score: float | None = None
-    rerank_score: float | None = None
-
-    @property
-    def contextualized_text(self) -> str:
-        """Computed backward-compatibility property for Python callers (not serialized to wire)."""
-        return f"[{self.context}]\n{self.text}" if self.context else self.text
-
-    @model_serializer(mode="wrap")
-    def _serialize(self, handler) -> dict[str, object]:
-        data = handler(self)
-        if isinstance(data, dict):
-            return {k: v for k, v in data.items() if v is not None}
-        return data
+    start_line: int = Field(..., ge=1, description="Dòng bắt đầu 1-indexed trong tài liệu gốc")
+    end_line: int = Field(..., ge=1, description="Dòng kết thúc 1-indexed trong tài liệu gốc")
+    metadata: dict[str, object] = Field(default_factory=dict, description="Metadata kỹ thuật sạch (node_type, is_table, v.v.)")
 
 
-class AgentHierarchyNode(BaseModel):
-    """Lean hierarchy node for MCP hierarchical navigate with discrete context breadcrumbs."""
+class SearchProvision(ProvisionText):
+    """Provision trong kết quả tìm kiếm kèm phân vùng khớp và thứ hạng toàn cục 1..N."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
-    path: str = Field(..., description="Đường dẫn phân cấp LTree của node")
-    start_line: int = Field(..., ge=1, description="Số dòng bắt đầu trong tài liệu")
-    end_line: int = Field(..., ge=1, description="Số dòng kết thúc trong tài liệu")
-    context: str = Field(default="", description="Ngữ cảnh tiêu đề tổ tiên (breadcrumbs)")
-    text: str = Field(..., description="Nội dung văn bản thực tế của node")
-    metadata: dict[str, object] = Field(default_factory=dict, description="Metadata kỹ thuật sạch")
+    found_in: SearchFoundIn = Field(..., description="Phân vùng Venn: 'both', 'semantic_only', hoặc 'verbatim_only'")
+    rank: int = Field(..., ge=1, description="Thứ hạng toàn cục 1-based (both -> semantic_only -> verbatim_only)")
 
-    @property
-    def contextualized_text(self) -> str:
-        """Computed backward-compatibility property for Python callers (not serialized to wire)."""
-        return f"[{self.context}]\n{self.text}" if self.context else self.text
+
+class ProvisionGroup[P: ProvisionText](BaseModel):
+    """Nhóm các provisions trong cùng một tài liệu và chung ngữ cảnh phân cấp cha."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    doc_slug: str = Field(..., description="Mã doc_slug của tài liệu chứa nhóm")
+    context: str = Field(..., description="Ngữ cảnh tiêu đề tổ tiên (rỗng nếu nằm ngay dưới gốc tài liệu)")
+    provisions: list[P] = Field(default_factory=list, description="Danh sách provisions được sắp xếp theo thứ tự đọc")
+
+
+class UnifiedSearchResult(BaseModel):
+    """Kết quả tìm kiếm dual-channel hợp nhất gom nhóm theo ngữ cảnh."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    query: str = Field(..., description="Truy vấn ngữ nghĩa")
+    pattern: str = Field(..., description="Từ khóa neo nguyên văn")
+    documents: dict[str, SearchDocument] = Field(default_factory=dict, description="Danh mục tài liệu deduplicated")
+    groups: list[ProvisionGroup[SearchProvision]] = Field(default_factory=list, description="Các nhóm kết quả theo ngữ cảnh")
+    verbatim_total: int = Field(default=0, ge=0, description="Tổng số lần xuất hiện của pattern trong kho")
+    verbatim_truncated: bool = Field(default=False, description="True nếu số lượng verbatim vượt quá giới hạn lấy về")
+    confidence: str = Field(default="high", description="Mức độ tin cậy của kết quả: 'high', 'low', hoặc 'none'")
+
+
+class UnifiedHierarchyResult(BaseModel):
+    """Kết quả duyệt cây phân cấp tài liệu gom nhóm theo ngữ cảnh và thứ tự đọc."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    anchor_path: str = Field(..., description="Đường dẫn LTree của nút mốc duyệt")
+    direction: HierarchicalDirection = Field(..., description="Hướng duyệt đã thực hiện")
+    documents: dict[str, SearchDocument] = Field(default_factory=dict, description="Danh mục tài liệu deduplicated")
+    groups: list[ProvisionGroup[ProvisionText]] = Field(default_factory=list, description="Các nhóm provision theo thứ tự đọc")
+    total: int = Field(default=0, ge=0, description="Tổng số nodes/chunks thỏa mãn hướng duyệt")
+    truncated: bool = Field(default=False, description="True nếu tổng số nodes vượt quá limit an toàn")
+
+
+class GraphLink(BaseModel):
+    """Một liên kết trích dẫn trên đồ thị tri thức và các provisions dẫn tới."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    from_path: str = Field(..., description="Đường dẫn LTree của chunk xuất phát")
+    direction: GraphDirection = Field(..., description="Hướng duyệt: 'OUTGOING', 'INCOMING', hoặc 'BOTH'")
+    relation_type: str = Field(..., description="Loại quan hệ tri thức")
+    citation_text: str = Field(..., description="Đoạn văn trích dẫn chứng cứ")
+    depth: int = Field(..., ge=1, description="Độ sâu bước nhảy")
+    total: int = Field(default=0, ge=0, description="Tổng số provisions liên kết này dẫn tới")
+    truncated: bool = Field(default=False, description="True nếu số provisions vượt quá quota limit_per_link")
+    groups: list[ProvisionGroup[ProvisionText]] = Field(default_factory=list, description="Các provisions gom nhóm theo ngữ cảnh")
+
+
+class UnifiedGraphTraverseResult(BaseModel):
+    """Kết quả duyệt đồ thị tri thức đa tầng gom nhóm theo bằng chứng trích dẫn."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_path: str = Field(..., description="Đường dẫn LTree của nút gốc bắt đầu duyệt")
+    documents: dict[str, SearchDocument] = Field(default_factory=dict, description="Danh mục tài liệu deduplicated")
+    links: list[GraphLink] = Field(default_factory=list, description="Danh sách các liên kết trích dẫn và các nút đích")
+
+
+def group_in_reading_order(
+    items: list[tuple[str, str, ProvisionText]],
+) -> list[ProvisionGroup[ProvisionText]]:
+    """Gom nhóm các provisions liên tiếp có chung (doc_slug, context) theo đúng thứ tự đọc."""
+    groups: list[ProvisionGroup[ProvisionText]] = []
+    for doc_slug, context, provision in items:
+        if not groups or (groups[-1].doc_slug, groups[-1].context) != (doc_slug, context):
+            groups.append(ProvisionGroup[ProvisionText](doc_slug=doc_slug, context=context, provisions=[]))
+        groups[-1].provisions.append(provision)
+    return groups
+
+
+def group_ranked(
+    matches: list[tuple[SearchFoundIn, str, str, ProvisionText]],
+) -> list[ProvisionGroup[SearchProvision]]:
+    """Gom nhóm các kết quả tìm kiếm đã xếp hạng toàn cục: nhóm xuất hiện theo thứ hạng provision tốt nhất;
+    provisions bên trong mỗi nhóm được sắp xếp theo thứ tự đọc (start_line, path)."""
+    groups_dict: dict[tuple[str, str], ProvisionGroup[SearchProvision]] = {}
+    for rank, (found_in, doc_slug, context, prov) in enumerate(matches, start=1):
+        key = (doc_slug, context)
+        if key not in groups_dict:
+            groups_dict[key] = ProvisionGroup[SearchProvision](doc_slug=doc_slug, context=context, provisions=[])
+        search_prov = SearchProvision(
+            path=prov.path,
+            text=prov.text,
+            start_line=prov.start_line,
+            end_line=prov.end_line,
+            metadata=prov.metadata,
+            found_in=found_in,
+            rank=rank,
+        )
+        groups_dict[key].provisions.append(search_prov)
+
+    result_groups = list(groups_dict.values())
+    for g in result_groups:
+        g.provisions.sort(key=lambda p: (p.start_line, p.path))
+    return result_groups
 
 
 def clean_node_metadata(raw_meta: dict[str, object]) -> dict[str, object]:
@@ -373,45 +580,6 @@ def clean_node_metadata(raw_meta: dict[str, object]) -> dict[str, object]:
     meta = dict(raw_meta)
     meta.pop("ancestor_titles", None)
     return meta
-
-
-class AgentGraphTraversalStep(BaseModel):
-    """Lean graph traversal step for MCP graph_traverse with isolated breadcrumb context."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    source_path: str = Field(..., min_length=1, description="Đường dẫn LTree của chunk nguồn")
-    target_path: str = Field(..., min_length=1, description="Đường dẫn LTree của chunk đích")
-    relation_type: str = Field(..., description="Loại quan hệ giữa 2 chunk")
-    depth: int = Field(..., ge=1, description="Độ sâu bước nhảy trên đồ thị")
-    target_start_line: int = Field(..., ge=1, description="Số dòng bắt đầu trong tài liệu gốc")
-    target_end_line: int = Field(..., ge=1, description="Số dòng kết thúc trong tài liệu gốc")
-    target_context: str = Field(default="", description="Ngữ cảnh tiêu đề tổ tiên của chunk đích (breadcrumbs)")
-    target_text: str = Field(..., min_length=1, description="Nội dung văn bản thực tế của chunk đích")
-    rationale: str | None = Field(default=None, description="Luận cứ ngữ nghĩa kết nối hai nút")
-    citation_text: str = Field(..., description="Trích dẫn nguyên văn chứng thực quan hệ")
-
-
-class GraphTraverseResult(BaseModel):
-    """Container holding multi-hop knowledge graph traversal paths."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    source_path: str
-    total_paths: int
-    paths: list[AgentGraphTraversalStep]
-
-
-class VennSearchResult(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    query: str
-    pattern: str
-    both_hits: list[AgentVennHit] = Field(default_factory=list)
-    semantic_only_hits: list[AgentVennHit] = Field(default_factory=list)
-    verbatim_only_hits: list[AgentVennHit] = Field(default_factory=list)
-    total_unique_hits: int = 0
-    confidence: str = "high"
 
 
 class HierarchyNodeDTO(BaseModel):

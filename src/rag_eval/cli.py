@@ -351,7 +351,7 @@ def tool(
     tool_name: Annotated[
         str,
         typer.Argument(
-            help="Name of the MCP tool to execute (e.g. hybrid_search, hierarchical_navigate, link_chunks)"
+            help="Name of the MCP tool to execute (e.g. hybrid_search, hierarchical_navigate, graph_curate_edges)"
         ),
     ],
     args: Annotated[

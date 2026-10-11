@@ -14,9 +14,10 @@ from rag_eval.retrieval.embedder import SentenceTransformerQueryEmbedder
 from rag_eval.retrieval.engine import RetrievalEngine
 from rag_eval.retrieval.enrichment import KnowledgeEnrichmentService
 from rag_eval.retrieval.reranker import CrossEncoderReranker
-from rag_eval.schemas import RelationType
+from rag_eval.schemas import CurateEdgesResult, RelationType
 from rag_eval.web.schemas import (
     CorpusDocumentResponse,
+    CurateEdgesRequest,
     DocumentTreeResponse,
     GraphTraversalStepResponse,
     GraphTraverseRequest,
@@ -24,14 +25,10 @@ from rag_eval.web.schemas import (
     GraphVisualizerNode,
     GraphVisualizerResponse,
     HealthResponse,
-    LinkChunksInput,
-    LinkChunksResponse,
     RawTextResponse,
     RelationTypeCatalogResponse,
     SearchRequest,
     SearchResponse,
-    UnlinkChunksInput,
-    UnlinkChunksResponse,
 )
 from rag_eval.web.services import (
     TreeHierarchyBuilder,
@@ -243,56 +240,21 @@ async def get_document_graph(
     )
 
 
-@router.post("/documents/links", response_model=LinkChunksResponse)
-async def link_document_chunks(
-    request: Request, payload: LinkChunksInput
-) -> LinkChunksResponse:
-    """Creates or updates a semantic relationship edge between two chunks."""
+@router.post("/documents/curate", response_model=CurateEdgesResult)
+async def curate_document_edges(
+    request: Request, payload: CurateEdgesRequest
+) -> CurateEdgesResult:
+    """Atomically curates knowledge graph edges with validation and audit logging."""
     pool = _get_db_pool(request)
     if pool is None:
         raise HTTPException(status_code=503, detail="Database is not connected.")
     service = KnowledgeEnrichmentService(pool=pool)
     try:
-        res = await service.link_chunks(
-            source_path=payload.source_path,
-            target_path=payload.target_path,
-            relation_type=payload.relation_type,
-            citation_text=payload.citation_text,
-            rationale=payload.rationale,
-        )
-        return LinkChunksResponse(
-            status="SUCCESS",
-            source_path=res.source_path,
-            target_path=res.target_path,
-            relation_type=res.relation_type,
-            citation_text=res.citation_text,
-            created=res.created,
-            rationale=res.rationale,
-        )
-    except CorpusDomainError as exc:
-        raise HTTPException(status_code=400, detail=exc.message) from exc
-
-
-@router.post("/documents/unlinks", response_model=UnlinkChunksResponse)
-async def unlink_document_chunks(
-    request: Request, payload: UnlinkChunksInput
-) -> UnlinkChunksResponse:
-    """Removes targeted relationship edge(s) between two chunks."""
-    pool = _get_db_pool(request)
-    if pool is None:
-        raise HTTPException(status_code=503, detail="Database is not connected.")
-    service = KnowledgeEnrichmentService(pool=pool)
-    try:
-        res = await service.unlink_chunks(
-            source_path=payload.source_path,
-            target_path=payload.target_path,
-            relation_type=payload.relation_type,
-        )
-        return UnlinkChunksResponse(
-            status="SUCCESS",
-            source_path=res.source_path,
-            target_path=res.target_path,
-            removed_edges_count=res.removed_edges_count,
+        return await service.curate_edges(
+            add_edges=payload.add_edges,
+            remove_edges=payload.remove_edges,
+            reason=payload.reason,
+            actor="WEB_USER",
         )
     except CorpusDomainError as exc:
         raise HTTPException(status_code=400, detail=exc.message) from exc
@@ -329,10 +291,10 @@ async def search_corpus(request: Request, payload: SearchRequest) -> SearchRespo
         pattern=result.pattern,
         elapsed_ms=round(elapsed, 1),
         confidence=result.confidence,
-        total_unique_hits=result.total_unique_hits,
-        both_hits=result.both_hits,
-        semantic_only_hits=result.semantic_only_hits,
-        verbatim_only_hits=result.verbatim_only_hits,
+        documents=result.documents,
+        groups=result.groups,
+        verbatim_total=result.verbatim_total,
+        verbatim_truncated=result.verbatim_truncated,
     )
 
 

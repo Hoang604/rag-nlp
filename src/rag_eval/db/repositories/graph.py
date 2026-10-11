@@ -7,6 +7,7 @@ import asyncpg
 
 from rag_eval.db.repositories.base import BaseRepository
 from rag_eval.schemas import (
+    EdgeLogEntity,
     GraphEdgeEntity,
     GraphTraversalStepDTO,
     RelationTypeCatalogDTO,
@@ -111,6 +112,124 @@ class GraphRepository(BaseRepository):
                 }
         except (asyncpg.PostgresError, OSError, RuntimeError) as exc:
             raise self._translate_error("upsert_edges", exc) from exc
+
+    async def insert_edges_atomic(
+        self,
+        edges: list[GraphEdgeEntity],
+        conn: asyncpg.Connection | None = None,
+    ) -> list[GraphEdgeEntity]:
+        """Inserts edges whose (source_chunk_id, target_chunk_id, relation_type) triple is new; returns the ones inserted."""
+        if not edges:
+            return []
+        query = """
+        INSERT INTO graph_edges (id, source_chunk_id, target_chunk_id, relation_type, rationale, citation_text, created_at)
+        SELECT id, source_chunk_id, target_chunk_id, relation_type, rationale, citation_text, created_at
+        FROM unnest($1::uuid[], $2::uuid[], $3::uuid[], $4::varchar(32)[], $5::text[], $6::text[], $7::timestamptz[])
+            AS t(id, source_chunk_id, target_chunk_id, relation_type, rationale, citation_text, created_at)
+        ON CONFLICT (source_chunk_id, target_chunk_id, relation_type) DO NOTHING
+        RETURNING id;
+        """
+        try:
+            async with self._connection_scope(conn) as c:
+                rows = await c.fetch(
+                    query,
+                    [e.id for e in edges],
+                    [e.source_chunk_id for e in edges],
+                    [e.target_chunk_id for e in edges],
+                    [e.relation_type for e in edges],
+                    [e.rationale for e in edges],
+                    [e.citation_text for e in edges],
+                    [e.created_at for e in edges],
+                )
+                inserted = {uuid.UUID(str(r["id"])) for r in rows}
+                return [e for e in edges if e.id in inserted]
+        except (asyncpg.PostgresError, OSError, RuntimeError) as exc:
+            raise self._translate_error("insert_edges_atomic", exc) from exc
+
+    async def find_edges(
+        self,
+        keys: list[tuple[str, str, str]],
+        conn: asyncpg.Connection | None = None,
+    ) -> list[tuple[uuid.UUID, str, str, str, str]]:
+        """Returns existing edges among given (source_path, target_path, relation_type) triples.
+        Returns list of (edge_id, source_path, target_path, relation_type, citation_text).
+        """
+        if not keys:
+            return []
+        query = """
+        SELECT e.id, s.path::text AS source_path, t.path::text AS target_path, e.relation_type, e.citation_text
+        FROM graph_edges e
+        JOIN chunks s ON e.source_chunk_id = s.id
+        JOIN chunks t ON e.target_chunk_id = t.id
+        JOIN unnest($1::text[], $2::text[], $3::varchar(32)[]) AS k(source_path, target_path, relation_type)
+          ON s.path = k.source_path::ltree AND t.path = k.target_path::ltree AND e.relation_type = k.relation_type;
+        """
+        try:
+            async with self._connection_scope(conn) as c:
+                rows = await c.fetch(
+                    query,
+                    [k[0] for k in keys],
+                    [k[1] for k in keys],
+                    [k[2] for k in keys],
+                )
+                return [
+                    (
+                        uuid.UUID(str(r["id"])),
+                        str(r["source_path"]),
+                        str(r["target_path"]),
+                        str(r["relation_type"]),
+                        str(r["citation_text"]),
+                    )
+                    for r in rows
+                ]
+        except (asyncpg.PostgresError, OSError, RuntimeError) as exc:
+            raise self._translate_error("find_edges", exc) from exc
+
+    async def delete_edge(
+        self, edge_id: uuid.UUID, conn: asyncpg.Connection | None = None
+    ) -> None:
+        """Deletes a single edge by its UUID."""
+        query = "DELETE FROM graph_edges WHERE id = $1;"
+        try:
+            async with self._connection_scope(conn) as c:
+                await c.execute(query, edge_id)
+        except (asyncpg.PostgresError, OSError, RuntimeError) as exc:
+            raise self._translate_error("delete_edge", exc) from exc
+
+    async def log_edge_events(
+        self,
+        events: list[EdgeLogEntity],
+        conn: asyncpg.Connection | None = None,
+    ) -> None:
+        """Appends audit events to graph_edge_log."""
+        if not events:
+            return
+        query = """
+        INSERT INTO graph_edge_log (
+            id, action, source_path, target_path, relation_type, citation_text, actor, reason, created_at
+        )
+        SELECT id, action, source_path::ltree, target_path::ltree, relation_type, citation_text, actor, reason, created_at
+        FROM unnest(
+            $1::uuid[], $2::varchar(16)[], $3::text[], $4::text[], $5::varchar(32)[],
+            $6::text[], $7::text[], $8::text[], $9::timestamptz[]
+        ) AS t(id, action, source_path, target_path, relation_type, citation_text, actor, reason, created_at);
+        """
+        try:
+            async with self._connection_scope(conn) as c:
+                await c.execute(
+                    query,
+                    [e.id for e in events],
+                    [e.action for e in events],
+                    [e.source_path for e in events],
+                    [e.target_path for e in events],
+                    [e.relation_type for e in events],
+                    [e.citation_text for e in events],
+                    [e.actor for e in events],
+                    [e.reason for e in events],
+                    [e.created_at for e in events],
+                )
+        except (asyncpg.PostgresError, OSError, RuntimeError) as exc:
+            raise self._translate_error("log_edge_events", exc) from exc
 
 
     async def delete_directed_edge(

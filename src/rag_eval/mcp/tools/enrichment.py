@@ -8,7 +8,11 @@ from rag_eval.db.connection import get_db_pool
 from rag_eval.retrieval.enrichment import (
     KnowledgeEnrichmentService,
 )
-from rag_eval.schemas import RelationType
+from rag_eval.schemas import (
+    CurateEdgesResult,
+    EdgeKey,
+    EdgeProposal,
+)
 
 logger = logging.getLogger("rag_eval.mcp.tools.enrichment")
 
@@ -31,49 +35,17 @@ class CorpusEnrichmentTools:
             self._pool = await get_db_pool()
         return KnowledgeEnrichmentService(self._pool)
 
-    async def link_chunks(
+    async def graph_curate_edges(
         self,
-        source_path: str,
-        target_path: str,
-        relation_type: RelationType | str,
-        citation_text: str,
-        rationale: str | None = None,
-    ) -> dict[str, object]:
-        """Thiết lập cạnh quan hệ giữa 2 chunk dựa trên LTree path."""
+        add_edges: list[EdgeProposal] | None = None,
+        remove_edges: list[EdgeKey] | None = None,
+        reason: str = "",
+    ) -> CurateEdgesResult:
+        """Executes atomic batch edge addition and removal with audit logging."""
         service = await self._get_service()
-        res = await service.link_chunks(
-            source_path=source_path,
-            target_path=target_path,
-            relation_type=relation_type,
-            citation_text=citation_text,
-            rationale=rationale,
+        return await service.curate_edges(
+            add_edges=add_edges,
+            remove_edges=remove_edges,
+            reason=reason,
+            actor="AGENT",
         )
-        return {
-            "status": "SUCCESS",
-            "source_path": res.source_path,
-            "target_path": res.target_path,
-            "relation_type": res.relation_type.value,
-            "citation_text": res.citation_text,
-            "created": res.created,
-            "rationale": res.rationale,
-        }
-
-    async def unlink_chunks(
-        self,
-        source_path: str,
-        target_path: str,
-        relation_type: RelationType | str | None = None,
-    ) -> dict[str, object]:
-        """Gỡ bỏ cạnh quan hệ giữa 2 chunk dựa trên LTree path."""
-        service = await self._get_service()
-        res = await service.unlink_chunks(
-            source_path=source_path,
-            target_path=target_path,
-            relation_type=relation_type,
-        )
-        return {
-            "status": "SUCCESS",
-            "source_path": res.source_path,
-            "target_path": res.target_path,
-            "removed_edges_count": res.removed_edges_count,
-        }

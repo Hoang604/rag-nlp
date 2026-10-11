@@ -2,13 +2,9 @@ from __future__ import annotations
 
 from rag_eval.mcp.tools.enrichment import CorpusEnrichmentTools
 from rag_eval.mcp.tools.sensors import (
-    HIERARCHICAL_DIRECTION_DESCRIPTION,
-    HIERARCHICAL_DIRECTION_DOCS,
     MAX_RAW_LINES,
     RERANK_POOL,
     CorpusRuntimeSensors,
-    GraphDirection,
-    HierarchicalNavigateResult,
 )
 from rag_eval.retrieval.embedder import (
     QueryEmbedder,
@@ -16,14 +12,20 @@ from rag_eval.retrieval.embedder import (
 )
 from rag_eval.retrieval.reranker import CorpusReranker
 from rag_eval.schemas import (
-    AgentGraphTraversalStep,
-    AgentHierarchyNode,
-    AgentVennHit,
-    GraphTraverseResult,
+    CurateEdgesResult,
+    EdgeKey,
+    EdgeProposal,
+    GraphDirection,
     HierarchicalDirection,
     RawDocumentSliceResult,
     RelationType,
-    VennSearchResult,
+    UnifiedGraphTraverseResult,
+    UnifiedHierarchyResult,
+    UnifiedSearchResult,
+    format_graph_direction_docs,
+    format_hierarchical_direction_docs,
+    format_hierarchical_direction_values,
+    format_relation_type_docs,
 )
 
 
@@ -61,7 +63,7 @@ class CorpusMCPTools:
         is_regex: bool = False,
         case_sensitive: bool = False,
         order_by_reading_order: bool = False,
-    ) -> VennSearchResult:
+    ) -> UnifiedSearchResult:
         return await self._sensors.hybrid_search(
             query=query,
             pattern=pattern,
@@ -79,53 +81,40 @@ class CorpusMCPTools:
         self,
         path: str,
         direction: HierarchicalDirection = HierarchicalDirection.CHILDREN,
-    ) -> HierarchicalNavigateResult:
+        limit: int = 15,
+    ) -> UnifiedHierarchyResult:
         return await self._sensors.hierarchical_navigate(
-            path=path, direction=direction
+            path=path,
+            direction=direction,
+            limit=limit,
         )
 
     async def graph_traverse(
         self,
         source_path: str,
-        direction: GraphDirection = "OUTGOING",
+        direction: GraphDirection = GraphDirection.OUTGOING,
         max_depth: int = 2,
-        filter_relations: list[str] | None = None,
-        limit: int = 20,
-    ) -> GraphTraverseResult:
+        filter_relations: list[RelationType] | None = None,
+        limit_per_link: int = 20,
+    ) -> UnifiedGraphTraverseResult:
         return await self._sensors.graph_traverse(
             source_path=source_path,
             direction=direction,
             max_depth=max_depth,
             filter_relations=filter_relations,
-            limit=limit,
+            limit_per_link=limit_per_link,
         )
 
-    async def link_chunks(
+    async def graph_curate_edges(
         self,
-        source_path: str,
-        target_path: str,
-        relation_type: RelationType | str,
-        citation_text: str,
-        rationale: str | None = None,
-    ) -> dict[str, object]:
-        return await self._enrichment.link_chunks(
-            source_path=source_path,
-            target_path=target_path,
-            relation_type=relation_type,
-            citation_text=citation_text,
-            rationale=rationale,
-        )
-
-    async def unlink_chunks(
-        self,
-        source_path: str,
-        target_path: str,
-        relation_type: RelationType | str | None = None,
-    ) -> dict[str, object]:
-        return await self._enrichment.unlink_chunks(
-            source_path=source_path,
-            target_path=target_path,
-            relation_type=relation_type,
+        add_edges: list[EdgeProposal] | None = None,
+        remove_edges: list[EdgeKey] | None = None,
+        reason: str = "",
+    ) -> CurateEdgesResult:
+        return await self._enrichment.graph_curate_edges(
+            add_edges=add_edges,
+            remove_edges=remove_edges,
+            reason=reason,
         )
 
     async def get_raw(
@@ -142,24 +131,26 @@ class CorpusMCPTools:
 
 
 __all__ = [
-    "HIERARCHICAL_DIRECTION_DESCRIPTION",
-    "HIERARCHICAL_DIRECTION_DOCS",
     "MAX_RAW_LINES",
     "RERANK_POOL",
-    "AgentGraphTraversalStep",
-    "AgentHierarchyNode",
-    "AgentVennHit",
     "CorpusEnrichmentTools",
     "CorpusMCPTools",
     "CorpusReranker",
     "CorpusRuntimeSensors",
+    "CurateEdgesResult",
+    "EdgeKey",
+    "EdgeProposal",
     "GraphDirection",
-    "GraphTraverseResult",
     "HierarchicalDirection",
-    "HierarchicalNavigateResult",
     "QueryEmbedder",
     "RawDocumentSliceResult",
     "RelationType",
     "SentenceTransformerQueryEmbedder",
-    "VennSearchResult",
+    "UnifiedGraphTraverseResult",
+    "UnifiedHierarchyResult",
+    "UnifiedSearchResult",
+    "format_graph_direction_docs",
+    "format_hierarchical_direction_docs",
+    "format_hierarchical_direction_values",
+    "format_relation_type_docs",
 ]

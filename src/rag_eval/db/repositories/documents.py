@@ -124,6 +124,25 @@ class DocumentRepository(BaseRepository):
         except (asyncpg.PostgresError, OSError, RuntimeError) as exc:
             raise self._translate_error(f"list_by_prefix({prefix})", exc) from exc
 
+    async def list_by_slugs(
+        self, slugs: list[str], conn: asyncpg.Connection | None = None
+    ) -> list[DocumentEntity]:
+        """Lists documents whose doc_slug matches any in the provided list."""
+        if not slugs:
+            return []
+        query = """
+        SELECT id, doc_slug, title, raw_text, metadata, created_at, updated_at
+        FROM documents
+        WHERE doc_slug = ANY($1::text[])
+        ORDER BY doc_slug ASC;
+        """
+        try:
+            async with self._connection_scope(conn) as c:
+                rows = await c.fetch(query, slugs)
+                return [self._row_to_entity(r) for r in rows]
+        except (asyncpg.PostgresError, OSError, RuntimeError) as exc:
+            raise self._translate_error(f"list_by_slugs({slugs})", exc) from exc
+
     async def list_with_stats(
         self, conn: asyncpg.Connection | None = None
     ) -> list[DocumentStatsDTO]:

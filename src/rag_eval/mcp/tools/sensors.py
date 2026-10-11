@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Final, Literal
+from typing import Final
 
 import asyncpg
-from pydantic import BaseModel, ConfigDict, Field
 
 from rag_eval.db.connection import get_db_pool
 from rag_eval.db.repositories import CorpusRepository
@@ -19,34 +18,25 @@ from rag_eval.retrieval.embedder import QueryEmbedder
 from rag_eval.retrieval.engine import RetrievalEngine
 from rag_eval.retrieval.reranker import CorpusReranker
 from rag_eval.schemas import (
-    AgentGraphTraversalStep,
-    AgentHierarchyNode,
-    AgentVennHit,
-    GraphTraverseResult,
+    GraphDirection,
+    GraphLink,
+    GraphTraversalStepDTO,
     HierarchicalDirection,
     HierarchyNodeDTO,
+    ProvisionText,
     RawDocumentSliceResult,
-    VennSearchResult,
+    RelationType,
+    SearchDocument,
+    UnifiedGraphTraverseResult,
+    UnifiedHierarchyResult,
+    UnifiedSearchResult,
     clean_node_metadata,
+    group_in_reading_order,
     split_context_and_text,
     validate_ltree_path,
 )
 
 logger = logging.getLogger("rag_eval.mcp.tools.sensors")
-
-GraphDirection = Literal["OUTGOING", "INCOMING", "BOTH"]
-
-HIERARCHICAL_DIRECTION_DOCS: Final[dict[HierarchicalDirection, str]] = {
-    HierarchicalDirection.CHILDREN: "Lấy các nút con trực tiếp (cấp nlevel + 1).",
-    HierarchicalDirection.PARENT_CHAIN: "Lấy chuỗi tổ tiên từ tài liệu gốc xuống đến nút cha trực tiếp.",
-    HierarchicalDirection.SIBLINGS: "Lấy các nút anh em cùng cấp dưới cùng một nút cha.",
-    HierarchicalDirection.SUBTREE: "Lấy toàn bộ cây con hậu duệ theo đúng thứ tự đọc của tài liệu (start_line ASC, path ASC).",
-}
-
-HIERARCHICAL_DIRECTION_DESCRIPTION: Final = (
-    "Hướng duyệt trên cây phân cấp: "
-    + "; ".join(f"'{k.value}': {v}" for k, v in HIERARCHICAL_DIRECTION_DOCS.items())
-)
 
 RERANK_POOL: Final[int] = 10
 MAX_RAW_LINES: Final[int] = 200
@@ -57,16 +47,7 @@ MAX_RAW_LINES: Final[int] = 200
 # ---------------------------------------------------------------------------
 
 
-class HierarchicalNavigateResult(BaseModel):
-    model_config = ConfigDict(extra="ignore")
 
-    anchor_path: str = Field(..., description="Đường dẫn phân cấp của nút gốc làm mốc duyệt")
-    direction: str = Field(..., description="Hướng duyệt đã thực hiện")
-    total_nodes: int = Field(..., description="Tổng số nút trả về")
-    nodes: list[AgentHierarchyNode] = Field(
-        default_factory=list,
-        description="Danh sách phẳng các nút được sắp xếp theo đúng thứ tự đọc của tài liệu",
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -144,7 +125,7 @@ class CorpusRuntimeSensors:
         is_regex: bool = False,
         case_sensitive: bool = False,
         order_by_reading_order: bool = False,
-    ) -> VennSearchResult:
+    ) -> UnifiedSearchResult:
         """Executes generalized dual-channel Venn retrieval via RetrievalEngine."""
         try:
             engine = await self._get_engine()
@@ -171,8 +152,11 @@ class CorpusRuntimeSensors:
         self,
         path: str,
         direction: HierarchicalDirection = HierarchicalDirection.CHILDREN,
-    ) -> HierarchicalNavigateResult:
-        """Navigates hierarchical document tree via ChunkRepository."""
+        limit: int = 15,
+    ) -> UnifiedHierarchyResult:
+        """Navigates hierarchical document tree via ChunkRepository, factoring results
+        into reading-order context groups bounded by limit.
+        """
         repo = await self._get_repo()
         clean_path = validate_ltree_path(path)
         origin_chunk = await repo.chunks.get_by_path(clean_path)
@@ -214,11 +198,12 @@ class CorpusRuntimeSensors:
                 message=f"Không tìm thấy chunk tương ứng với path='{clean_path}'.",
             )
 
-        dir_val = direction.value
+        dir_val = direction.value if isinstance(direction, HierarchicalDirection) else str(direction)
+        dir_enum = HierarchicalDirection(dir_val)
         nav_anchor = (
             clean_path
             if (
-                direction in (HierarchicalDirection.CHILDREN, HierarchicalDirection.SUBTREE)
+                dir_enum in (HierarchicalDirection.CHILDREN, HierarchicalDirection.SUBTREE)
                 and clean_path != origin_chunk.path
                 and origin_chunk.path.startswith(clean_path)
             )
@@ -227,7 +212,7 @@ class CorpusRuntimeSensors:
         nodes_dto = await repo.chunks.navigate_hierarchy(
             origin_chunk.document_id, nav_anchor, dir_val
         )
-        if not nodes_dto and direction == HierarchicalDirection.CHILDREN:
+        if not nodes_dto and dir_enum == HierarchicalDirection.CHILDREN:
             doc = await repo.documents.get_by_id(origin_chunk.document_id)
             doc_slug_val = doc.doc_slug if doc else clean_path
             all_doc_chunks = await repo.chunks.list_by_document(origin_chunk.document_id)
@@ -248,39 +233,58 @@ class CorpusRuntimeSensors:
                         metadata=c.metadata,
                         relative_depth=1,
                     )
-                    for c in matching_children[:10]
+                    for c in matching_children
                 ]
 
-        agent_nodes: list[AgentHierarchyNode] = []
-        for n in nodes_dto:
+        total = len(nodes_dto)
+        effective_limit = max(1, min(limit, 50))
+        truncated = total > effective_limit
+        selected_nodes = nodes_dto[:effective_limit]
+
+        doc = await repo.documents.get_by_id(origin_chunk.document_id)
+        doc_slug = doc.doc_slug if doc else clean_path.split(".")[0]
+        doc_title = doc.title if doc else doc_slug
+        documents: dict[str, SearchDocument] = {
+            doc_slug: SearchDocument(doc_slug=doc_slug, title=doc_title, metadata={})
+        }
+
+        reading_items: list[tuple[str, str, ProvisionText]] = []
+        for n in selected_nodes:
             ctx, txt = split_context_and_text(n.contextualized_text, n.verbatim_text)
-            agent_nodes.append(
-                AgentHierarchyNode(
-                    path=n.path,
-                    start_line=n.start_line,
-                    end_line=n.end_line,
-                    context=ctx,
-                    text=txt,
-                    metadata=clean_node_metadata(n.metadata),
+            reading_items.append(
+                (
+                    n.doc_slug or doc_slug,
+                    ctx,
+                    ProvisionText(
+                        path=n.path,
+                        text=txt,
+                        start_line=n.start_line,
+                        end_line=n.end_line,
+                        metadata=clean_node_metadata(n.metadata),
+                    ),
                 )
             )
 
-        return HierarchicalNavigateResult(
+        groups = group_in_reading_order(reading_items)
+
+        return UnifiedHierarchyResult(
             anchor_path=origin_chunk.path,
-            direction=dir_val,
-            total_nodes=len(agent_nodes),
-            nodes=agent_nodes,
+            direction=dir_enum,
+            documents=documents,
+            groups=groups,
+            total=total,
+            truncated=truncated,
         )
 
     async def graph_traverse(
         self,
         source_path: str,
-        direction: GraphDirection = "OUTGOING",
+        direction: GraphDirection = GraphDirection.OUTGOING,
         max_depth: int = 2,
-        filter_relations: list[str] | None = None,
-        limit: int = 20,
-    ) -> GraphTraverseResult:
-        """Traverses knowledge graph bidirectionally for symmetric edges via GraphRepository."""
+        filter_relations: list[RelationType] | None = None,
+        limit_per_link: int = 20,
+    ) -> UnifiedGraphTraverseResult:
+        """Traverses knowledge graph, grouping steps by citation provenance with fair quotas."""
         repo = await self._get_repo()
         clean_path = validate_ltree_path(source_path)
         chunk = await repo.chunks.get_by_path(clean_path)
@@ -290,36 +294,78 @@ class CorpusRuntimeSensors:
                 message=f"Không tìm thấy chunk tương ứng với source_path='{source_path}'.",
             )
 
+        # Overfetch to allow fair per-link quotas
+        effective_quota = max(1, min(limit_per_link, 100))
+        match_limit = max_depth * effective_quota * 10
+        filter_codes = [r.value for r in filter_relations] if filter_relations else None
         steps_dto = await repo.graph.traverse(
             chunk.id,
-            nav_direction=direction,
+            nav_direction=direction.value,
             depth_limit=max_depth,
-            filter_relations=filter_relations,
-            match_limit=limit,
+            filter_relations=filter_codes,
+            match_limit=match_limit,
         )
 
-        agent_steps: list[AgentGraphTraversalStep] = []
+        # Partition steps into citation links
+        link_buckets: dict[tuple[str, GraphDirection, str, str, int], list[GraphTraversalStepDTO]] = {}
         for s in steps_dto:
-            ctx, txt = split_context_and_text(s.target_contextualized_text, s.target_text)
-            agent_steps.append(
-                AgentGraphTraversalStep(
-                    source_path=s.source_path,
-                    target_path=s.target_path,
-                    relation_type=s.relation_type,
-                    depth=s.depth,
-                    target_start_line=s.target_start_line,
-                    target_end_line=s.target_end_line,
-                    target_context=ctx,
-                    target_text=txt,
-                    rationale=s.rationale,
-                    citation_text=s.citation_text,
+            key = (s.source_path, direction, s.relation_type, s.citation_text, s.depth)
+            if key not in link_buckets:
+                link_buckets[key] = []
+            link_buckets[key].append(s)
+
+        # Batch resolve document titles for all reached documents
+        distinct_slugs = list({s.target_doc_slug for s in steps_dto if s.target_doc_slug})
+        docs = await repo.documents.list_by_slugs(distinct_slugs)
+        documents: dict[str, SearchDocument] = {
+            d.doc_slug: SearchDocument(doc_slug=d.doc_slug, title=d.title, metadata={})
+            for d in docs
+        }
+        for slug in distinct_slugs:
+            if slug not in documents:
+                documents[slug] = SearchDocument(doc_slug=slug, title=slug, metadata={})
+
+        graph_links: list[GraphLink] = []
+        for (from_p, d_dir, rel_t, cit_txt, depth), steps in link_buckets.items():
+            total = len(steps)
+            truncated = total > effective_quota
+            selected = steps[:effective_quota]
+
+            items: list[tuple[str, str, ProvisionText]] = []
+            for s in selected:
+                ctx, txt = split_context_and_text(s.target_contextualized_text, s.target_text)
+                items.append(
+                    (
+                        s.target_doc_slug,
+                        ctx,
+                        ProvisionText(
+                            path=s.target_path,
+                            text=txt,
+                            start_line=s.target_start_line,
+                            end_line=s.target_end_line,
+                            metadata={},
+                        ),
+                    )
+                )
+
+            groups = group_in_reading_order(items)
+            graph_links.append(
+                GraphLink(
+                    from_path=from_p,
+                    direction=d_dir,
+                    relation_type=rel_t,
+                    citation_text=cit_txt,
+                    depth=depth,
+                    total=total,
+                    truncated=truncated,
+                    groups=groups,
                 )
             )
 
-        return GraphTraverseResult(
+        return UnifiedGraphTraverseResult(
             source_path=clean_path,
-            total_paths=len(agent_steps),
-            paths=agent_steps,
+            documents=documents,
+            links=graph_links,
         )
 
     async def get_raw(
@@ -427,18 +473,14 @@ class CorpusRuntimeSensors:
 
 
 __all__ = [
-    "HIERARCHICAL_DIRECTION_DESCRIPTION",
-    "HIERARCHICAL_DIRECTION_DOCS",
     "MAX_RAW_LINES",
     "RERANK_POOL",
-    "AgentGraphTraversalStep",
-    "AgentHierarchyNode",
-    "AgentVennHit",
     "CorpusRuntimeSensors",
     "GraphDirection",
-    "GraphTraverseResult",
     "HierarchicalDirection",
-    "HierarchicalNavigateResult",
     "RawDocumentSliceResult",
-    "VennSearchResult",
+    "RelationType",
+    "UnifiedGraphTraverseResult",
+    "UnifiedHierarchyResult",
+    "UnifiedSearchResult",
 ]

@@ -59,7 +59,9 @@ export const GlobalGrepModal: React.FC<GlobalGrepModalProps> = ({
           order_by_reading_order: true,
           limit: 30,
         });
-        const allHits = [...resp.both_hits, ...resp.verbatim_only_hits];
+        const allHits = (resp.groups ?? []).flatMap((g) =>
+          g.provisions.filter((p) => p.found_in === 'both' || p.found_in === 'verbatim_only')
+        );
         setResults(
           allHits.map((m) => ({
             path: m.path,

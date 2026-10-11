@@ -44,27 +44,24 @@ class FlushingFileHandler(logging.FileHandler):
 SERVER_NAME = "rag-corpus-mcp"
 SERVER_VERSION = "3.0.0"
 
-STATIC_SERVER_INSTRUCTIONS = """# RAG CORPUS PROTOCOL & KNOWLEDGE GRAPH INVARIANTS
+STATIC_SERVER_INSTRUCTIONS = """# RAG CORPUS PROTOCOL & AGENT OPERATIONAL PLAYBOOK
 
 ## 1. MENTAL & TOPOLOGICAL MODEL
 - HIERARCHY: Documents form a strict tree `Document -> Segment -> Sub-segment...` with dot-separated hierarchical paths (e.g. `doc_slug.sec_1.para_2`).
 - KNOWLEDGE GRAPH: Directed relations interlink chunks across hierarchy boundaries to preserve cross-cutting semantic dependencies.
 - LEAF INDEXING: Retrieval and curation operate on leaf chunks containing verbatim source text and contextualized ancestry text.
 
-## 2. RETRIEVAL & CONTEXT EXPANSION PRINCIPLE
-Retrieval direction is governed by token specificity and contextual completeness:
-- Dual-Channel Retrieval: Unified hybrid_search concurrently gathers semantic context (query) and literal keyword anchors (pattern), partitioned into disjoint Venn sets.
-- Contextual Expansion: When a retrieved chunk possesses an unresolved referential deficit, expand locally along the hierarchical tree (`hierarchical_navigate`) or follow semantic relations through the knowledge graph (`graph_traverse`) rather than issuing ungrounded global queries.
-- Raw Document Inspection: When chunks appear cleaved, truncated, or missing adjacent lines, inspect authentic unparsed document text via `get_raw` (up to 200 lines per call).
+## 2. OPERATIONAL PLAYBOOK: WHEN TO USE WHICH TOOL
+- Discovery & Search: Reach for `hybrid_search` when starting an investigation, seeking relevant topics, or locating anchor terms.
+- Local Referential Deficit: Reach for `hierarchical_navigate` when an identified chunk requires surrounding context, ancestor headers, sibling flow, or descendant subtrees.
+- Cross-Cutting Relationships: Reach for `graph_traverse` when following citation links across documents or exploring multi-hop architectural dependencies.
+- Ground-Truth Verification: Reach for `get_raw` when inspecting raw unparsed documentation or source code lines without AST chunk boundaries.
+- Knowledge Curation: Reach for `graph_curate_edges` when atomically adding grounded semantic links or removing superseded graph connections.
 
 ## 3. GROUNDING & AUTHORITATIVE CITATION CONTRACT
 - Every claim, inference, or synthesis must be explicitly grounded in retrieved leaf chunks and cited via exact hierarchical paths.
 - Tool responses are the sole source of truth. When no retrieved chunk grounds an answer, affirm the absence of data explicitly; never extrapolate or hallucinate ungrounded facts.
-
-## 4. RUNTIME KNOWLEDGE GRAPH ENRICHMENT
-- Dynamic Enrichment: Agents can dynamically enrich relationships discovered during retrieval synthesis using `link_chunks`.
-- Relationship Rectification: Erroneous or superseded graph connections can be decoupled cleanly using `unlink_chunks`.
-- Pure Path Addressing: All operations identify chunks exclusively by hierarchical LTree `path` (e.g. `doc_slug.sec_1.para_2`). Database internal UUIDs are completely abstracted."""
+- Pure Path Addressing: All operations identify nodes and edges exclusively by hierarchical LTree dot-paths. Database internal UUIDs are completely abstracted."""
 
 
 def render_server_instructions(

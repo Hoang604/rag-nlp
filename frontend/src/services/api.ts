@@ -4,14 +4,12 @@ import {
   GraphTraversalStep,
   GraphVisualizerResponse,
   HealthResponse,
-  LinkChunksPayload,
-  LinkChunksResponse,
+  CurateEdgesPayload,
+  CurateEdgesResult,
   RawTextResponse,
   RelationTypeCatalogItem,
   SearchPayload,
   SearchResponse,
-  UnlinkChunksPayload,
-  UnlinkChunksResponse,
 } from '../types/api';
 import { DocumentTreeResponse } from '../types/tree';
 
@@ -92,15 +90,8 @@ class ApiClient {
   }
 
   // 6. Runtime Graph Enrichment
-  async linkChunks(payload: LinkChunksPayload): Promise<LinkChunksResponse> {
-    return this.request<LinkChunksResponse>('/documents/links', {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
-  }
-
-  async unlinkChunks(payload: UnlinkChunksPayload): Promise<UnlinkChunksResponse> {
-    return this.request<UnlinkChunksResponse>('/documents/unlinks', {
+  async curateEdges(payload: CurateEdgesPayload): Promise<CurateEdgesResult> {
+    return this.request<CurateEdgesResult>('/documents/curate', {
       method: 'POST',
       body: JSON.stringify(payload),
     });
