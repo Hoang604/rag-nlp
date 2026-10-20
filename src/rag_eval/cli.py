@@ -87,10 +87,10 @@ def ingest(
     from rag_eval.ingestion.pipeline import DirectIngestionCoordinator
     from rag_eval.schemas import canonicalize_ltree_path
 
-    doc_slug = canonicalize_ltree_path(slug) if slug else canonicalize_ltree_path(file_path.stem)
-    doc_title = title if title else file_path.stem
+    doc_slug = canonicalize_ltree_path(slug) if slug else None
+    doc_title = title if title else None
 
-    console.print(f"[cyan]Ingesting document '{file_path.name}' directly into PostgreSQL as '{doc_slug}'...[/cyan]")
+    console.print(f"[cyan]Ingesting document '{file_path.name}' directly into PostgreSQL...[/cyan]")
 
     async def _run() -> None:
         pool = await get_db_pool()

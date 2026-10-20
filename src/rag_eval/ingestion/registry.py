@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import ClassVar
 
 from rag_eval.exceptions import E_CORPUS_INTEGRITY_VIOLATION, CorpusDomainError
-from rag_eval.schemas import ParsedDocumentDraft
+from rag_eval.schemas import ParsedDocumentDraft, canonicalize_ltree_path
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +22,32 @@ class BaseCodingParser(ABC):
     """Abstract base contract for framework-specific technical documentation parsers."""
 
     name: str
+    framework_prefix: str = ""
+
+    def resolve_doc_slug(
+        self,
+        file_path: Path,
+        doc_slug: str | None = None,
+        corpus_root: Path | None = None,
+    ) -> str:
+        """Resolves the canonical ltree document slug, enforcing the framework namespace prefix when derived from file_path."""
+        if doc_slug is not None:
+            return canonicalize_ltree_path(doc_slug)
+
+        resolved_path = Path(file_path).resolve()
+        if corpus_root is not None and resolved_path.is_relative_to(corpus_root.resolve()):
+            rel = resolved_path.relative_to(corpus_root.resolve())
+            stem_path = rel.with_suffix("").as_posix()
+            slug = canonicalize_ltree_path(stem_path)
+        else:
+            slug = canonicalize_ltree_path(resolved_path.stem)
+
+        prefix = self.framework_prefix.strip()
+        if prefix:
+            clean_prefix = canonicalize_ltree_path(prefix)
+            if slug != clean_prefix and not slug.startswith(f"{clean_prefix}."):
+                slug = f"{clean_prefix}.{slug}"
+        return slug
 
     @abstractmethod
     def can_handle(self, file_path: Path, raw_text: str = "") -> bool:
@@ -62,8 +88,15 @@ class CodingParserRegistry:
         dedicated parser fails fast.
         """
         resolved_path = Path(file_path).resolve()
+        effective_text = raw_text
+        if not effective_text and resolved_path.exists() and resolved_path.is_file():
+            try:
+                effective_text = resolved_path.read_text("utf-8", errors="replace")
+            except OSError:
+                effective_text = ""
+
         for parser in cls._parsers:
-            if parser.can_handle(resolved_path, raw_text):
+            if parser.can_handle(resolved_path, effective_text):
                 return parser
 
         raise UnsupportedFrameworkError(
