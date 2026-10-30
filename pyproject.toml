@@ -52,6 +52,7 @@ extend-select = ["ANN401"]
 
 [dependency-groups]
 dev = [
+    "playwright>=1.64.1",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
 ]

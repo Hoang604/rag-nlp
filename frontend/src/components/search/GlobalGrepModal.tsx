@@ -9,7 +9,7 @@ interface GlobalGrepModalProps {
   isOpen: boolean;
   onClose: () => void;
   docSlug?: string;
-  onSelectHit: (path: string) => void;
+  onSelectHit: (path: string, docSlug: string) => void;
 }
 
 export const GlobalGrepModal: React.FC<GlobalGrepModalProps> = ({
@@ -60,17 +60,17 @@ export const GlobalGrepModal: React.FC<GlobalGrepModalProps> = ({
           limit: 30,
         });
         const allHits = (resp.groups ?? []).flatMap((g) =>
-          g.provisions.filter((p) => p.found_in === 'both' || p.found_in === 'verbatim_only')
+          g.provisions
+            .filter((p) => p.found_in === 'both' || p.found_in === 'verbatim_only')
+            .map((p) => ({
+              path: p.path,
+              doc_slug: g.doc_slug,
+              field_matched: `LINE ${p.start_line}-${p.end_line}`,
+              match_snippet: p.text.substring(0, 150),
+              verbatim_text: p.text,
+            }))
         );
-        setResults(
-          allHits.map((m) => ({
-            path: m.path,
-            doc_slug: m.path.split('.')[0],
-            field_matched: `LINE ${m.start_line}-${m.end_line}`,
-            match_snippet: m.text.substring(0, 150),
-            verbatim_text: m.text,
-          }))
-        );
+        setResults(allHits);
       } catch (err: unknown) {
         setErrorMsg(err instanceof Error ? err.message : String(err));
         setResults([]);
@@ -165,7 +165,7 @@ export const GlobalGrepModal: React.FC<GlobalGrepModalProps> = ({
             <div
               key={idx}
               onClick={() => {
-                onSelectHit(hit.path);
+                onSelectHit(hit.path, hit.doc_slug || '');
                 onClose();
               }}
               className="group flex flex-col gap-1 rounded-xl border border-slate-800 bg-slate-950/60 p-3 hover:border-brand-500/60 hover:bg-slate-900/90 cursor-pointer transition"

@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "docs": {
+      "command": "/home/hoang/python/rag-nlp/.venv/bin/rag-eval",
+      "args": [
+        "server",
+        "--log-file",
+        "logs/mcp_server.log"
+      ]
+    }
+  }
+}

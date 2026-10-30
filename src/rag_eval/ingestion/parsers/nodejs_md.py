@@ -245,8 +245,6 @@ class NodeJSMarkdownParser(BaseCodingParser):
             return False
 
         parts_lower = {p.lower() for p in Path(file_path).parts}
-        if "nextjs" in parts_lower:
-            return False
         if "nodejs" in parts_lower or "node_docs" in parts_lower:
             return True
 

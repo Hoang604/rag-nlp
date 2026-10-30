@@ -37,8 +37,18 @@ export const DocumentStudioContainer: React.FC<DocumentStudioContainerProps> = (
   useEffect(() => {
     if (selectedPathProp) {
       setSelectedPath(selectedPathProp);
+      setCollapsedPaths((prev) => {
+        const next = new Set(prev);
+        const parts = selectedPathProp.split('.');
+        for (let i = 1; i < parts.length; i++) {
+          next.delete(parts.slice(0, i).join('.'));
+        }
+        return next;
+      });
+    } else if (treeData?.root?.path) {
+      setSelectedPath(treeData.root.path);
     }
-  }, [selectedPathProp]);
+  }, [selectedPathProp, treeData]);
 
   const handleSelectPath = (path: string) => {
     setSelectedPath(path);

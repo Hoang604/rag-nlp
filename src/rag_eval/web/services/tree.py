@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from rag_eval.schemas import ChunkEntity, sanitize_ltree_label
+from rag_eval.schemas import ChunkEntity, canonicalize_ltree_path
 from rag_eval.web.schemas import (
     DocumentTreeNodeResponse,
     DocumentTreeResponse,
@@ -35,7 +35,7 @@ class TreeHierarchyBuilder:
         metadata: dict[str, object] | None = None,
     ) -> DocumentTreeResponse:
         """Constructs nested tree hierarchy with root node and complete children branches."""
-        sanitized_root = sanitize_ltree_label(doc_slug)
+        sanitized_root = canonicalize_ltree_path(doc_slug)
         doc_meta = dict(metadata or {})
 
         root_node = DocumentTreeNodeResponse(

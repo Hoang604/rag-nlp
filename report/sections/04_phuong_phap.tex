@@ -1,0 +1,253 @@
+% ============================================================================
+% IV. PHƯƠNG PHÁP THỰC HIỆN
+% ============================================================================
+\section{PHƯƠNG PHÁP THỰC HIỆN}
+
+Chương này được chia thành hai phần tách biệt: \textbf{Phần A từ Mục IV.1 đến Mục IV.4} trình bày kiến trúc của \textbf{core RAG framework đứng bên ngoài} — bao gồm \texttt{Parser interface} 5 invariants, database schema trên PostgreSQL 16, dual-channel retrieval engine, cơ chế quản trị Knowledge Graph và cơ sở toán học — hoàn toàn không phụ thuộc vào bất kỳ định dạng tài liệu cụ thể nào; \textbf{Phần B tại Mục IV.5} trình bày chi tiết \textbf{hai bộ \texttt{Parser} mẫu cho tài liệu Next.js MDX và Node.js Markdown} được xây dựng để lắp vào framework trên nhằm phục vụ thực nghiệm.
+
+% ----------------------------------------------------------------------------
+% PHẦN A: KHUNG HỆ THỐNG RAG ĐỘC LẬP MIỀN DỮ LIỆU
+% ----------------------------------------------------------------------------
+\subsection{Phần A.1 -- Kiến trúc tổng thể và Parser interface của framework}
+Kiến trúc vận hành tổng thể của hệ thống được biểu diễn tại Hình \ref{fig:workflow}, phân tách rõ ranh giới giữa \textbf{vùng lắp ghép \texttt{Parser} theo 5 output invariants} từ bước 1 đến bước 3 và \textbf{lõi storage, hybrid retrieval, Knowledge Graph cố định của framework} từ bước 4 đến bước 8.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    node distance=0.65cm and 0.8cm,
+    box/.style={rectangle, rounded corners=3pt, draw=black!80, thick, fill=gray!8, text width=4.0cm, align=center, minimum height=0.95cm, font=\small},
+    dbbox/.style={cylinder, shape border rotate=90, aspect=0.22, draw=black!85, thick, fill=blue!8, text width=3.4cm, align=center, minimum height=1.2cm, font=\small\bfseries},
+    proc/.style={rectangle, rounded corners=3pt, draw=blue!70!black, thick, fill=blue!5, text width=4.2cm, align=center, minimum height=0.95cm, font=\small},
+    outbox/.style={rectangle, rounded corners=3pt, draw=green!50!black, thick, fill=green!8, text width=4.2cm, align=center, minimum height=0.95cm, font=\small},
+    arrow/.style={-Stealth, thick, draw=black!80}
+]
+    % Cột 1: Pha Ingestion
+    \node[box] (raw) {1. Kho tài liệu phân cấp bất kỳ\\của người dùng};
+    \node[box, below=of raw] (parser) {2. Module \texttt{Parser} do Agent viết\\đăng ký vào Registry};
+    \node[box, below=of parser] (chunk) {3. Kiểm tra 5 output invariants\\\texttt{ltree}, dòng 1:1, context};
+    \node[box, below=of chunk] (embed) {4. Dense Vector Encoding\\\texttt{Qwen3-Embedding-0.6B}\\$d=512$};
+
+    % Trung tâm: Cơ sở dữ liệu
+    \node[dbbox, right=0.8cm of chunk] (db) {PostgreSQL 16\\+ \texttt{pgvector} HNSW\\+ \texttt{ltree} \& FTS/GIN\\+ Knowledge Graph};
+
+    % Cột 2: Pha Retrieval & MCP
+    \node[proc, right=0.8cm of raw] (query) {5. Runtime Query $(q, p)$\\CLI / Web API / 6-Tool MCP};
+    \node[proc, below=of query] (dual) {6. Thực thi kép song song:\\Hybrid RRF \& Verbatim Grep};
+    \node[proc, below=of dual] (rerank) {7. Cross-Encoder Reranking\\\texttt{mmarco-mMiniLMv2}};
+    \node[outbox, below=of rerank] (venn) {8. Venn Partitioning + Reading Order Grouping \& Knowledge Graph};
+
+    % Đường nối
+    \draw[arrow] (raw) -- (parser);
+    \draw[arrow] (parser) -- (chunk);
+    \draw[arrow] (chunk) -- (embed);
+    \draw[arrow] (embed.east) -| (db.south);
+    \draw[arrow] (chunk.east) -- (db.west);
+
+    \draw[arrow] (query) -- (dual);
+    \draw[arrow] (db.north) |- (dual.west);
+    \draw[arrow] (dual) -- (rerank);
+    \draw[arrow] (rerank) -- (venn);
+    \draw[arrow, dashed] (venn.west) -| node[pos=0.25, below, font=\scriptsize] {Curate Edges} (db.south);
+\end{tikzpicture}
+\caption{Kiến trúc RAG framework tách biệt \texttt{Parser interface} ở bước 1--3 và lõi storage -- retrieval cố định ở bước 4--8}
+\label{fig:workflow}
+\end{figure}
+
+Để một \texttt{Coding Agent} có thể nhanh chóng viết \texttt{Parser} cho một kho tài liệu mới và lắp vào hệ thống, framework cung cấp sẵn \texttt{Parser Registry}, bộ hàm chuẩn hóa nhãn cây phân cấp và lớp kiểm tra tự động ở bước 2--3:
+\begin{itemize}
+    \item \textbf{Điều phối \texttt{Parser Registry} qua positive detection:} Mỗi bộ \texttt{Parser} khi lắp vào framework chỉ cần định nghĩa hai phương thức: detector method nhận diện tài liệu thuộc miền của mình và parse method phân rã raw text thành cấu trúc \texttt{ParsedDocumentDraft}. Nếu một tệp đầu vào không khớp với bất kỳ \texttt{Parser} nào đã đăng ký, framework dừng ngay lập tức và báo lỗi định dạng chưa được hỗ trợ thay vì tự ý chạy fixed-window chunking.
+    \item \textbf{Bộ hàm chuẩn hóa nhãn và đường dẫn \texttt{ltree} dùng chung:} Framework cung cấp sẵn hàm biến đổi mọi tiêu đề mục hoặc đường dẫn tệp từ bất kỳ ngôn ngữ nào về miền nhãn PostgreSQL \texttt{ltree} hợp lệ khớp regex $\texttt{\^{}[A-Za-z0-9\_]\{1,255\}\$}$: chuyển ký tự \texttt{đ/Đ} sang \texttt{d/D}, chuẩn hóa Unicode \texttt{NFKD} và lược bỏ dấu tổ hợp, thay thế chuỗi ký tự phi chữ-số bằng dấu gạch dưới \texttt{\_}, cắt tối đa 250 ký tự; các tiêu đề chỉ gồm chữ viết phi-Latinh được ánh xạ sang deterministic MD5 hash 12 ký tự có prefix \texttt{u\_}.
+    \item \textbf{Kiểm tra tự động 5 invariants trước khi ghi database:} Trước khi cho phép bước 4 thực hiện batch encoding, framework kiểm tra mọi \texttt{chunk} và graph edge do \texttt{Parser} trả về: tính hợp lệ và tính duy nhất của đường dẫn $\text{path}_i \in \mathcal{T}_{\text{ltree}}$, bất đẳng thức dòng $1 \le s_i \le e_i \le |d_m|$, khuôn dạng tiền tố $\text{text}^{\text{ctx}}_i = \texttt{"[}\text{context}_i\texttt{]\textbackslash n"} \circ \text{text}^{\text{verb}}_i$, mảng \texttt{ancestor\_titles} trong metadata và citation grounding của \texttt{citation\_text} trong \texttt{chunk} nguồn.
+\end{itemize}
+
+\subsection{Phần A.2 -- Kiến trúc storage, retrieval và Knowledge Graph của framework}
+
+\subsubsection{Các mô-đun xử lý trung tâm và sự đánh đổi kỹ thuật}
+Sau khi dữ liệu đi qua bước kiểm tra 5 invariants, toàn bộ quá trình storage, retrieval và navigation được thực thi bởi 4 mô-đun cố định của framework:
+
+\begin{enumerate}
+    \item \textbf{Dense Bi-Encoder \texttt{Qwen/Qwen3-Embedding-0.6B} [4]:} Encode chuỗi $\text{text}^{\text{ctx}}_i$ với độ dài tối đa 2.048 token, áp dụng Matryoshka dimension truncation [5] về số chiều $d = 512$ và chuẩn hóa $L_2$ ($\|\mathbf{v}\|_2 = 1$).
+    \begin{itemize}
+        \item \textit{Căn cứ kỹ thuật \& đánh đổi}: Do \texttt{Qwen3-Embedding-0.6B} dùng kiến trúc Decoder-only Transformer lấy biểu diễn qua last-token pooling, tokenizer bắt buộc dùng \texttt{left-padding} để các pad token không làm lệch hidden state cuối chuỗi. Việc rút gọn Matryoshka xuống 512 chiều giúp giảm 50\% dung lượng lưu trữ vector so với 1.024 chiều gốc và tăng tốc độ duyệt HNSW index trong \texttt{pgvector} [4], [5].
+    \end{itemize}
+    \item \textbf{Kênh Sparse FTS \& Kênh Verbatim / Regex Matching:}
+    \begin{itemize}
+        \item \textit{Kênh Sparse FTS}: Tạo GIN index trên cột \texttt{tsv\_content} được cập nhật tự động qua database trigger từ trường $\text{text}^{\text{ctx}}_i$ bằng cấu hình từ điển \texttt{simple}. \textit{Đánh đổi kỹ thuật}: từ điển \texttt{english} dùng Porter stemmer sẽ cắt biến dạng các thuật ngữ và tên hàm chuyên ngành; từ điển \texttt{simple} giữ nguyên vẹn hình thái token theo khoảng trắng và dấu câu, đổi lại không tự động lemmatization tiếng Anh và không hỗ trợ \texttt{camelCase} sub-token splitting.
+        \item \textit{Kênh Verbatim và Regex Matching}: Tìm kiếm trực tiếp bằng POSIX regex (\texttt{\~}, \texttt{\~*}) hoặc substring (\texttt{LIKE}/\texttt{ILIKE}) kết hợp toán tử ngưỡng trigram \texttt{\%} và hàm \texttt{word\_similarity} của tiện ích \texttt{pg\_trgm} trên cả $\text{text}^{\text{verb}}_i$ và $\text{text}^{\text{ctx}}_i$. Kênh này bù đắp trực tiếp cho FTS \texttt{simple} khi cần tìm chuỗi con nằm giữa một compound identifier, mã lỗi hoặc CLI flag.
+    \end{itemize}
+    \item \textbf{Cross-Encoder Reranker \texttt{mmarco-mMiniLMv2-L12-H384-v1} [8]:} Gồm 12 lớp Transformer với hidden size $H = 384$, context window tối đa $L_{\max} = 256$ token, nhận cặp $(\text{query}, \text{text}^{\text{ctx}}_i)$ để thực hiện cross-attention scoring ở chế độ \texttt{CUDA FP16} kèm LRU cache lưu 2.048 cặp gần nhất. \textit{Đánh đổi kỹ thuật}: context window 256 token giữ reranking latency nhỏ, nhưng với các \texttt{chunk} dài hơn 256 token, điểm Cross-Encoder chỉ phản ánh mức độ khớp trên chuỗi tiêu đề cha, tiêu đề mục và đoạn mở đầu, còn phần thân phía dưới dựa vào điểm RRF từ Dense Vector 2.048 token và FTS.
+    \item \textbf{Tree Navigation trên \texttt{ltree}, Knowledge Graph và Grounded Answer Verification qua 6 MCP tools [14]:}
+    \begin{itemize}
+        \item \textit{Tree navigation và tự động tái tạo virtual parent node}: Hỗ trợ 4 hướng duyệt dựa trên toán tử \texttt{ltree} gồm \texttt{CHILDREN} (\texttt{c.path <@ anchor} và \texttt{nlevel(c.path) = nlevel(anchor) + 1}), \texttt{SUBTREE} (\texttt{c.path <@ anchor}), \texttt{PARENT\_CHAIN} (\texttt{c.path @> anchor}) và \texttt{SIBLINGS}. Khi một mục cha trong tài liệu chỉ có dòng tiêu đề mà không có đoạn văn thân bài riêng nên không tạo \texttt{chunk} vật lý trong bảng \texttt{chunks}, truy vấn \texttt{PARENT\_CHAIN} tự động tái tạo virtual parent node từ mảng \texttt{ancestor\_titles} lưu trong metadata của nút con với deterministic UUIDv5, đảm bảo cây điều hướng không bị đứt quãng.
+        \item \textit{Duyệt, curate Knowledge Graph và xác thực trích dẫn câu trả lời}: Hỗ trợ 9 loại quan hệ ngữ nghĩa, trong đó \texttt{CONTRADICTS} và \texttt{SEE\_ALSO} là hai quan hệ đối xứng được recursive CTE \texttt{WITH RECURSIVE} tự động duyệt hai chiều kèm cycle detection. Khi \texttt{Agent} gọi công cụ thêm hoặc xóa cạnh trỏ tới một container node, framework tự động mở rộng đích xuống toàn bộ các leaf nodes ($\texttt{c.path <@ target\_path}$), kiểm tra citation grounding của chuỗi \texttt{citation\_text} trong \texttt{chunk} nguồn và ghi vào bảng append-only audit log trong một atomic transaction. Khi kết thúc điều tra, công cụ \texttt{submit\_grounded\_answer} kiểm tra từng trích dẫn \texttt{(path, start\_line, end\_line)} trực tiếp trên PostgreSQL trước khi chấp nhận câu trả lời của \texttt{Agent}.
+    \end{itemize}
+\end{enumerate}
+
+\subsubsection{Database Schema trên PostgreSQL 16}
+Framework lưu trữ toàn bộ dữ liệu trong database schema gồm 5 bảng quan hệ cố định trên PostgreSQL 16 cùng hệ thống index tại Bảng \ref{tab:db_schema}.
+
+\begin{table}[H]
+\centering
+\caption{Database schema 5 bảng trên PostgreSQL 16 và hệ thống index của framework}
+\label{tab:db_schema}
+\small\setlength{\tabcolsep}{4.5pt}\begin{tabularx}{\textwidth}{l>{\raggedright\arraybackslash}p{4.3cm}>{\raggedright\arraybackslash}X}
+\toprule
+\textbf{Bảng} & \textbf{Các cột và ràng buộc chính} & \textbf{Hệ thống Index \& Trigger} \\
+\midrule
+\texttt{documents} & \texttt{id} (UUID PK), \texttt{doc\_slug} (UNIQUE), \texttt{title}, \texttt{raw\_text}, \texttt{metadata} (JSONB) & B-Tree trên \texttt{doc\_slug}; GIN \texttt{jsonb\_path\_ops} trên \texttt{metadata} \\
+\addlinespace[3pt]
+\texttt{chunks} & \texttt{id} (UUID PK), \texttt{document\_id} (FK), \texttt{path} (\texttt{LTREE} UNIQUE), \texttt{verbatim\_text}, \texttt{contextualized\_text}, \texttt{start\_line}, \texttt{end\_line}, \texttt{embedding} (\texttt{VECTOR(512)}), \texttt{tsv\_content} (\texttt{TSVECTOR}) & HNSW Cosine \texttt{m=16, ef\_construction=64} trên \texttt{embedding}; GiST \& B-Tree trên \texttt{path}; GIN trên \texttt{tsv\_content}; 2 GIN index \texttt{gin\_trgm\_ops} trên \texttt{verbatim\_text} và \texttt{contextualized\_text}; Trigger tự động cập nhật \texttt{tsv\_content} \\
+\addlinespace[3pt]
+\texttt{relation\_types} & \texttt{code} (PK), \texttt{description}, \texttt{is\_symmetric} (BOOLEAN) & Khởi tạo sẵn 9 loại quan hệ; \texttt{CONTRADICTS} và \texttt{SEE\_ALSO} có \texttt{is\_symmetric = TRUE} \\
+\addlinespace[3pt]
+\texttt{graph\_edges} & \texttt{id} (PK), \texttt{source\_chunk\_id} (FK), \texttt{target\_chunk\_id} (FK), \texttt{relation\_type} (FK), \texttt{citation\_text} (NOT NULL), \texttt{rationale} & Ràng buộc \texttt{CHECK (target != source)} chống tự nối, \texttt{UNIQUE (source, target, relation)}; B-Tree trên \texttt{source}, \texttt{target}, \texttt{relation} \\
+\addlinespace[3pt]
+\texttt{graph\_edge\_log} & \texttt{id} (PK), \texttt{action} (\texttt{ADDED}/\texttt{REMOVED}), \texttt{source\_path}, \texttt{target\_path}, \texttt{citation\_text}, \texttt{actor}, \texttt{reason}, \texttt{created\_at} & Append-only audit log; GiST trên \texttt{source\_path}, \texttt{target\_path}; B-Tree giảm dần trên \texttt{created\_at} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\noindent\textbf{Phân định phần kế thừa và tự phát triển:} Hệ thống kế thừa trọng số huấn luyện sẵn của mô hình \texttt{Qwen3-\allowbreak Embedding-\allowbreak 0.6B} [4] và \texttt{mmarco-\allowbreak mMiniLMv2-\allowbreak L12-\allowbreak H384-\allowbreak v1} [8], công thức RRF [6], nguyên lý context prefixing [12], thư viện \texttt{markdown-it-py} và các tiện ích \texttt{pgvector}, \texttt{ltree}, \texttt{pg\_trgm} của PostgreSQL. Các thành phần do nhóm trực tiếp thiết kế và cài đặt gồm: \texttt{Parser interface} 5 invariants, ingestion pipeline có differential vector cache, database schema 5 bảng cùng các stored procedures cho hybrid retrieval, verbatim matching và recursive graph traversal, thuật toán Venn partitioning kèm reading order grouping và cổng \texttt{Sparse Match Gating}, dịch vụ citation grounding cho Knowledge Graph, 6-tool MCP server (hỗ trợ cả \texttt{stdio} và Warm Streamable HTTP \texttt{POST /api/mcp} chia sẻ GPU engine), giao diện Web Observatory Dashboard và hai bộ \texttt{Parser} mẫu cho Next.js, Node.js.
+
+\subsection{Phần A.3 -- Luồng vận hành dữ liệu trong framework}
+
+\subsubsection{Ingestion pipeline qua Parser và differential vector cache}
+Khi nạp một tài liệu $d_m$ vào framework:
+\begin{itemize}
+    \item \textbf{Bước 1 -- Gọi \texttt{Parser} và kiểm tra 5 invariants:} Tài liệu nguồn được chuyển cho \texttt{Parser} tương ứng để tách thành $\texttt{raw\_text}$, danh sách $N_m$ \texttt{chunk} kèm đường dẫn $\text{path}_i \in \mathcal{T}_{\text{ltree}}$ và danh sách các graph edges tĩnh, sau đó đi qua bước kiểm tra 5 invariants.
+    \item \textbf{Bước 2 -- Đối chiếu differential vector cache \& dọn dẹp \texttt{chunk} cũ:} Trước khi gọi GPU, framework truy vấn các \texttt{chunk} hiện có của tài liệu trong database theo ánh xạ $\text{path}_i \mapsto (\text{text}^{\text{ctx}}_i, \mathbf{v}_i)$. Các \texttt{chunk} có đường dẫn và chuỗi $\text{text}^{\text{ctx}}_i$ không thay đổi được giữ nguyên vector $\mathbf{v}_i \in \mathbb{R}^{512}$ đã lưu; các đường dẫn cũ không còn tồn tại trong bản phân tích mới thuộc tập $\mathcal{P}_{\text{old}} \setminus \mathcal{P}_{\text{new}}$ bị xóa tự động khỏi bảng \texttt{chunks}.
+    \item \textbf{Bước 3 -- Batch encoding kèm cơ chế fallback batch size khi CUDA OOM:} Chỉ tập gồm $B_{\text{un}}$ \texttt{chunk} mới hoặc có thay đổi nội dung mới được đưa vào \texttt{Qwen3-Embedding-0.6B} theo batch size $16$ với chiều dài tối đa $L_{\text{emb}} \le 2048$ để sinh embedding matrix $\mathbf{E} \in \mathbb{R}^{B_{\text{un}} \times 512}$. Nếu xảy ra lỗi CUDA OOM, hệ thống tự động giải phóng CUDA cache và hạ batch size xuống $1$ để hoàn tất quá trình nạp.
+\end{itemize}
+
+\subsubsection{Dual-channel retrieval, tách ngữ cảnh cha và sắp xếp theo reading order}
+Khi xử lý một query $(q, p)$ với giới hạn kết quả $K = 10$ và reranking candidate pool $P = 10$:
+\begin{itemize}
+    \item \textbf{Bước 1 -- Thực thi song song hai kênh retrieval:}
+    \begin{enumerate}
+        \item \textit{Semantic channel}: Encode câu hỏi $q$ thành vector $\mathbf{q} \in \mathbb{R}^{512}$ ($\|\mathbf{q}\|_2 = 1$). Stored procedure trong database lấy ngưỡng candidate pool $C = \max(6P, 120)$, tìm top-$C$ ứng viên Dense theo khoảng cách Cosine và lọc bể $2C \rightarrow$ top-$C$ ứng viên Sparse theo điểm lexical, nối qua \texttt{FULL OUTER JOIN} và trả về top-$P$ ứng viên có điểm $\text{RRF}$ cao nhất. Khi bật Reranker, $P$ cặp $(q, \text{text}^{\text{ctx}}_i)$ được cắt ở $L_{\max} = 256$ tạo tensor $[P \times 256]$, tra cứu qua LRU cache và chấm điểm trên Cross-Encoder theo batch size $32$ để sinh score vector $\mathbf{s}_{\text{ce}} \in \mathbb{R}^{P}$, rồi sắp xếp lại lấy top-$K$ kết quả $\mathcal{H}_{\text{sem}}$.
+        \item \textit{Verbatim channel}: Thực thi truy vấn đối sánh mẫu $p$ bằng regex hoặc substring kết hợp độ tương đồng trigram trên database, trả về top-$K$ \texttt{chunk} khớp mẫu $\mathcal{H}_{\text{verb}}$ cùng tổng số verbatim matches toàn cục $N_{\text{verb}}$.
+    \end{enumerate}
+    \item \textbf{Bước 2 -- Venn partitioning và tách chuỗi tiêu đề cha khỏi văn bản \texttt{chunk}:} Dựa trên khóa đường dẫn $\text{path}_i$, các kết quả được xếp theo thứ tự ưu tiên ba phân vùng: (1) $\mathcal{H}_{\text{sem}} \cap \mathcal{H}_{\text{verb}}$ tương ứng nhãn \texttt{both}, (2) $\mathcal{H}_{\text{sem}} \setminus \mathcal{H}_{\text{verb}}$ tương ứng nhãn \texttt{semantic\_only}, và (3) $\mathcal{H}_{\text{verb}} \setminus \mathcal{H}_{\text{sem}}$ tương ứng nhãn \texttt{verbatim\_only} để gán thứ hạng toàn cục $\text{rank} \in \{1, \dots, |\mathcal{H}_{\text{sem}} \cup \mathcal{H}_{\text{verb}}|\}$. Tại mỗi \texttt{chunk}, framework tách chuỗi $\text{text}^{\text{ctx}}_i = \texttt{"[}\text{context}\texttt{]\textbackslash n"} \circ \text{text}^{\text{verb}}_i$ ngược lại thành cặp $(\text{context}, \text{text}^{\text{verb}}_i)$ và xóa trường \texttt{ancestor\_titles} dư thừa khỏi metadata trả về (Bảng \ref{tab:ctx_vs_verb}).
+    \item \textbf{Bước 3 -- Gom nhóm theo ngữ cảnh cha và sắp xếp theo reading order:} Các \texttt{chunk} có cùng khóa $(\texttt{doc\_slug}, \text{context})$ được gom vào một nhóm \texttt{ProvisionGroup} $g_k$ dùng chung một dòng tiêu đề cha $\text{context}$ duy nhất. Thứ tự giữa các nhóm $g_1, g_2, \dots$ được giữ theo thứ hạng tốt nhất của \texttt{chunk} trong nhóm, nhưng các \texttt{chunk} bên trong cùng một nhóm được sắp xếp lại theo reading order $(s_i\ \text{ASC}, \text{path}_i\ \text{ASC})$ để văn bản luôn liền mạch từ dòng trên xuống dòng dưới như trong tài liệu gốc.
+\end{itemize}
+
+\begin{table}[H]
+\centering
+\caption{Đối chiếu biểu diễn \texttt{verbatim\_text} và \texttt{contextualized\_text} trên một phân đoạn thực tế của tài liệu Next.js (\texttt{nextjs.01\_getting\_started.15\_route\_handlers}, dòng 87--144)}
+\label{tab:ctx_vs_verb}
+\footnotesize\setlength{\tabcolsep}{4.5pt}\begin{tabularx}{\textwidth}{>{\raggedright\arraybackslash}p{3.6cm}>{\raggedright\arraybackslash}X}
+\toprule
+\textbf{Trường biểu diễn} & \textbf{Nội dung lưu trữ và vai trò trong pipeline} \\
+\midrule
+\texttt{verbatim\_text}\newline\textit{(Trả về cho Agent trong \texttt{ProvisionGroup})} & \texttt{\#\#\#\# With Cache Components\textbackslash n\textbackslash nBy default, Route Handlers are dynamic. To cache a GET Route Handler with Cache Components, extract the data fetching into a helper function marked with 'use cache'...}\newline$\rightarrow$ Giữ nguyên văn bản gốc khớp dòng 87--144; nếu chỉ nhúng trường này, tiêu đề con \texttt{With Cache Components} bị trùng lắp với hàng chục mục cùng tên trong các tài liệu khác. \\
+\addlinespace[3pt]
+\texttt{contextualized\_text}\newline\textit{(Đưa vào \texttt{Qwen3-0.6B}, FTS \texttt{simple} và Reranker)} & \texttt{[Route Handlers > Route Handlers > Caching > With Cache Components]\textbackslash n\#\#\#\# With Cache Components\textbackslash n\textbackslash nBy default, Route Handlers are dynamic...}\newline$\rightarrow$ Tiền tố chuỗi tiêu đề cha giúp cả Dense Vector lẫn FTS \texttt{simple} phân biệt chính xác mục \texttt{Caching} của \texttt{Route Handlers} với mục \texttt{Caching} của \texttt{Server Components} (câu \texttt{e017}). \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Phần A.4 -- Cơ sở toán học của các mô-đun lõi}
+
+\subsubsection{Biểu diễn Dense Bi-Encoder với Matryoshka Representation Learning}
+Query $q$ và văn bản ngữ cảnh $\text{text}^{\text{ctx}}_c$ của \texttt{chunk} $c$ được ánh xạ qua mạng Transformer $f_{\theta}$ [4] thành hidden vector $\tilde{\mathbf{q}}, \tilde{\mathbf{v}}_c \in \mathbb{R}^{D_{\text{full}}}$. Nhờ hàm loss đa chiều lồng nhau của Matryoshka Representation Learning [5], embedding vector $d = 512$ chiều được trích xuất bằng phép cắt chiều và chuẩn hóa $L_2$:
+\begin{equation}
+    \mathbf{v}_c = \frac{\tilde{\mathbf{v}}_c[1:d]}{\|\tilde{\mathbf{v}}_c[1:d]\|_2} \in \mathbb{R}^{512}, \qquad
+    s_{\text{dense}}(q, c) = 1 - d_{\cos}(\mathbf{q}, \mathbf{v}_c) = \mathbf{q}^{\top} \mathbf{v}_c
+    \label{eq:cosine}
+\end{equation}
+trong đó $d_{\cos}(\mathbf{q}, \mathbf{v}_c)$ được tính qua toán tử \texttt{<=>} trên HNSW index với độ phức tạp xấp xỉ $\mathcal{O}(\log N)$, xác định Dense rank $r_{\text{dense}}(c) \in \{1, 2, \dots, C\}$.
+
+\subsubsection{Proximity-Boosted Sparse Scoring và Trigram Word Similarity}
+Trên kênh Sparse FTS, gọi $L_q = (w_1, w_2, \dots, w_m)$ là chuỗi tokenized lexemes của query sau khi tách từ bằng cấu hình \texttt{simple}. Hệ thống xây dựng đồng thời AND query $T_{\text{all}} = \bigwedge_{i=1}^{m} w_i$ và phrase proximity query $T_{\text{prox}} = \bigvee_{i=1}^{m-1} (w_i \leftrightarrow w_{i+1})$, với $T_{\text{prox}} = w_1$ khi $m = 1$. Điểm Sparse của \texttt{chunk} $c$ có vector từ vựng $D_c$ được tính bởi:
+\begin{equation}
+    s_{\text{sparse}}(q, c) = 4.0 \cdot \text{ts\_rank}(D_c, T_{\text{prox}}, 32) + 2.0 \cdot \mathbb{I}(D_c \models T_{\text{all}})
+    \label{eq:sparse}
+\end{equation}
+với hệ số chuẩn hóa $32$ đưa $\text{ts\_rank}$ về miền $[0, 1)$ theo tỷ số $\text{rank}/(\text{rank}+1)$, xác định Sparse rank $r_{\text{sparse}}(c)$.
+
+Trên kênh verbatim matching với mẫu $p$, gọi $\mathcal{T}(s)$ là tập các trigram gồm các chuỗi 3 ký tự liên tiếp có đệm khoảng trắng đầu/cuối từ của chuỗi $s$. Độ tương đồng lexical của \texttt{chunk} $c$ đối với mẫu $p$ được tính bằng cực đại hàm \texttt{word\_similarity} trên cả văn bản nguyên gốc và văn bản ngữ cảnh:
+\begin{equation}
+    s_{\text{verb}}(p, c) = \max_{t \in \{\text{text}^{\text{verb}}_c,\, \text{text}^{\text{ctx}}_c\}} \max_{w \sqsubseteq t} \frac{|\mathcal{T}(p) \cap \mathcal{T}(w)|}{|\mathcal{T}(p) \cup \mathcal{T}(w)|}
+    \label{eq:trigram}
+\end{equation}
+trong đó $w \sqsubseteq t$ là chuỗi con gồm các từ liên tiếp trong $t$ có độ tương đồng Jaccard trigram lớn nhất với $p$.
+
+\subsubsection{Reciprocal Rank Fusion và Cross-Encoder Score Blending}
+Điểm hợp nhất RRF [6] giữa nhánh Dense và nhánh Sparse được định nghĩa là:
+\begin{equation}
+    \text{RRF}(q, c) = \frac{\mathbb{I}(c \in \mathcal{R}_{\text{dense}})}{k_{\text{rrf}} + r_{\text{dense}}(c)} + \frac{\mathbb{I}(c \in \mathcal{R}_{\text{sparse}})}{k_{\text{rrf}} + r_{\text{sparse}}(c)}, \quad k_{\text{rrf}} = 60
+    \label{eq:rrf}
+\end{equation}
+Mô hình Cross-Encoder [7], [8] đưa chuỗi ghép nối trực tiếp qua toàn bộ các cross-attention layers để sinh relevance logit $s_{\text{ce}}(q, c) = \mathbf{w}^{\top} \text{Transformer}(\texttt{[CLS]} \circ q \circ \texttt{[SEP]} \circ \text{text}^{\text{ctx}}_c \circ \texttt{[SEP]})$. Với blending coefficient $\alpha \in [0, 1]$ có giá trị mặc định $\alpha = 1.0$, gọi $r_{\text{ce}}(c)$ là thứ hạng theo $s_{\text{ce}}(q, c)$ và $r_{\text{init}}(c)$ là thứ hạng theo RRF, final ranking score là:
+\begin{equation}
+    S_{\text{final}}(q, c) = \begin{cases}
+        s_{\text{ce}}(q, c), & \text{nếu } \alpha = 1.0 \\[4pt]
+        \dfrac{\alpha}{60 + r_{\text{ce}}(c)} + \dfrac{1 - \alpha}{60 + r_{\text{init}}(c)}, & \text{nếu } 0 \le \alpha < 1.0
+    \end{cases}
+    \label{eq:rerank_blend}
+\end{equation}
+
+\subsubsection{Cơ chế Sparse Match Gating và Citation Grounding trên Knowledge Graph}
+Gọi $\text{has\_sparse} = \exists c \in \mathcal{H}_{\text{sem}} : r_{\text{sparse}}(c) < 999$ là biến chỉ thị có ít nhất một kết quả khớp lexical, $s_{\max} = \max_{c \in \mathcal{H}_{\text{sem}}} s_{\text{dense}}(q, c)$, và $\mathcal{S}_{\text{ce}} = \{s_{\text{ce}}(q, c) \mid c \in \mathcal{H}_{\text{sem}}, s_{\text{ce}}(q, c) \neq \varnothing\}$ là tập điểm Cross-Encoder khả dụng. Reranker veto flag được kích hoạt khi $\text{veto} = (\mathcal{S}_{\text{ce}} \neq \emptyset) \land (\max \mathcal{S}_{\text{ce}} < \tau_{\text{veto}})$. Hàm confidence $\gamma(\mathcal{H}_{\text{sem}})$ được xác định bởi:
+\begin{equation}
+    \gamma(\mathcal{H}_{\text{sem}}) = \begin{cases}
+        \texttt{none}, & \text{nếu } \mathcal{H}_{\text{sem}} = \emptyset \text{ hoặc } (\neg \text{has\_sparse} \land s_{\max} < \tau_{\text{low}}) \\
+        \texttt{low}, & \text{nếu } (\neg \text{has\_sparse} \land s_{\max} \ge \tau_{\text{low}}) \text{ hoặc } \text{veto} \\
+        \texttt{high}, & \text{nếu } \text{has\_sparse} \land \neg \text{veto} \land (s_{\max} \ge \tau_{\text{high}}) \\
+        \texttt{medium}, & \text{nếu } \text{has\_sparse} \land \neg \text{veto} \land (\tau_{\text{low}} \le s_{\max} < \tau_{\text{high}}) \\
+        \texttt{low}, & \text{trong các trường hợp còn lại}
+    \end{cases}
+    \label{eq:confidence}
+\end{equation}
+với $\tau_{\text{low}} = 0.70$, $\tau_{\text{high}} = 0.82$ và $\tau_{\text{veto}} = -1.0$.
+
+Đối với mỗi cạnh đề xuất $e = (c_u, c_v, r, \tau)$ trong quá trình curate Knowledge Graph, giả sử đoạn trích dẫn $\tau$ được tách thành chuỗi các token $(\omega_1, \omega_2, \dots, \omega_L)$. Hệ thống biên dịch whitespace-invariant regex $P(\tau) = \text{escape}(\omega_1) \circ \texttt{"\textbackslash s+"} \circ \text{escape}(\omega_2) \circ \dots \circ \texttt{"\textbackslash s+"} \circ \text{escape}(\omega_L)$ và chỉ chấp nhận cạnh $e$ khi tồn tại khoảng vị trí $[a, b)$ thỏa mãn:
+\begin{equation}
+    \text{text}^{\text{verb}}_u[a:b] \sim P(\tau) \quad \land \quad c_u \neq c_v
+    \label{eq:citation_grounding}
+\end{equation}
+
+% ----------------------------------------------------------------------------
+% PHẦN B: HAI BỘ PARSER DEMO LẮP GHÉP VÀO KHUNG HỆ THỐNG
+% ----------------------------------------------------------------------------
+\subsection{Phần B -- Hai bộ Parser thử nghiệm lắp vào framework: Next.js và Node.js}
+Để minh họa cách lắp ghép các bộ \texttt{Parser} miền cụ thể vào \texttt{Parser interface} 5 invariants của Phần A, hai bộ \texttt{Parser} độc lập được xây dựng cho hai kho tài liệu kỹ thuật có cấu trúc đánh dấu khác biệt nhau là \textbf{Next.js MDX} và \textbf{Node.js Markdown}.
+
+\subsubsection{Bộ Parser demo 1: Phân rã tài liệu Next.js MDX}
+Bộ \texttt{Parser} của Next.js nhận diện tài liệu thuộc miền của mình qua prefix \texttt{nextjs} hoặc sự hiện diện của khối YAML frontmatter mở đầu đi kèm các thẻ JSX đặc trưng (\texttt{<AppOnly>}, \texttt{<PagesOnly>}, \texttt{<Image>}, \texttt{<Video>}, \texttt{<FixCardGrid>}), sau đó thực hiện 4 bước biến đổi để xuất ra các \texttt{chunk} thỏa mãn 5 invariants:
+\begin{enumerate}
+    \item \textit{YAML Frontmatter extraction \& bảo toàn dòng 1:1}: Đọc các trường \texttt{title}, \texttt{description}, \texttt{related} trong khối \texttt{---...---} ở đầu tệp, sau đó thay từng dòng frontmatter bằng một dòng chỉ chứa khoảng trắng \texttt{" "} để tổng số dòng sau làm sạch bằng đúng số dòng của tệp gốc ($|L_{\text{clean}}| = |L_{\text{raw}}|$).
+    \item \textit{Routing scope tracking cho \texttt{<AppOnly>} / \texttt{<PagesOnly>}}: Duyệt từng dòng nằm ngoài khối code fence để gán nhãn phạm vi routing $r(i) \in \{\texttt{app}, \texttt{pages}, \varnothing\}$ cho dòng thứ $i$. Nếu một mục chứa nội dung pha trộn cả hai phạm vi, \texttt{Parser} chèn nhãn chuyển ngữ cảnh nội dòng \texttt{**[App Router]**} hoặc \texttt{**[Pages Router]**}; nếu toàn bộ mục nằm trong một phạm vi duy nhất, chuỗi tiêu đề cha $\text{context}_i$ và đường dẫn $\text{path}_i$ được gắn nhãn routing tương ứng.
+    \item \textit{Code block masking \& multiline JSX reverse mapping}: Toàn bộ code block \texttt{```...```} và inline code \texttt{`...`} được thay tạm bằng placeholder kèm đúng số ký tự xuống dòng \texttt{\textbackslash n} của khối gốc. Khi gặp thẻ JSX trải trên nhiều dòng như \texttt{<Image .../>}, \texttt{<Video .../>} hoặc \texttt{<FixCardGrid>...\textless/FixCardGrid>}, \texttt{Parser} đặt dòng Markdown tổng hợp tại dòng cuối cùng của khối JSX và điền các dòng trống vào các dòng phía trên để dòng kết thúc khớp 1:1 với dòng đóng thẻ JSX, đồng thời lưu bảng reverse mapping về dòng mở thẻ JSX ban đầu để khôi phục chính xác dòng bắt đầu $s_i$. Sau khi chuẩn hóa khoảng trắng trên body text, các code block được hoàn trả nguyên văn giúp giữ 100\% indentation.
+    \item \textit{Overview chunking \& Codemod heading merging}: Các đoạn văn mở đầu trước tiêu đề H2 đầu tiên được gom thành \texttt{chunk} \texttt{overview}. Trong tài liệu hướng dẫn chuyển đổi code tự động, các tiêu đề H4 đóng vai trò câu mô tả và có duy nhất một tiêu đề con H5 chứa tên lệnh codemod được hợp nhất thành một \texttt{chunk} đơn lẻ dưới mục H3.
+\end{enumerate}
+
+\begin{table}[H]
+\centering
+\caption{Minh họa cách bộ \texttt{Parser} Next.js biến đổi tài liệu MDX để thỏa mãn invariant dòng 1:1 của framework}
+\label{tab:before_after_ast}
+\footnotesize\setlength{\tabcolsep}{4pt}\begin{tabularx}{\textwidth}{c>{\raggedright\arraybackslash}p{4.3cm}>{\raggedright\arraybackslash}p{4.2cm}>{\raggedright\arraybackslash}X}
+\toprule
+\textbf{Dòng} & \textbf{Tài liệu MDX gốc} & \textbf{Sau bước làm sạch 1:1} & \textbf{Đầu ra lắp vào framework} \\
+\midrule
+1--4 & \texttt{---\textbackslash ntitle: Layouts\textbackslash n---} & 4 dòng trống \texttt{" "} & Đưa tiêu đề \texttt{"Layouts"} vào metadata tài liệu \\
+\addlinespace[2pt]
+5 & \texttt{<AppOnly>} & 1 dòng trống \texttt{" "}, đặt trạng thái routing = \texttt{app} & Ghi nhận phạm vi \texttt{app} cho các dòng tiếp theo \\
+\addlinespace[2pt]
+6 & \texttt{\#\# Creating a layout} & \texttt{\#\# Creating a layout} & $\text{path}_i =$ \texttt{nextjs....creating\_a\_layout}, $s_i = 6$ \\
+\addlinespace[2pt]
+7--9 & \texttt{<Image alt="Diagram"\textbackslash n src="/layout.png"\textbackslash n/>} & Dòng 7--8 trống; dòng 9: \texttt{![Diagram](/layout.png)} & Reverse mapping dòng bắt đầu của phần tử từ $9 \rightarrow 7$ \\
+\addlinespace[2pt]
+10--12 & \texttt{```tsx\textbackslash n  export default...\textbackslash n```} & Giữ nguyên 100\% indentation qua code block masking & Kết thúc chunk tại $e_i = 12$, ghép \texttt{[Layouts > Creating a layout]} vào $\text{text}^{\text{ctx}}_i$ \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsubsection{Bộ Parser demo 2: Phân rã tài liệu Node.js Markdown}
+Bộ \texttt{Parser} của Node.js nhận diện tài liệu qua prefix \texttt{nodejs} hoặc sự hiện diện của comment cấu trúc \texttt{<!-- YAML / introduced\_in= / source\_link= -->} và khối trích dẫn \texttt{> Stability:}, sau đó thực hiện 4 bước xử lý chuyên biệt:
+\begin{enumerate}
+    \item \textit{Version metadata aggregation từ HTML/YAML comments}: Sau khi thực hiện code block masking, \texttt{Parser} quét các khối comment \texttt{<!-- YAML added: ... deprecated: ... -->} để tổng hợp dòng thông tin \texttt{*Added in: ... --- Deprecated in: ...*} ngay tại dòng mở đầu của comment và thay các dòng còn lại bằng dòng trống nhằm giữ nguyên tổng số dòng, đồng thời xóa các empty anchor tags \texttt{<a id="..."></a>} để chúng không bị ghép lệch vào cuối mục đứng trước.
+    \item \textit{Gộp overloaded function signatures}: Khi gặp các tiêu đề cùng cấp liên tiếp mà mục đứng trước chưa có nội dung thân bài, \texttt{Parser} trích xuất tên hàm từ tiêu đề; nếu hai tiêu đề liên tiếp biểu diễn các overloaded signatures của cùng một hàm như \texttt{fs.open}, chúng được gộp chung vào cùng một \texttt{chunk} và kế thừa dòng bắt đầu $s_i$ của chữ ký đầu tiên.
+    \item \textit{Phân biệt parameter subheadings nội bộ với standalone sub-APIs}: Khi đang đứng ở một leaf node biểu diễn hàm, phương thức hoặc sự kiện, nếu gặp một tiêu đề con cấp thấp hơn như H4/H5 dưới H3, thuật toán trích xuất tập tên tham số $\mathcal{P}_{\text{parent}}$ bên trong cặp ngoặc đơn của chữ ký hàm cha. Nếu tiêu đề con chỉ mô tả một tham số hoặc thuộc tính con của tham số thuộc $\mathcal{P}_{\text{parent}}$ — ví dụ tiêu đề \texttt{`options.detached`} nằm dưới \texttt{child\_process.spawn(command[, args][, options])} có prefix \texttt{options} $\in \mathcal{P}_{\text{parent}}$ — hoặc là mục ghi chú/ví dụ nội bộ, tiêu đề đó được giữ nguyên bên trong phần thân của \texttt{chunk} hàm cha. Ngược lại, nếu tiêu đề con là một standalone sub-API như \texttt{`util.inspect.custom`} dưới \texttt{util.inspect(object[, options])} hay các mục bắt đầu bằng \texttt{Class:}, \texttt{Event:}, \texttt{Static method:}, \texttt{ERR\_*}, \texttt{Parser} tách nó thành một nút con riêng trên cây \texttt{ltree}.
+    \item \textit{Cắt tỉa intermediate nodes chỉ chứa metadata \& lan truyền chỉ số Stability}: Phép post-order traversal trên cây AST lan truyền chỉ số \texttt{Stability} từ mục cha xuống các mục con chưa có nhãn riêng, đồng thời loại bỏ các khối văn bản ở intermediate node chỉ chứa dòng thông báo \texttt{Stability} hoặc \texttt{Added in} nhằm tránh sinh ra các \texttt{chunk} rỗng không mang nội dung giải thích.
+\end{enumerate}

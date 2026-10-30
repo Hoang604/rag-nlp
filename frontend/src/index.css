@@ -1,28 +1,37 @@
+@import './theme.css';
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
+  html {
+    background-color: rgb(var(--c-slate-950));
+  }
+
   body {
     @apply bg-slate-950 text-slate-100 antialiased font-sans selection:bg-brand-600 selection:text-white;
   }
+
+  :focus-visible {
+    outline: 2px solid rgb(var(--c-brand-500));
+    outline-offset: 2px;
+  }
 }
 
-/* Custom smooth scrollbars */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  background: rgba(15, 23, 42, 0.6);
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(51, 65, 85, 0.8);
+  background: rgb(var(--c-slate-700));
   border-radius: 9999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(71, 85, 105, 1);
+  background: rgb(var(--c-slate-600));
 }

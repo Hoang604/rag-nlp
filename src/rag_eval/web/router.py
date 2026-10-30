@@ -1,14 +1,30 @@
 from __future__ import annotations
 
+import asyncio
 import datetime
 import logging
 import uuid
+from typing import cast
 
 import asyncpg
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
 
+from rag_eval.answer import (
+    PROVIDERS,
+    Provider,
+    answer_with_agent,
+    available_providers,
+    compose,
+)
 from rag_eval.db.connection import check_db_health
 from rag_eval.db.repositories import CorpusRepository
+from rag_eval.eval import (
+    ExpectedTarget,
+    load_cases,
+    run_all,
+    run_case,
+    save_cases,
+)
 from rag_eval.exceptions import CorpusDomainError
 from rag_eval.retrieval.embedder import SentenceTransformerQueryEmbedder
 from rag_eval.retrieval.engine import RetrievalEngine
@@ -16,15 +32,21 @@ from rag_eval.retrieval.enrichment import KnowledgeEnrichmentService
 from rag_eval.retrieval.reranker import CrossEncoderReranker
 from rag_eval.schemas import CurateEdgesResult, RelationType
 from rag_eval.web.schemas import (
+    AnswerCitationResponse,
+    AnswerRequest,
+    AnswerResponse,
     CorpusDocumentResponse,
     CurateEdgesRequest,
     DocumentTreeResponse,
+    EvalCaseResponse,
+    EvalCaseUpdateRequest,
     GraphTraversalStepResponse,
     GraphTraverseRequest,
     GraphVisualizerEdge,
     GraphVisualizerNode,
     GraphVisualizerResponse,
     HealthResponse,
+    ProviderStatusResponse,
     RawTextResponse,
     RelationTypeCatalogResponse,
     SearchRequest,
@@ -37,6 +59,49 @@ from rag_eval.web.services import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Corpus Knowledge Observatory"])
+
+
+class QAEventHub:
+    """In-memory pub/sub hub broadcasting MCP webhook events to connected WebSocket clients."""
+
+    def __init__(self) -> None:
+        self._clients: set[WebSocket] = set()
+        self._history: list[dict[str, object]] = []
+        self._lock = asyncio.Lock()
+
+    async def connect(self, ws: WebSocket) -> None:
+        await ws.accept()
+        async with self._lock:
+            self._clients.add(ws)
+
+    async def disconnect(self, ws: WebSocket) -> None:
+        async with self._lock:
+            self._clients.discard(ws)
+
+    async def publish(self, event: dict[str, object]) -> int:
+        async with self._lock:
+            self._history.append(event)
+            if len(self._history) > 100:
+                self._history = self._history[-100:]
+            clients = list(self._clients)
+
+        delivered = 0
+        stale: list[WebSocket] = []
+        for ws in clients:
+            try:
+                await ws.send_json(event)
+                delivered += 1
+            except (WebSocketDisconnect, RuntimeError, OSError):
+                stale.append(ws)
+
+        if stale:
+            async with self._lock:
+                for ws in stale:
+                    self._clients.discard(ws)
+        return delivered
+
+
+qa_event_hub = QAEventHub()
 
 
 def _get_db_pool(request: Request) -> asyncpg.Pool | None:
@@ -368,6 +433,398 @@ async def traverse_document_graph(
         )
         for s in steps
     ]
+
+
+@router.get("/answer/providers", response_model=list[ProviderStatusResponse])
+async def get_answer_providers() -> list[ProviderStatusResponse]:
+    """Lists CLI LLM providers and whether their executable is available in PATH."""
+    return [
+        ProviderStatusResponse(id=pid, label=label, available=avail)
+        for pid, label, avail in available_providers()
+    ]
+
+
+@router.post("/qa/webhook")
+async def receive_mcp_qa_webhook(request: Request) -> dict[str, object]:
+    """Receives live tool-call and submit_grounded_answer events from the MCP Server and broadcasts over WebSocket."""
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON payload: {exc}") from exc
+
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Webhook body must be a JSON object.")
+
+    event_dict = cast(dict[str, object], payload)
+    if "timestamp" not in event_dict:
+        event_dict["timestamp"] = datetime.datetime.now(datetime.UTC).isoformat()
+
+    delivered = await qa_event_hub.publish(event_dict)
+    return {"status": "ok", "delivered": delivered}
+
+
+@router.get("/mcp")
+async def mcp_streamable_http_get() -> None:
+    """Stateless Streamable HTTP endpoint returns 405 on GET SSE probes per MCP 2025-03-26 spec."""
+    raise HTTPException(status_code=405, detail="SSE stream not supported on stateless HTTP endpoint.")
+
+
+@router.delete("/mcp")
+async def mcp_streamable_http_delete() -> dict[str, str]:
+    """Stateless Streamable HTTP session termination acknowledgement."""
+    return {"status": "ok"}
+
+
+@router.post("/mcp", response_model=None)
+async def mcp_streamable_http_post(
+    request: Request,
+    session_id: str | None = None,
+    answer_output: str | None = None,
+    enable_answer_tool: bool = True,
+    raw: bool = False,
+) -> dict[str, object] | object:
+    """Warm Streamable HTTP MCP JSON-RPC 2.0 endpoint sharing FastAPI's preloaded Qwen & CrossEncoder models."""
+    from fastapi.responses import Response
+
+    from rag_eval.mcp.server import (
+        SERVER_NAME,
+        SERVER_VERSION,
+        CorpusMCPServer,
+        create_default_corpus_mcp_tools,
+        map_domain_error_to_jsonrpc,
+    )
+
+    pool = _get_db_pool(request)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="Database is not connected.")
+
+    try:
+        req_body = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON-RPC body: {exc}") from exc
+
+    if not isinstance(req_body, dict):
+        raise HTTPException(status_code=400, detail="JSON-RPC payload must be an object.")
+
+    # Notifications (e.g. notifications/initialized) have no 'id' and expect HTTP 202 Accepted
+    if "id" not in req_body:
+        return Response(status_code=202)
+
+    engine = _get_retrieval_engine(request)
+
+    async def _in_memory_emitter(event_type: str, data: dict[str, object]) -> None:
+        event_payload: dict[str, object] = {
+            "event": event_type,
+            "session_id": session_id,
+            "timestamp": datetime.datetime.now(datetime.UTC).isoformat(),
+            **data,
+        }
+        await qa_event_hub.publish(event_payload)
+
+    tools = create_default_corpus_mcp_tools(
+        embedding_engine=engine._embedder,
+        reranker=engine._reranker,
+        answer_output_path=answer_output,
+        pool=pool,
+    )
+    mcp_srv = CorpusMCPServer(
+        tools=tools,
+        enable_answer_tool=enable_answer_tool,
+        answer_output_path=answer_output,
+        session_id=session_id,
+        event_emitter=_in_memory_emitter,
+    )
+
+    req_id = req_body.get("id")
+    method = str(req_body.get("method") or "")
+    params = req_body.get("params") or {}
+
+    if method == "initialize":
+        client_proto = (
+            str(params.get("protocolVersion") or "2024-11-05")
+            if isinstance(params, dict)
+            else "2024-11-05"
+        )
+        dyn_instructions = await mcp_srv.get_instructions()
+        return {
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "result": {
+                "protocolVersion": client_proto,
+                "capabilities": {"tools": {}},
+                "serverInfo": {
+                    "name": SERVER_NAME,
+                    "version": SERVER_VERSION,
+                },
+                "instructions": dyn_instructions,
+            },
+        }
+
+    if method == "tools/call" and not raw:
+        import json
+
+        if not isinstance(params, dict):
+            return {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "error": {"code": -32602, "message": "params must be a JSON object"},
+            }
+        t_name = str(params.get("name", ""))
+        t_args = params.get("arguments", {})
+        if not isinstance(t_args, dict):
+            return {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "error": {"code": -32602, "message": "arguments must be a JSON object"},
+            }
+        try:
+            out = await mcp_srv.execute_tool(t_name, t_args)
+            return {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "result": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps(out, ensure_ascii=False),
+                        }
+                    ],
+                    "isError": False,
+                },
+            }
+        except CorpusDomainError as err:
+            _, message, data = map_domain_error_to_jsonrpc(err)
+            return {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "result": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {"error": message, "data": data},
+                                ensure_ascii=False,
+                            ),
+                        }
+                    ],
+                    "isError": True,
+                },
+            }
+
+    resp = await mcp_srv.handle_request_dict(cast(dict[str, object], req_body))
+    if resp is None:
+        return Response(status_code=202)
+    return resp
+
+
+@router.websocket("/qa/ws")
+async def qa_websocket_endpoint(websocket: WebSocket) -> None:
+    """WebSocket stream delivering live MCP tool calls and validated answers to the frontend."""
+    await qa_event_hub.connect(websocket)
+    try:
+        await websocket.send_json(
+            {
+                "event": "ws_connected",
+                "timestamp": datetime.datetime.now(datetime.UTC).isoformat(),
+            }
+        )
+        while True:
+            msg = await websocket.receive_text()
+            if msg.strip().lower() == "ping":
+                await websocket.send_json({"event": "pong"})
+    except WebSocketDisconnect:
+        pass
+    finally:
+        await qa_event_hub.disconnect(websocket)
+
+
+@router.post("/answer", response_model=AnswerResponse)
+async def answer_question(request: Request, payload: AnswerRequest) -> AnswerResponse:
+    """Executes grounded Q&A via CLI Agent MCP (`submit_grounded_answer`) or Retrieve+Compose."""
+    pool = _get_db_pool(request)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="Database is not connected.")
+
+    if payload.provider not in PROVIDERS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Provider '{payload.provider}' không hợp lệ. Chọn một trong: {', '.join(PROVIDERS)}",
+        )
+    provider: Provider = payload.provider
+    repo = CorpusRepository(pool)
+    session_id = payload.session_id or str(uuid.uuid4())
+
+    base_url = str(request.base_url).rstrip("/")
+    webhook_url = f"{base_url}/api/qa/webhook"
+
+    await qa_event_hub.publish(
+        {
+            "event": "qa_started",
+            "session_id": session_id,
+            "question": payload.question,
+            "provider": provider,
+            "agent_mode": payload.agent_mode,
+            "timestamp": datetime.datetime.now(datetime.UTC).isoformat(),
+        }
+    )
+
+    try:
+        if payload.agent_mode:
+            composed = await answer_with_agent(
+                repo=repo,
+                question=payload.question,
+                provider=provider,
+                doc_slugs=payload.doc_slugs or None,
+                webhook_url=webhook_url,
+                session_id=session_id,
+            )
+        else:
+            engine = _get_retrieval_engine(request)
+            composed = await compose(
+                engine=engine,
+                repo=repo,
+                question=payload.question,
+                provider=provider,
+                limit=payload.limit,
+                doc_slugs=payload.doc_slugs or None,
+            )
+    except ( CorpusDomainError, RuntimeError, ValueError) as exc:
+        err_msg = exc.message if isinstance(exc, CorpusDomainError) else str(exc)
+        await qa_event_hub.publish(
+            {
+                "event": "qa_error",
+                "session_id": session_id,
+                "error": err_msg,
+                "timestamp": datetime.datetime.now(datetime.UTC).isoformat(),
+            }
+        )
+        raise HTTPException(status_code=400, detail=err_msg) from exc
+
+    resp = AnswerResponse(
+        question=composed.question,
+        provider=composed.provider,
+        answer=composed.answer,
+        abstained=composed.abstained,
+        citations=[
+            AnswerCitationResponse(
+                index=c.index,
+                path=c.path,
+                doc_slug=c.doc_slug,
+                doc_title=c.doc_title,
+                start_line=c.start_line,
+                end_line=c.end_line,
+                verbatim_text=c.verbatim_text,
+                contextualized_text=c.contextualized_text,
+                citation_text=c.citation_text,
+            )
+            for c in composed.citations
+        ],
+        retrieval_ms=composed.retrieval_ms,
+        llm_ms=composed.llm_ms,
+        total_ms=composed.total_ms,
+    )
+
+    await qa_event_hub.publish(
+        {
+            "event": "qa_completed",
+            "session_id": session_id,
+            "payload": resp.model_dump(mode="json"),
+            "timestamp": datetime.datetime.now(datetime.UTC).isoformat(),
+        }
+    )
+    return resp
+
+
+@router.get("/eval/cases", response_model=list[EvalCaseResponse])
+async def list_eval_cases() -> list[EvalCaseResponse]:
+    """Returns all retrieval evaluation cases."""
+    cases = await asyncio.to_thread(load_cases)
+    return [EvalCaseResponse.model_validate(c.to_dict()) for c in cases]
+
+
+@router.put("/eval/cases/{case_id}", response_model=EvalCaseResponse)
+async def upsert_eval_case(
+    case_id: str, payload: EvalCaseUpdateRequest
+) -> EvalCaseResponse:
+    """Updates or creates an evaluation case in data/eval/retrieval.jsonl."""
+    cases = await asyncio.to_thread(load_cases)
+    target = next((c for c in cases if c.id == case_id), None)
+    expected_list = [
+        ExpectedTarget(doc_slug=e.doc_slug, path_suffix=e.path_suffix)
+        for e in payload.expected
+    ]
+    if target is None:
+        from rag_eval.eval import EvalCase
+
+        target = EvalCase(
+            id=case_id,
+            test_set=payload.test_set,
+            domain=payload.domain,
+            question=payload.question,
+            query=payload.query,
+            pattern=payload.pattern,
+            expected=expected_list,
+            is_regex=payload.is_regex,
+            case_sensitive=payload.case_sensitive,
+            doc_slugs=payload.doc_slugs,
+            path_prefix=payload.path_prefix,
+            note=payload.note,
+        )
+        cases.append(target)
+    else:
+        target.test_set = payload.test_set
+        target.domain = payload.domain
+        target.question = payload.question
+        target.query = payload.query
+        target.pattern = payload.pattern
+        target.expected = expected_list
+        target.is_regex = payload.is_regex
+        target.case_sensitive = payload.case_sensitive
+        target.doc_slugs = payload.doc_slugs
+        target.path_prefix = payload.path_prefix
+        target.note = payload.note
+
+    await asyncio.to_thread(save_cases, cases)
+    return EvalCaseResponse.model_validate(target.to_dict())
+
+
+@router.delete("/eval/cases/{case_id}")
+async def delete_eval_case(case_id: str) -> dict[str, str]:
+    """Deletes an evaluation case by ID."""
+    cases = await asyncio.to_thread(load_cases)
+    filtered = [c for c in cases if c.id != case_id]
+    if len(filtered) == len(cases):
+        raise HTTPException(status_code=404, detail=f"Eval case '{case_id}' not found.")
+    await asyncio.to_thread(save_cases, filtered)
+    return {"status": "deleted", "id": case_id}
+
+
+@router.post("/eval/cases/{case_id}/run", response_model=EvalCaseResponse)
+async def execute_single_eval_case(
+    request: Request, case_id: str
+) -> EvalCaseResponse:
+    """Runs a single evaluation case against RetrievalEngine and persists updated results."""
+    if _get_db_pool(request) is None:
+        raise HTTPException(status_code=503, detail="Database is not connected.")
+    engine = _get_retrieval_engine(request)
+    cases = await asyncio.to_thread(load_cases)
+    target = next((c for c in cases if c.id == case_id), None)
+    if target is None:
+        raise HTTPException(status_code=404, detail=f"Eval case '{case_id}' not found.")
+    await run_case(engine, target, limit=10, rerank=False)
+    await asyncio.to_thread(save_cases, cases)
+    return EvalCaseResponse.model_validate(target.to_dict())
+
+
+@router.post("/eval/run", response_model=list[EvalCaseResponse])
+async def execute_all_eval_cases(request: Request) -> list[EvalCaseResponse]:
+    """Runs all evaluation cases and persists the updated retrieval.jsonl."""
+    if _get_db_pool(request) is None:
+        raise HTTPException(status_code=503, detail="Database is not connected.")
+    engine = _get_retrieval_engine(request)
+    cases = await run_all(engine, limit=10, rerank=False)
+    return [EvalCaseResponse.model_validate(c.to_dict()) for c in cases]
+
 
 
 

@@ -1,5 +1,15 @@
 from __future__ import annotations
 
+from rag_eval.mcp.tools.answer import (
+    AnswerValidationViolation,
+    AnswerValidator,
+    CitationInput,
+    CorpusAnswerTools,
+    DefaultPathAnswerValidator,
+    GroundedCitationDTO,
+    SubmitGroundedAnswerResult,
+    ValidatedAnswerPayload,
+)
 from rag_eval.mcp.tools.enrichment import CorpusEnrichmentTools
 from rag_eval.mcp.tools.sensors import (
     MAX_RAW_LINES,
@@ -30,15 +40,17 @@ from rag_eval.schemas import (
 
 
 class CorpusMCPTools:
-    """Canonical 5-tool facade composing runtime sensors and knowledge enrichment via strict DI."""
+    """Canonical tool facade composing runtime sensors, knowledge enrichment, and grounded answer submission via strict DI."""
 
     def __init__(
         self,
         sensors: CorpusRuntimeSensors,
         enrichment: CorpusEnrichmentTools,
+        answer_tools: CorpusAnswerTools | None = None,
     ) -> None:
         self._sensors = sensors
         self._enrichment = enrichment
+        self._answer_tools = answer_tools if answer_tools is not None else CorpusAnswerTools()
 
     @property
     def sensors(self) -> CorpusRuntimeSensors:
@@ -47,6 +59,10 @@ class CorpusMCPTools:
     @property
     def enrichment(self) -> CorpusEnrichmentTools:
         return self._enrichment
+
+    @property
+    def answer_tools(self) -> CorpusAnswerTools:
+        return self._answer_tools
 
     async def build_dynamic_corpus_manifest(self) -> str:
         return await self._sensors.build_dynamic_corpus_manifest()
@@ -129,26 +145,46 @@ class CorpusMCPTools:
             end_line=end_line,
         )
 
+    async def submit_grounded_answer(
+        self,
+        answer: str,
+        citations: list[CitationInput | str] | None = None,
+        abstained: bool = False,
+    ) -> SubmitGroundedAnswerResult:
+        return await self._answer_tools.submit_grounded_answer(
+            answer=answer,
+            citations=citations,
+            abstained=abstained,
+        )
+
 
 __all__ = [
     "MAX_RAW_LINES",
     "RERANK_POOL",
+    "AnswerValidationViolation",
+    "AnswerValidator",
+    "CitationInput",
+    "CorpusAnswerTools",
     "CorpusEnrichmentTools",
     "CorpusMCPTools",
     "CorpusReranker",
     "CorpusRuntimeSensors",
     "CurateEdgesResult",
+    "DefaultPathAnswerValidator",
     "EdgeKey",
     "EdgeProposal",
     "GraphDirection",
+    "GroundedCitationDTO",
     "HierarchicalDirection",
     "QueryEmbedder",
     "RawDocumentSliceResult",
     "RelationType",
     "SentenceTransformerQueryEmbedder",
+    "SubmitGroundedAnswerResult",
     "UnifiedGraphTraverseResult",
     "UnifiedHierarchyResult",
     "UnifiedSearchResult",
+    "ValidatedAnswerPayload",
     "format_graph_direction_docs",
     "format_hierarchical_direction_docs",
     "format_hierarchical_direction_values",

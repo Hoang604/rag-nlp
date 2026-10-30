@@ -159,10 +159,12 @@ class DirectIngestionCoordinator:
         title: str,
         metadata: dict[str, object] | None = None,
         overwrite: bool = True,
+        suffix: str = ".mdx",
     ) -> IngestionResult:
         import tempfile
 
-        with tempfile.NamedTemporaryFile("w", suffix=".mdx", encoding="utf-8", delete=False) as f:
+        normalized_suffix = suffix if suffix.startswith(".") else f".{suffix}"
+        with tempfile.NamedTemporaryFile("w", suffix=normalized_suffix, encoding="utf-8", delete=False) as f:
             f.write(raw_text)
             temp_path = Path(f.name)
 
@@ -216,6 +218,7 @@ class DirectIngestionCoordinator:
     ) -> CorpusIngestionSummary:
         """Executes single-pass corpus ingestion atomically across all files via CodingParserRegistry."""
         total_chunks = 0
+        total_edges = 0
         total_docs = 0
         skipped_docs = 0
 
@@ -230,6 +233,7 @@ class DirectIngestionCoordinator:
                 else:
                     total_docs += 1
                     total_chunks += res.chunks_count
+                    total_edges += res.edges_count
                     logger.info(
                         "(%d/%d) Ingested '%s' (%d chunks)",
                         idx,
@@ -244,6 +248,6 @@ class DirectIngestionCoordinator:
         return CorpusIngestionSummary(
             total_documents=total_docs,
             total_chunks=total_chunks,
-            total_edges=0,
+            total_edges=total_edges,
             skipped_documents=skipped_docs,
         )

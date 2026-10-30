@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 import atexit
+import datetime
 import json
 import logging
 import os
 import signal
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 from mcp.server.mcpserver import MCPServer
@@ -19,8 +23,10 @@ from rag_eval.exceptions import (
     E_INVALID_DOCUMENT_HIERARCHY,
     CorpusDomainError,
 )
-from rag_eval.mcp.registry import register_mcp_tools
+from rag_eval.mcp.registry import WebhookEmitter, register_mcp_tools
 from rag_eval.mcp.tools import (
+    AnswerValidator,
+    CorpusAnswerTools,
     CorpusMCPTools,
     CorpusRuntimeSensors,
 )
@@ -63,43 +69,91 @@ STATIC_SERVER_INSTRUCTIONS = """# RAG CORPUS PROTOCOL & AGENT OPERATIONAL PLAYBO
 - Tool responses are the sole source of truth. When no retrieved chunk grounds an answer, affirm the absence of data explicitly; never extrapolate or hallucinate ungrounded facts.
 - Pure Path Addressing: All operations identify nodes and edges exclusively by hierarchical LTree dot-paths. Database internal UUIDs are completely abstracted."""
 
+ANSWER_TOOL_INSTRUCTIONS = """## 4. GROUNDED ANSWER SUBMISSION (`submit_grounded_answer`)
+- When answering a user question, you MUST call `submit_grounded_answer` as your final step so the server can validate every cited LTree `path` against PostgreSQL before delivering the response.
+- Pass `answer` with inline markers `[#1]`, `[#2]`, ... and `citations` listing the corresponding retrieved LTree `path`s (or `abstained=True` if the corpus does not contain the answer).
+- If `submit_grounded_answer` returns a validation error, correct the invalid `path` using retrieved tool results and invoke `submit_grounded_answer` again."""
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
 
 def render_server_instructions(
     manifest_block: str | None = None,
+    *,
+    enable_answer_tool: bool = False,
 ) -> str:
     """Renders complete server instructions combining static protocol and dynamic manifest."""
+    base = STATIC_SERVER_INSTRUCTIONS.strip()
+    if enable_answer_tool:
+        base = f"{base}\n\n{ANSWER_TOOL_INSTRUCTIONS.strip()}"
     if not manifest_block or not manifest_block.strip():
-        return STATIC_SERVER_INSTRUCTIONS.strip()
-    return f"{STATIC_SERVER_INSTRUCTIONS.strip()}\n\n{manifest_block.strip()}"
+        return base
+    return f"{base}\n\n{manifest_block.strip()}"
 
 
 def create_default_corpus_mcp_tools(
     embedding_engine: QueryEmbedder | None = None,
     reranker: CorpusReranker | None = None,
+    answer_validator: AnswerValidator | None = None,
+    answer_output_path: str | Path | None = None,
+    pool: object | None = None,
 ) -> CorpusMCPTools:
-    """Composition root factory explicitly assembling runtime sensors and enrichment tools via pure DI."""
+    """Composition root factory explicitly assembling runtime sensors, enrichment, and answer tools via pure DI."""
+    from typing import cast
+
+    import asyncpg
+
     from rag_eval.mcp.tools.enrichment import CorpusEnrichmentTools
     from rag_eval.retrieval.reranker import CrossEncoderReranker
 
+    typed_pool = cast(asyncpg.Pool | None, pool)
     embedder = embedding_engine or SentenceTransformerQueryEmbedder()
     re_rank = reranker or CrossEncoderReranker()
-    sensors = CorpusRuntimeSensors(embedding_engine=embedder, reranker=re_rank)
-    enrichment = CorpusEnrichmentTools()
-    return CorpusMCPTools(sensors=sensors, enrichment=enrichment)
+    sensors = CorpusRuntimeSensors(
+        pool=typed_pool,
+        embedding_engine=embedder,
+        reranker=re_rank,
+    )
+    enrichment = CorpusEnrichmentTools(pool=typed_pool)
+    resolved_output = answer_output_path or os.environ.get("RAG_ANSWER_OUTPUT")
+    answer_tools = CorpusAnswerTools(
+        validator=answer_validator,
+        pool=typed_pool,
+        answer_output_path=resolved_output,
+    )
+    return CorpusMCPTools(sensors=sensors, enrichment=enrichment, answer_tools=answer_tools)
 
 
 def create_corpus_mcp_server(
     tools: CorpusMCPTools | None = None,
     manifest_block: str | None = None,
+    *,
+    enable_answer_tool: bool | None = None,
+    answer_output_path: str | Path | None = None,
+    event_emitter: WebhookEmitter | None = None,
 ) -> MCPServer:
     """Builds and configures the official MCP MCPServer instance with all canonical tools."""
-    tool_impl = tools if tools is not None else create_default_corpus_mcp_tools()
+    resolved_enable = (
+        enable_answer_tool
+        if enable_answer_tool is not None
+        else _env_flag("RAG_ENABLE_ANSWER_TOOL", default=False)
+    )
+    tool_impl = (
+        tools
+        if tools is not None
+        else create_default_corpus_mcp_tools(answer_output_path=answer_output_path)
+    )
+    if answer_output_path is not None:
+        tool_impl.answer_tools.answer_output_path = Path(answer_output_path)
 
     rendered_manifest = manifest_block
     if rendered_manifest is None:
         try:
-            import asyncio
-
             loop = asyncio.get_event_loop()
             if not loop.is_running():
                 rendered_manifest = loop.run_until_complete(tool_impl.build_dynamic_corpus_manifest())
@@ -109,14 +163,22 @@ def create_corpus_mcp_server(
         except (RuntimeError, OSError, ValueError) as exc:
             logger.debug("Could not build dynamic corpus manifest: %s", exc)
 
-    instructions_text = render_server_instructions(manifest_block=rendered_manifest)
+    instructions_text = render_server_instructions(
+        manifest_block=rendered_manifest,
+        enable_answer_tool=resolved_enable,
+    )
     server = MCPServer(
         SERVER_NAME,
         version=SERVER_VERSION,
         description="RAG Corpus Model Context Protocol Server",
         instructions=instructions_text,
     )
-    register_mcp_tools(server=server, tool_impl=tool_impl)
+    register_mcp_tools(
+        server=server,
+        tool_impl=tool_impl,
+        enable_answer_tool=resolved_enable,
+        event_emitter=event_emitter,
+    )
     return server
 
 
@@ -132,16 +194,85 @@ def map_domain_error_to_jsonrpc(err: CorpusDomainError) -> tuple[int, str, dict[
     return code, err.message, data
 
 
-class CorpusMCPServer:
-    """Wrapper providing direct execution, JSON-RPC bridge, and SDK lifecycle management."""
+def _json_default(obj: object) -> object:
+    from pydantic import BaseModel
 
-    def __init__(self, tools: CorpusMCPTools | None = None) -> None:
-        self.tools = tools if tools is not None else create_default_corpus_mcp_tools()
-        self.mcp_server = create_corpus_mcp_server(self.tools)
+    if isinstance(obj, BaseModel):
+        return obj.model_dump(mode="json")
+    return str(obj)
+
+
+def _post_webhook_sync(url: str, payload: dict[str, object]) -> None:
+    try:
+        body = json.dumps(payload, ensure_ascii=False, default=_json_default).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=2.5) as resp:
+            resp.read()
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        logger.debug("Webhook POST to %s failed (ignored): %s", url, exc)
+
+
+class CorpusMCPServer:
+    """Wrapper providing direct execution, JSON-RPC bridge, webhook emission, and SDK lifecycle management."""
+
+    def __init__(
+        self,
+        tools: CorpusMCPTools | None = None,
+        *,
+        enable_answer_tool: bool | None = None,
+        webhook_url: str | None = None,
+        answer_output_path: str | Path | None = None,
+        session_id: str | None = None,
+        event_emitter: WebhookEmitter | None = None,
+    ) -> None:
+        self.enable_answer_tool = (
+            enable_answer_tool
+            if enable_answer_tool is not None
+            else _env_flag("RAG_ENABLE_ANSWER_TOOL", default=False)
+        )
+        self.webhook_url = (webhook_url or os.environ.get("RAG_WEBHOOK_URL") or "").strip() or None
+        self.answer_output_path = (
+            str(answer_output_path)
+            if answer_output_path is not None
+            else (os.environ.get("RAG_ANSWER_OUTPUT") or "").strip() or None
+        )
+        self.session_id = (session_id or os.environ.get("RAG_SESSION_ID") or "").strip() or None
+        self.tools = (
+            tools
+            if tools is not None
+            else create_default_corpus_mcp_tools(answer_output_path=self.answer_output_path)
+        )
+        if self.answer_output_path is not None:
+            self.tools.answer_tools.answer_output_path = Path(self.answer_output_path)
+        self.mcp_server = create_corpus_mcp_server(
+            self.tools,
+            enable_answer_tool=self.enable_answer_tool,
+            answer_output_path=self.answer_output_path,
+            event_emitter=event_emitter or self._emit_webhook,
+        )
+
+    async def _emit_webhook(self, event_type: str, data: dict[str, object]) -> None:
+        if not self.webhook_url:
+            return
+        payload: dict[str, object] = {
+            "event": event_type,
+            "session_id": self.session_id,
+            "timestamp": datetime.datetime.now(datetime.UTC).isoformat(),
+            **data,
+        }
+        await asyncio.to_thread(_post_webhook_sync, self.webhook_url, payload)
 
     async def get_instructions(self) -> str:
         manifest = await self.tools.build_dynamic_corpus_manifest()
-        return render_server_instructions(manifest_block=manifest)
+        return render_server_instructions(
+            manifest_block=manifest,
+            enable_answer_tool=self.enable_answer_tool,
+        )
 
     async def get_tool_definitions(self) -> list[dict[str, object]]:
         tool_objs = await self.mcp_server.list_tools()
@@ -156,10 +287,12 @@ class CorpusMCPServer:
         ]
 
     async def execute_tool(self, name: str, args: dict[str, object]) -> dict[str, object]:
-        logger.info("[TOOL] START name=%s args=%s", name, args)
         try:
             res = await self.mcp_server.call_tool(name, args)
         except ToolError as exc:
+            cause = getattr(exc, "__cause__", None) or exc
+            if isinstance(cause, CorpusDomainError):
+                raise cause from exc
             raise CorpusDomainError(
                 error_code=E_AST_GROUNDING_VALIDATION,
                 message=str(exc),
@@ -221,14 +354,9 @@ class CorpusMCPServer:
                 if isinstance(item, TextContent):
                     try:
                         parsed = json.loads(item.text)
-                        logger.info("[TOOL] SUCCESS name=%s", name)
-                        if isinstance(parsed, dict):
-                            return parsed
-                        return {"result": parsed}
+                        return parsed if isinstance(parsed, dict) else {"result": parsed}
                     except (json.JSONDecodeError, ValueError):
-                        logger.info("[TOOL] SUCCESS name=%s (raw text)", name)
                         return {"result": item.text}
-        logger.info("[TOOL] SUCCESS name=%s (empty)", name)
         return {}
 
     async def handle_request_dict(self, req: dict[str, object]) -> dict[str, object] | None:
@@ -336,7 +464,14 @@ class CorpusMCPServer:
             raise
 
 
-def run_mcp_server(log_file: str | None = None) -> None:
+def run_mcp_server(
+    log_file: str | None = None,
+    *,
+    enable_answer_tool: bool | None = None,
+    webhook_url: str | None = None,
+    answer_output_path: str | None = None,
+    session_id: str | None = None,
+) -> None:
     if log_file:
         log_path = Path(log_file)
         log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -375,7 +510,12 @@ def run_mcp_server(log_file: str | None = None) -> None:
 
     atexit.register(_on_exit)
 
-    server = CorpusMCPServer()
+    server = CorpusMCPServer(
+        enable_answer_tool=enable_answer_tool,
+        webhook_url=webhook_url,
+        answer_output_path=answer_output_path,
+        session_id=session_id,
+    )
     try:
         server.run(transport="stdio")
     except (KeyboardInterrupt, SystemExit):

@@ -1,11 +1,16 @@
 import {
+  AnswerPayload,
+  AnswerResponse,
   CorpusDocument,
-  GraphTraversePayload,
-  GraphTraversalStep,
-  GraphVisualizerResponse,
-  HealthResponse,
   CurateEdgesPayload,
   CurateEdgesResult,
+  EvalCase,
+  EvalCaseUpdatePayload,
+  GraphTraversalStep,
+  GraphTraversePayload,
+  GraphVisualizerResponse,
+  HealthResponse,
+  ProviderStatus,
   RawTextResponse,
   RelationTypeCatalogItem,
   SearchPayload,
@@ -124,6 +129,56 @@ class ApiClient {
     );
   }
 
+  // 10. Grounded Q&A Providers & Execution
+  async getAnswerProviders(): Promise<ProviderStatus[]> {
+    return this.request<ProviderStatus[]>('/answer/providers');
+  }
+
+  async askQuestion(payload: AnswerPayload): Promise<AnswerResponse> {
+    return this.request<AnswerResponse>('/answer', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  // 11. Evaluation Suite Endpoints
+  async getEvalCases(): Promise<EvalCase[]> {
+    return this.request<EvalCase[]>('/eval/cases');
+  }
+
+  async updateEvalCase(
+    caseId: string,
+    payload: EvalCaseUpdatePayload
+  ): Promise<EvalCase> {
+    return this.request<EvalCase>(`/eval/cases/${encodeURIComponent(caseId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async deleteEvalCase(caseId: string): Promise<{ status: string; id: string }> {
+    return this.request<{ status: string; id: string }>(
+      `/eval/cases/${encodeURIComponent(caseId)}`,
+      {
+        method: 'DELETE',
+      }
+    );
+  }
+
+  async runEvalCase(caseId: string): Promise<EvalCase> {
+    return this.request<EvalCase>(
+      `/eval/cases/${encodeURIComponent(caseId)}/run`,
+      {
+        method: 'POST',
+      }
+    );
+  }
+
+  async runAllEvalCases(): Promise<EvalCase[]> {
+    return this.request<EvalCase[]>('/eval/run', {
+      method: 'POST',
+    });
+  }
 }
 
 export const api = new ApiClient();

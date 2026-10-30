@@ -115,9 +115,17 @@ class CrossEncoderReranker:
                 from sentence_transformers import CrossEncoder
 
                 device = "cuda" if torch.cuda.is_available() else "cpu"
-                model = CrossEncoder(
-                    self._model_name, max_length=self._max_length, device=device
-                )
+                try:
+                    model = CrossEncoder(
+                        self._model_name,
+                        max_length=self._max_length,
+                        device=device,
+                        local_files_only=True,
+                    )
+                except OSError:
+                    model = CrossEncoder(
+                        self._model_name, max_length=self._max_length, device=device
+                    )
                 if hasattr(model, "model") and hasattr(model.model, "eval"):
                     model.model.eval()
                 if (

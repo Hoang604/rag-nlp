@@ -20,8 +20,8 @@ async def test_direct_ingest_file(tmp_path: Path) -> None:
     mock_loader.load_graph_edges = AsyncMock(return_value={})
     mock_loader.resolve_chunk_paths = AsyncMock(return_value={})
 
-    file_p = tmp_path / "test.md"
-    file_p.write_text("# File Spec\n\nFile content.", encoding="utf-8")
+    file_p = tmp_path / "test.mdx"
+    file_p.write_text("---\ntitle: File Spec\n---\n\n# File Spec\n\nFile content.", encoding="utf-8")
 
     coordinator = DirectIngestionCoordinator(
         pool=mock_pool,
@@ -53,7 +53,7 @@ async def test_direct_ingest_bytes() -> None:
     mock_loader.load_graph_edges = AsyncMock(return_value={})
     mock_loader.resolve_chunk_paths = AsyncMock(return_value={})
 
-    raw_bytes = b"# Byte Spec\n\nByte content paragraph."
+    raw_bytes = b"---\ntitle: Byte Spec\n---\n\n# Byte Spec\n\nByte content paragraph."
     coordinator = DirectIngestionCoordinator(
         pool=mock_pool,
         compute_embeddings=False,

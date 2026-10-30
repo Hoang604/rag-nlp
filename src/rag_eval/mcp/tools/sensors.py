@@ -113,6 +113,43 @@ class CorpusRuntimeSensors:
             self._pool = await get_db_pool()
         return CorpusRepository(self._pool)
 
+    def _try_delegate_hybrid_search_sync(
+        self,
+        api_base_url: str,
+        payload: dict[str, object],
+    ) -> UnifiedSearchResult | None:
+        import json
+        import urllib.error
+        import urllib.request
+
+        url = f"{api_base_url.rstrip('/')}/api/search"
+        try:
+            body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            req = urllib.request.Request(
+                url,
+                data=body,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=15.0) as resp:
+                raw = json.loads(resp.read().decode("utf-8"))
+            if not isinstance(raw, dict):
+                return None
+            return UnifiedSearchResult.model_validate(
+                {
+                    "query": raw.get("query", payload.get("query", "")),
+                    "pattern": raw.get("pattern", payload.get("pattern", "")),
+                    "documents": raw.get("documents", {}),
+                    "groups": raw.get("groups", []),
+                    "verbatim_total": raw.get("verbatim_total", 0),
+                    "verbatim_truncated": raw.get("verbatim_truncated", False),
+                    "confidence": raw.get("confidence", "LOW"),
+                }
+            )
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            logger.debug("Warm API delegation to %s unavailable: %s", url, exc)
+            return None
+
     async def hybrid_search(
         self,
         query: str,
@@ -128,6 +165,36 @@ class CorpusRuntimeSensors:
     ) -> UnifiedSearchResult:
         """Executes generalized dual-channel Venn retrieval via RetrievalEngine."""
         try:
+            import os
+
+            from rag_eval.ingestion.loader import _embedding_model_cache
+            from rag_eval.retrieval.embedder import SentenceTransformerQueryEmbedder
+
+            api_base = os.environ.get("RAG_API_URL", "").strip()
+            if (
+                api_base
+                and not _embedding_model_cache
+                and isinstance(self._embedder, SentenceTransformerQueryEmbedder)
+                and os.environ.get("RAG_DISABLE_WARM_PROXY", "").strip() not in ("1", "true")
+            ):
+                delegated = await asyncio.to_thread(
+                    self._try_delegate_hybrid_search_sync,
+                    api_base,
+                    {
+                        "query": query,
+                        "pattern": pattern,
+                        "limit": limit,
+                        "rerank": False if rerank is None else rerank,
+                        "doc_slugs": doc_slugs or [],
+                        "path_prefix": path_prefix,
+                        "is_regex": is_regex,
+                        "case_sensitive": case_sensitive,
+                        "order_by_reading_order": order_by_reading_order,
+                    },
+                )
+                if delegated is not None:
+                    return delegated
+
             engine = await self._get_engine()
             return await engine.search_venn(
                 query=query,

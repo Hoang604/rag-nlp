@@ -1,12 +1,18 @@
 from __future__ import annotations
 
-from typing import Annotated
+import logging
+import time
+from collections.abc import Awaitable, Callable
+from typing import Annotated, TypeVar
 
 from mcp.server.mcpserver import MCPServer
-from pydantic import Field
+from pydantic import BaseModel, Field
 
+from rag_eval.exceptions import CorpusDomainError
 from rag_eval.mcp.tools import (
+    CitationInput,
     CorpusMCPTools,
+    SubmitGroundedAnswerResult,
 )
 from rag_eval.schemas import (
     CurateEdgesResult,
@@ -25,9 +31,77 @@ from rag_eval.schemas import (
     format_relation_type_docs,
 )
 
+logger = logging.getLogger(__name__)
+T = TypeVar("T")
+WebhookEmitter = Callable[[str, dict[str, object]], Awaitable[None]]
 
-def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
-    """Registers the 5 canonical Agent-First corpus tools onto the MCPServer instance."""
+
+def register_mcp_tools(
+    server: MCPServer,
+    tool_impl: CorpusMCPTools,
+    *,
+    enable_answer_tool: bool = False,
+    event_emitter: WebhookEmitter | None = None,
+) -> None:
+    """Registers the canonical Agent-First corpus tools (and optional submit_grounded_answer) onto the MCPServer instance."""
+
+    async def _run_with_telemetry(
+        tool_name: str,
+        args: dict[str, object],
+        coro: Awaitable[T],
+    ) -> T:
+        logger.info("[TOOL] START name=%s args=%s", tool_name, args)
+        started = time.perf_counter()
+        if event_emitter is not None:
+            await event_emitter("tool_start", {"tool": tool_name, "args": args})
+        try:
+            result = await coro
+        except Exception as exc:
+            elapsed_ms = round((time.perf_counter() - started) * 1000.0, 1)
+            err_msg = exc.message if isinstance(exc, CorpusDomainError) else str(exc)
+            logger.error("[TOOL] ERROR name=%s: %s", tool_name, err_msg)
+            if event_emitter is not None:
+                await event_emitter(
+                    "tool_error",
+                    {
+                        "tool": tool_name,
+                        "args": args,
+                        "error": err_msg,
+                        "elapsed_ms": elapsed_ms,
+                    },
+                )
+            raise
+
+        elapsed_ms = round((time.perf_counter() - started) * 1000.0, 1)
+        logger.info("[TOOL] SUCCESS name=%s (%.1fms)", tool_name, elapsed_ms)
+        if event_emitter is not None:
+            serialized_result = (
+                result.model_dump(mode="json")
+                if isinstance(result, BaseModel)
+                else result
+            )
+            await event_emitter(
+                "tool_done",
+                {
+                    "tool": tool_name,
+                    "args": args,
+                    "elapsed_ms": elapsed_ms,
+                    "result": serialized_result,
+                },
+            )
+            if (
+                tool_name == "submit_grounded_answer"
+                and isinstance(result, SubmitGroundedAnswerResult)
+            ):
+                await event_emitter(
+                    "answer_submitted",
+                    {
+                        "tool": tool_name,
+                        "elapsed_ms": elapsed_ms,
+                        "payload": serialized_result,
+                    },
+                )
+        return result
 
     @server.tool(
         name="hybrid_search",
@@ -104,16 +178,30 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
             ),
         ] = None,
     ) -> UnifiedSearchResult:
-        return await tool_impl.hybrid_search(
-            query=query,
-            pattern=pattern,
-            limit=limit,
-            rerank=rerank,
-            doc_slugs=doc_slugs or None,
-            path_prefix=path_prefix or None,
-            is_regex=is_regex,
-            case_sensitive=case_sensitive,
-            order_by_reading_order=order_by_reading_order,
+        return await _run_with_telemetry(
+            "hybrid_search",
+            {
+                "query": query,
+                "pattern": pattern,
+                "limit": limit,
+                "rerank": rerank,
+                "doc_slugs": doc_slugs,
+                "path_prefix": path_prefix,
+                "is_regex": is_regex,
+                "case_sensitive": case_sensitive,
+                "order_by_reading_order": order_by_reading_order,
+            },
+            tool_impl.hybrid_search(
+                query=query,
+                pattern=pattern,
+                limit=limit,
+                rerank=rerank,
+                doc_slugs=doc_slugs or None,
+                path_prefix=path_prefix or None,
+                is_regex=is_regex,
+                case_sensitive=case_sensitive,
+                order_by_reading_order=order_by_reading_order,
+            ),
         )
 
     @server.tool(
@@ -148,10 +236,14 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
             ),
         ] = 15,
     ) -> UnifiedHierarchyResult:
-        return await tool_impl.hierarchical_navigate(
-            path=path,
-            direction=direction,
-            limit=limit,
+        return await _run_with_telemetry(
+            "hierarchical_navigate",
+            {"path": path, "direction": str(direction), "limit": limit},
+            tool_impl.hierarchical_navigate(
+                path=path,
+                direction=direction,
+                limit=limit,
+            ),
         )
 
     @server.tool(
@@ -201,12 +293,20 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
             ),
         ] = 20,
     ) -> UnifiedGraphTraverseResult:
-        return await tool_impl.graph_traverse(
-            source_path=source_path,
-            direction=direction,
-            max_depth=max_depth,
-            filter_relations=filter_relations,
-            limit_per_link=limit_per_link,
+        return await _run_with_telemetry(
+            "graph_traverse",
+            {
+                "source_path": source_path,
+                "direction": str(direction),
+                "max_depth": max_depth,
+            },
+            tool_impl.graph_traverse(
+                source_path=source_path,
+                direction=direction,
+                max_depth=max_depth,
+                filter_relations=filter_relations,
+                limit_per_link=limit_per_link,
+            ),
         )
 
     @server.tool(
@@ -240,10 +340,14 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
             ),
         ] = None,
     ) -> CurateEdgesResult:
-        return await tool_impl.graph_curate_edges(
-            add_edges=add_edges,
-            remove_edges=remove_edges,
-            reason=reason,
+        return await _run_with_telemetry(
+            "graph_curate_edges",
+            {"reason": reason},
+            tool_impl.graph_curate_edges(
+                add_edges=add_edges,
+                remove_edges=remove_edges,
+                reason=reason,
+            ),
         )
 
     @server.tool(
@@ -279,8 +383,76 @@ def register_mcp_tools(server: MCPServer, tool_impl: CorpusMCPTools) -> None:
             ),
         ] = None,
     ) -> RawDocumentSliceResult:
-        return await tool_impl.get_raw(
-            path_or_slug=path_or_slug,
-            start_line=start_line,
-            end_line=end_line,
+        return await _run_with_telemetry(
+            "get_raw",
+            {
+                "path_or_slug": path_or_slug,
+                "start_line": start_line,
+                "end_line": end_line,
+            },
+            tool_impl.get_raw(
+                path_or_slug=path_or_slug,
+                start_line=start_line,
+                end_line=end_line,
+            ),
         )
+
+    if enable_answer_tool:
+
+        @server.tool(
+            name="submit_grounded_answer",
+            description=(
+                "Nộp câu trả lời cuối cùng cho người dùng kèm danh sách trích dẫn đường dẫn LTree `path`. "
+                "Hệ thống xác thực từng `path` tồn tại trong kho tài liệu trước khi chấp nhận và phát kết quả."
+            ),
+        )
+        async def submit_grounded_answer(
+            answer: Annotated[
+                str,
+                Field(
+                    min_length=1,
+                    description=(
+                        "Nội dung câu trả lời bằng tiếng Việt cho câu hỏi của người dùng, "
+                        "đánh dấu trích dẫn inline bằng [#1], [#2], ... tương ứng với thứ tự trong `citations`."
+                    ),
+                ),
+            ],
+            citations: Annotated[
+                list[CitationInput | str] | None,
+                Field(
+                    default=None,
+                    description=(
+                        "Danh sách các trích dẫn chứng thực câu trả lời (mỗi phần tử là chuỗi `path` "
+                        "hoặc object `{\"path\": \"...\", \"citation_text\": \"...\"}`). "
+                        "Bắt buộc có ít nhất 1 phần tử khi `abstained=False`."
+                    ),
+                ),
+            ] = None,
+            abstained: Annotated[
+                bool,
+                Field(
+                    default=False,
+                    description=(
+                        "Đặt True nếu kho tài liệu không chứa thông tin để trả lời câu hỏi "
+                        "(khi đó `citations` được phép để rỗng)."
+                    ),
+                ),
+            ] = False,
+        ) -> SubmitGroundedAnswerResult:
+            serialized_citations = [
+                c.model_dump(mode="json") if isinstance(c, CitationInput) else c
+                for c in (citations or [])
+            ]
+            return await _run_with_telemetry(
+                "submit_grounded_answer",
+                {
+                    "answer": answer,
+                    "citations": serialized_citations,
+                    "abstained": abstained,
+                },
+                tool_impl.submit_grounded_answer(
+                    answer=answer,
+                    citations=citations,
+                    abstained=abstained,
+                ),
+            )

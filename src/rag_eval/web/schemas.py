@@ -200,3 +200,121 @@ class RelationTypeCatalogResponse(BaseModel):
     code: str
     description: str
     is_symmetric: bool
+
+
+class ProviderStatusResponse(BaseModel):
+    """Availability of a CLI LLM provider."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    id: str
+    label: str
+    available: bool
+
+
+class AnswerCitationResponse(BaseModel):
+    """Validated and DB-enriched citation returned to the frontend."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    index: int
+    path: str
+    doc_slug: str
+    doc_title: str
+    start_line: int
+    end_line: int
+    verbatim_text: str
+    contextualized_text: str
+    citation_text: str | None = None
+
+
+class AnswerRequest(BaseModel):
+    """Request payload for grounded Q&A from the UI."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    question: str = Field(..., min_length=1, max_length=2000)
+    provider: str = Field(default="agy", description="agy | claude | codex")
+    agent_mode: bool = Field(
+        default=True,
+        description="True để chạy Agent MCP với submit_grounded_answer; False để chạy Retrieve + Compose",
+    )
+    limit: int = Field(default=8, ge=1, le=20)
+    doc_slugs: list[str] = Field(default_factory=list)
+    session_id: str | None = Field(
+        default=None,
+        description="Session ID tùy chọn để lọc luồng sự kiện WebSocket",
+    )
+
+
+class AnswerResponse(BaseModel):
+    """Grounded answer response with validated citations."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    question: str
+    provider: str
+    answer: str
+    abstained: bool
+    citations: list[AnswerCitationResponse] = Field(default_factory=list)
+    retrieval_ms: float = 0.0
+    llm_ms: float = 0.0
+    total_ms: float = 0.0
+
+
+class ExpectedTargetModel(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    doc_slug: str
+    path_suffix: str
+
+
+class EvalHitModel(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    rank: int
+    path: str
+    doc_slug: str
+    found_in: str
+    start_line: int
+    end_line: int
+    snippet: str
+    matched: bool
+
+
+class EvalCaseResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    id: str
+    test_set: str
+    domain: str
+    question: str
+    query: str
+    pattern: str
+    expected: list[ExpectedTargetModel]
+    is_regex: bool = False
+    case_sensitive: bool = False
+    doc_slugs: list[str] = Field(default_factory=list)
+    path_prefix: str | None = None
+    note: str = ""
+    rank: int | None = None
+    found_in: str | None = None
+    matched_path: str | None = None
+    elapsed_ms: float | None = None
+    top_hits: list[EvalHitModel] = Field(default_factory=list)
+
+
+class EvalCaseUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    test_set: str = "custom"
+    domain: str = "general"
+    question: str = ""
+    query: str = ""
+    pattern: str = ""
+    expected: list[ExpectedTargetModel] = Field(default_factory=list)
+    is_regex: bool = False
+    case_sensitive: bool = False
+    doc_slugs: list[str] = Field(default_factory=list)
+    path_prefix: str | None = None
+    note: str = ""

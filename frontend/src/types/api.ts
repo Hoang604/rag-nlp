@@ -139,4 +139,117 @@ export interface GraphTraversalStep {
   rationale?: string | null;
 }
 
+export type ProviderId = 'agy' | 'claude' | 'codex';
+
+export interface ProviderStatus {
+  id: ProviderId;
+  label: string;
+  available: boolean;
+}
+
+export interface AnswerCitation {
+  index: number;
+  path: string;
+  doc_slug: string;
+  doc_title: string;
+  start_line: number;
+  end_line: number;
+  verbatim_text: string;
+  contextualized_text: string;
+  citation_text?: string | null;
+}
+
+export interface AnswerPayload {
+  question: string;
+  provider: ProviderId;
+  agent_mode: boolean;
+  limit?: number;
+  doc_slugs?: string[];
+  session_id?: string;
+}
+
+export interface AnswerResponse {
+  question: string;
+  provider: ProviderId;
+  answer: string;
+  abstained: boolean;
+  citations: AnswerCitation[];
+  retrieval_ms: number;
+  llm_ms: number;
+  total_ms: number;
+}
+
+export interface QAWebhookEvent {
+  event:
+    | 'ws_connected'
+    | 'qa_started'
+    | 'tool_start'
+    | 'tool_done'
+    | 'tool_error'
+    | 'answer_submitted'
+    | 'qa_completed'
+    | 'qa_error'
+    | string;
+  session_id?: string | null;
+  question?: string;
+  timestamp?: string;
+  tool?: string;
+  args?: Record<string, unknown>;
+  result?: unknown;
+  error?: string;
+  elapsed_ms?: number;
+  payload?: AnswerResponse | Record<string, unknown>;
+}
+
+export interface ExpectedTarget {
+  doc_slug: string;
+  path_suffix: string;
+}
+
+export interface EvalHit {
+  rank: number;
+  path: string;
+  doc_slug: string;
+  found_in: 'both' | 'semantic_only' | 'verbatim_only' | string;
+  start_line: number;
+  end_line: number;
+  snippet: string;
+  matched: boolean;
+}
+
+export interface EvalCase {
+  id: string;
+  test_set: string;
+  domain: string;
+  question: string;
+  query: string;
+  pattern: string;
+  expected: ExpectedTarget[];
+  is_regex: boolean;
+  case_sensitive: boolean;
+  doc_slugs: string[];
+  path_prefix?: string | null;
+  note: string;
+  rank?: number | null;
+  found_in?: string | null;
+  matched_path?: string | null;
+  elapsed_ms?: number | null;
+  top_hits: EvalHit[];
+}
+
+export interface EvalCaseUpdatePayload {
+  test_set: string;
+  domain: string;
+  question: string;
+  query: string;
+  pattern: string;
+  expected: ExpectedTarget[];
+  is_regex: boolean;
+  case_sensitive: boolean;
+  doc_slugs: string[];
+  path_prefix?: string | null;
+  note: string;
+}
+
+
 

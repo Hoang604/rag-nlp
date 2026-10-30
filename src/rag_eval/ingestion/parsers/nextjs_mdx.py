@@ -9,7 +9,6 @@ from markdown_it import MarkdownIt
 from markdown_it.tree import SyntaxTreeNode
 
 from rag_eval.exceptions import E_CORPUS_INTEGRITY_VIOLATION, CorpusDomainError
-from rag_eval.ingestion.parsers.nodejs_md import NODEJS_CONTENT_MARKER_REGEX
 from rag_eval.ingestion.registry import BaseCodingParser
 from rag_eval.schemas import (
     ParsedChunkDraft,
@@ -23,6 +22,10 @@ logger = logging.getLogger(__name__)
 
 _CODEMOD_SLUG_REGEX = re.compile(r"^`[a-z0-9][a-z0-9_-]*`$")
 _TOP_LEVEL_YAML_KEY_REGEX = re.compile(r"^([a-zA-Z0-9_-]+)\s*:\s*(.*)$")
+NEXTJS_CONTENT_MARKER_REGEX = re.compile(
+    r"\A---\s*\n(?:[^\n]*\n)*?title\s*:|<AppOnly>|<PagesOnly>|<Image\b|<Video\b|<FixCardGrid>",
+    re.MULTILINE,
+)
 
 
 def _disambiguate_label(
@@ -91,25 +94,20 @@ class NextJSMDXParser(BaseCodingParser):
     name: str = "nextjs_mdx"
     framework_prefix: str = "nextjs"
 
-    def __init__(self, max_chunk_chars: int = 4000) -> None:
-        self.max_chunk_chars = max_chunk_chars
+    def __init__(self) -> None:
         self._md = MarkdownIt("commonmark").enable("table")
 
     def can_handle(self, file_path: Path, raw_text: str = "") -> bool:
-        """Matches Next.js Markdown and MDX documentation files."""
+        """Matches Next.js Markdown and MDX documentation files by corpus path or Next.js MDX/frontmatter markers."""
         suffix = Path(file_path).suffix.lower()
         if suffix not in (".mdx", ".md"):
             return False
 
         parts_lower = {p.lower() for p in Path(file_path).parts}
-        if "nodejs" in parts_lower or "node_docs" in parts_lower:
-            return False
+        if "nextjs" in parts_lower or "next_docs" in parts_lower:
+            return True
 
-        return not (
-            suffix == ".md"
-            and raw_text
-            and NODEJS_CONTENT_MARKER_REGEX.search(raw_text)
-        )
+        return bool(raw_text and NEXTJS_CONTENT_MARKER_REGEX.search(raw_text))
 
     def _sanitize_nextjs_content(
         self, content: str

@@ -1,0 +1,93 @@
+% ============================================================================
+% III. GIỚI THIỆU BÀI TOÁN VÀ CÁC PHƯƠNG PHÁP LIÊN QUAN
+% ============================================================================
+\section{GIỚI THIỆU BÀI TOÁN VÀ CÁC PHƯƠNG PHÁP LIÊN QUAN}
+
+\subsection{Bối cảnh và động lực}
+Các hệ thống Retrieval-Augmented Generation [1] phổ biến hiện nay thường dùng các \texttt{Chunker} đa dụng theo fixed token window hoặc recursive character splitting. Lý do của cách tiếp cận này là trước đây, việc đòi hỏi người dùng tự viết một bộ \texttt{Parser} riêng cho từng kho tài liệu là rào cản kỹ thuật quá lớn. Tuy nhiên, việc chunking mù quáng mà không hiểu cấu trúc tài liệu gây ra ba hệ quả trực tiếp: (1) cắt ngang table và code block làm hỏng cú pháp [10], [11]; (2) làm mất chuỗi tiêu đề cha của các mục con có tên chung chung như \texttt{Options}, \texttt{Parameters}, \texttt{Examples} khiến embedding model không phân biệt được mục đó thuộc về chủ đề hay hàm nào [12]; và (3) làm mất ánh xạ dòng đối với raw text.
+
+Sự xuất hiện của các LLM và \texttt{Coding Agent} đã thay đổi bài toán này: ngay cả người dùng không biết lập trình cũng có thể yêu cầu \texttt{Agent} đọc cấu trúc kho tài liệu của họ và viết một bộ \texttt{Parser} riêng cho kho tài liệu đó. Quá trình để \texttt{Agent} viết và test \texttt{Parser} chỉ cần thực hiện một lần khi đưa miền tài liệu mới vào, sau đó chạy bằng code thuật toán thông thường trên toàn bộ tài liệu mà không tốn chi phí gọi LLM cho từng trang. Tuy nhiên, \texttt{Agent} không thể tự xây lại từ đầu toàn bộ database schema, search index và Knowledge Graph cho mỗi dự án. Điều cần thiết là một \textbf{RAG framework đứng bên ngoài}, làm nhiệm vụ định nghĩa interface để \texttt{Agent} lắp \texttt{Parser} vào và cung cấp sẵn toàn bộ backend infrastructure phía sau:
+\begin{enumerate}
+    \item \textbf{\texttt{Parser interface} với 5 output invariants:} Framework loại bỏ hoàn toàn kiểu fixed-window chunking. Thay vào đó, hệ thống định nghĩa một output contract cố định kèm bước kiểm tra tự động: mọi \texttt{Parser} muốn lắp vào framework phải trả về các \texttt{chunk} có đường dẫn phân cấp \texttt{ltree} hợp lệ, line range $[s_i, e_i]$ khớp 1:1 với raw text, văn bản nguyên bản \texttt{verbatim\_text}, văn bản đã ghép sẵn chuỗi tiêu đề cha \texttt{contextualized\_text} và mảng \texttt{ancestor\_titles}.
+    \item \textbf{Tách biệt biểu diễn lúc indexing và lúc retrieval:} Khi nhận đầu ra từ \texttt{Parser}, framework tạo embedding vector và FTS index trên trường \texttt{contextualized\_text} để query khớp được cả tên tài liệu/mục cha lẫn nội dung mục con [12]. Ngược lại, khi trả kết quả retrieval cho \texttt{Agent}, framework tự động tách chuỗi tiêu đề cha ra làm thông tin chung của cả nhóm, chỉ trả \texttt{verbatim\_text} cho từng \texttt{chunk} để tránh lặp lại tiêu đề cha nhiều lần, đồng thời sắp xếp các \texttt{chunk} trong cùng một nhóm theo reading order tăng dần ($s_i\ \text{ASC}$) của tài liệu gốc.
+    \item \textbf{Dual-channel retrieval và Knowledge Graph qua MCP:} Phía sau \texttt{Parser interface}, framework cung cấp sẵn qua giao thức Model Context Protocol [14] retrieval pipeline kết hợp Hybrid RRF + Cross-Encoder với regex/trigram search channel, cổng \texttt{Sparse Match Gating} đánh giá confidence và cơ chế cho phép \texttt{Agent} duyệt cũng như tự curate edge vào Knowledge Graph với citation grounding nguyên văn qua trường \texttt{citation\_text} [1], [13].
+\end{enumerate}
+
+\subsection{Phát biểu bài toán}
+Bài toán thiết kế RAG framework phân cấp và \texttt{Parser interface} được phát biểu tổng quát cho mọi miền tài liệu có cấu trúc như sau:
+
+\begin{itemize}
+    \item \textbf{Đầu vào của framework:}
+    \begin{enumerate}
+        \item Một kho tài liệu có cấu trúc phân cấp $\mathcal{D} = \{d_1, d_2, \dots, d_M\}$. Mỗi tài liệu $d_m$ có mã định danh phân cấp $\text{slug}(d_m) \in \mathcal{T}_{\text{ltree}}$ và mảng các dòng raw text $L(d_m) = (\ell_1, \ell_2, \dots, \ell_{|d_m|})$.
+        \item Một bộ \texttt{Parser} $f_{\text{parse}}: \mathcal{D} \rightarrow 2^{\mathcal{C}} \times 2^{\mathcal{E}}$ được \texttt{Coding Agent} hoặc lập trình viên viết cho miền tài liệu $\mathcal{D}$ và đăng ký vào \texttt{Parser Registry}.
+        \item Runtime query gồm câu hỏi ngữ nghĩa $q$, verbatim pattern hoặc regex $p$, tập lọc tài liệu $\mathcal{S} \subseteq \mathcal{D}$ và \texttt{ltree} path prefix $\pi \in \mathcal{T}_{\text{ltree}}$.
+    \end{enumerate}
+    \item \textbf{Output contract 5 invariants mà \texttt{Parser} $f_{\text{parse}}$ phải thỏa mãn:}
+    Để framework chấp nhận nạp vào database, mỗi \texttt{chunk} $c_i = (\text{path}_i, \text{text}^{\text{verb}}_i, \text{text}^{\text{ctx}}_i, [s_i, e_i], \text{meta}_i) \in \mathcal{C}$ và mỗi graph edge $e \in \mathcal{E}$ do $f_{\text{parse}}$ xuất ra phải thỏa mãn 5 invariants:
+    \begin{enumerate}
+        \item \textit{Invariant đường dẫn \texttt{ltree}}: $\text{path}_i \in \mathcal{T}_{\text{ltree}}$ là duy nhất trong tài liệu, bắt đầu bằng prefix $\text{slug}(d_m)$ và mỗi nhãn phân cấp khớp regex $\texttt{\^{}[A-Za-z0-9\_]\{1,255\}\$}$.
+        \item \textit{Invariant vị trí dòng 1:1}: Chỉ số dòng bắt đầu và kết thúc thỏa mãn $1 \le s_i \le e_i \le |d_m|$, trỏ chính xác vào vị trí dòng trong $L(d_m)$ và không cắt ngang các atomic block như code block hay table.
+        \item \textit{Invariant tiền tố ngữ cảnh cha}: Trường văn bản ngữ cảnh có dạng chuẩn $\text{text}^{\text{ctx}}_i = \texttt{"[}\text{context}_i\texttt{]\textbackslash n"} \circ \text{text}^{\text{verb}}_i$, trong đó $\text{context}_i$ là chuỗi tiêu đề từ gốc tài liệu đến mục hiện tại nối bằng ký hiệu \texttt{" > "}.
+        \item \textit{Invariant danh sách tiêu đề tổ tiên}: Trường $\text{meta}_i$ chứa mảng \texttt{ancestor\_titles} ứng với từng cấp trên $\text{path}_i$ để framework tự động tái tạo các virtual parent node khi tree navigation.
+        \item \textit{Invariant citation grounding trên graph edge}: Mọi cạnh quan hệ $e = (c_u, c_v, r, \tau) \in \mathcal{E}$ phải thuộc tập 9 mã quan hệ chuẩn của hệ thống, thỏa mãn $c_u \neq c_v$ và chứa chuỗi trích dẫn $\tau \neq \emptyset$ xuất hiện nguyên văn trong $\text{text}^{\text{verb}}_u$ sau khi chuẩn hóa khoảng trắng.
+    \end{enumerate}
+    \item \textbf{Đầu ra của framework khi retrieval và navigation:}
+    Từ tập $\mathcal{C}$ và $\mathcal{E}$ đã nạp, với mỗi query $(q, p)$, framework trả về cấu trúc hợp nhất $\mathcal{R}(q, p) = (\mathcal{D}_{\text{hit}}, \mathcal{G}, N_{\text{verb}}, \gamma)$ gồm: danh sách tài liệu deduplicated $\mathcal{D}_{\text{hit}}$; danh sách các context group $\mathcal{G} = (g_1, g_2, \dots, g_K)$ gom các \texttt{chunk} có cùng khóa $(\text{slug}(d_m), \text{context})$ theo thứ tự ưu tiên Venn partitioning ($\mathcal{H}_{\text{sem}} \cap \mathcal{H}_{\text{verb}} \rightarrow \mathcal{H}_{\text{sem}} \setminus \mathcal{H}_{\text{verb}} \rightarrow \mathcal{H}_{\text{verb}} \setminus \mathcal{H}_{\text{sem}}$) nhưng sắp xếp các \texttt{chunk} bên trong mỗi nhóm theo natural reading order $(s_i\ \text{ASC}, \text{path}_i\ \text{ASC})$; tổng số verbatim matches $N_{\text{verb}}$; và confidence label $\gamma \in \{\texttt{none}, \texttt{low}, \texttt{medium}, \texttt{high}\}$, cùng các phép duyệt cây $\mathcal{T}_{\text{ltree}}$, duyệt đồ thị $G = (\mathcal{C}, \mathcal{E})$ và đọc raw line slice.
+    \item \textbf{Các câu hỏi nghiên cứu trọng tâm:} Từ phát biểu bài toán trên, thực nghiệm của báo cáo tập trung trả lời ba câu hỏi nghiên cứu:
+    \begin{itemize}
+        \item \textbf{CH1 (Bảo toàn cấu trúc qua \texttt{Parser interface} 5 invariants):} Liệu hai bộ \texttt{Parser} chuyên biệt cho Next.js MDX và Node.js Markdown lắp vào framework có phân rã trọn vẹn kho tài liệu mà bảo toàn 100\% ánh xạ dòng 1:1, tiền tố ngữ cảnh phân cấp và ranh giới khối mã nguồn hay không?
+        \item \textbf{CH2 (Đóng góp của Dual-Channel Venn và giới hạn cửa sổ Reranker):} Sự kết hợp giữa nhánh ngữ nghĩa (Dense + Sparse FTS qua RRF trên $\text{text}^{\text{ctx}}_i$), tầng Cross-Encoder 256 token và kênh nguyên văn regex/trigram đóng góp thế nào vào độ chính xác truy xuất trên hai lớp truy vấn \texttt{TS1-Lexical-API} và \texttt{TS2-Conceptual}?
+        \item \textbf{CH3 (Vận hành MCP thời gian thực và kiểm chứng trích dẫn):} Kiến trúc Warm Streamable HTTP MCP và cơ chế kiểm chứng đường dẫn \texttt{ltree} trực tiếp trên PostgreSQL giải quyết bài toán độ trễ khởi động lạnh và ngăn chặn trích dẫn giả mạo của \texttt{Coding Agent} như thế nào?
+    \end{itemize}
+\end{itemize}
+
+\subsection{Các phương pháp liên quan}
+Các công trình nghiên cứu nền tảng liên quan đến hybrid retrieval, structural chunking và Knowledge Graph được chia thành bốn nhóm và tổng hợp tại Bảng \ref{tab:related_work}:
+
+\begin{itemize}
+    \item \textbf{Lexical retrieval, Dense retrieval và Two-stage hybrid fusion:} Phương pháp lexical matching như BM25 [2] khớp chính xác các ký hiệu hiếm nhưng không xử lý được query khác từ vựng bề mặt. Ngược lại, kiến trúc Bi-Encoder như DPR [3] và embedding model dựa trên Decoder-only Transformer như Qwen3-Embedding [4] kết hợp Matryoshka Representation Learning [5] biểu diễn tương đồng ngữ nghĩa trong không gian liên tục $\mathbb{R}^d$. Công thức Reciprocal Rank Fusion [6] cho phép kết hợp thứ hạng từ hai kênh mà không phụ thuộc thang điểm tuyệt đối, trước khi đưa top candidates qua mô hình Cross-Encoder [7], [8] tính cross-attention đầy đủ giữa từng cặp token.
+    \item \textbf{Retrieval tài liệu kỹ thuật hỗ trợ lập trình:} DocPrompting [9] chứng minh việc cung cấp đúng đoạn tài liệu chính thức giúp code generation model gọi chính xác các thư viện mới ngoài tập huấn luyện. Tiếp đó, benchmark CodeRAG-Bench [10] chỉ ra rằng tài liệu kỹ thuật chứa nhiều nhiễu định dạng và các phương pháp single-channel retrieval thường xếp hạng sai khi có nhiều hàm mang chữ ký hoặc tiêu đề mục con tương tự nhau.
+    \item \textbf{AST chunking và hierarchical contextual retrieval:} Để tránh cắt đứt code block như fixed-window chunking, cAST [11] chunk mã nguồn theo node boundaries trên Abstract Syntax Tree. Ở bước indexing, phương pháp Contextual Retrieval [12] gắn thêm context prefix của tài liệu vào đầu mỗi \texttt{chunk} trước khi tạo embedding vector và BM25 index, giúp disambiguate các đoạn văn bản phụ thuộc vào tiêu đề mục cha.
+    \item \textbf{Knowledge Graph trong RAG và giao thức MCP cho Agent:} GraphRAG [13] xây dựng entity-relation graph để giải quyết các multi-hop queries, trong khi giao thức Model Context Protocol [14] chuẩn hóa interface để các \texttt{Agent} gọi công cụ retrieval và thao tác dữ liệu có cấu trúc.
+\end{itemize}
+
+\begin{table}[H]
+\centering
+\caption{Tổng hợp các công trình nghiên cứu liên quan và giới hạn khi áp dụng lên tài liệu phân cấp phức tạp}
+\label{tab:related_work}
+\footnotesize\setlength{\tabcolsep}{4pt}\begin{tabularx}{\textwidth}{>{\raggedright\arraybackslash}p{2.9cm}>{\raggedright\arraybackslash}p{3.1cm}>{\raggedright\arraybackslash}p{3.4cm}>{\raggedright\arraybackslash}X}
+\toprule
+\textbf{Công trình} & \textbf{Kỹ thuật cốt lõi} & \textbf{Phạm vi giải quyết chính} & \textbf{Giới hạn trên tài liệu phân cấp và tài liệu kỹ thuật} \\
+\midrule
+Robertson \& Zaragoza (2009) -- BM25 [2] & TF-IDF term weighting với length saturation & Khớp chính xác từ khóa hiếm, tên định danh và mã lỗi & Không xử lý được paraphrased query khác từ vựng bề mặt; standard stemmer làm biến dạng định danh chuyên ngành \\
+\addlinespace[3pt]
+Karpukhin et al. (2020) [3]; Zhang et al. (2025) [4]; Kusupati et al. (2022) [5] & Bi-Encoder Dense Embedding và Matryoshka dimension truncation & Biểu diễn ngữ nghĩa câu hỏi tự nhiên và văn bản dài trong không gian $\mathbb{R}^d$ & Dễ làm mờ khác biệt nhỏ giữa các định danh gần giống nhau; luôn trả về nearest neighbors ngay cả với out-of-domain queries \\
+\addlinespace[3pt]
+Cormack et al. (2009) [6]; Nogueira \& Cho (2019) [7]; Wang et al. (2021) [8] & RRF rank fusion kết hợp Cross-Encoder reranking & Cân bằng độ phủ lexical -- semantic và tinh chỉnh thứ tự top-$K$ bằng cross-attention & Context window của Cross-Encoder nhỏ gọn thường ngắn hơn các mục tài liệu lớn; thiếu kênh regex matching \\
+\addlinespace[3pt]
+Zhou et al. (2023) -- DocPrompting [9]; Wang et al. (2025) -- CodeRAG-Bench [10] & Retrieval tài liệu API chính thức đưa vào context sinh code & Chứng minh hiệu quả của tài liệu hàm đối với các API mới hoặc ngoài tập huấn luyện & Coi tài liệu là các đoạn văn phẳng có sẵn; chưa giải quyết bài toán làm sạch thẻ JSX, YAML comment hay phân nhánh phiên bản/routing \\
+\addlinespace[3pt]
+Zhang et al. (2025) -- cAST [11]; Anthropic (2024) -- Contextual Retrieval [12] & AST chunking và context prefixing vào đầu chunk khi indexing & Bảo toàn ranh giới khối cú pháp và disambiguate các đoạn con trùng tiêu đề & cAST thiết kế cho tệp mã nguồn thuần túy thay vì tài liệu lai MDX/Markdown; context prefix bị lặp lại dư thừa khi trả nhiều chunk cùng mục \\
+\addlinespace[3pt]
+Edge et al. (2024) -- GraphRAG [13] & Xây dựng entity-relation graph phục vụ multi-hop queries & Liên kết thông tin phân tán giữa nhiều tài liệu khác nhau & Graph sinh tự động bằng LLM dễ phát sinh hallucinated edges thiếu citation grounding \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\noindent\textbf{Technical Gap:} Từ Bảng \ref{tab:related_work}, có thể thấy các giải pháp hiện có hoặc dùng generic chunker làm hỏng cấu trúc tài liệu, hoặc hardcode \texttt{Parser} vào một định dạng cố định [11], đồng thời dùng LLM sinh context và graph edges cho từng \texttt{chunk} gây tốn kém và dễ sinh hallucinated edges [12], [13]. Khoảng trống đặt ra là xây dựng một \textbf{RAG framework tách biệt rõ core framework cố định với module \texttt{Parser} lắp ghép}: cung cấp output contract 5 invariants để \texttt{Coding Agent} chỉ cần viết \texttt{Parser} cho miền tài liệu mới, và cung cấp sẵn toàn bộ tầng PostgreSQL đa index, dual-channel Venn retrieval, gom nhóm context theo reading order và Knowledge Graph có citation grounding qua giao thức MCP [14].
+
+\subsection{Đóng góp của báo cáo}
+Trên cơ sở kế thừa mô hình RRF + Cross-Encoder [6]–[8], kỹ thuật Matryoshka dimension truncation [5] và nguyên lý context prefixing [12], báo cáo thực hiện hai nhóm đóng góp tách biệt:
+\begin{enumerate}
+    \item \textbf{Thiết kế và hiện thực hóa RAG framework phân cấp độc lập miền dữ liệu:}
+    \begin{itemize}
+        \item Định nghĩa \texttt{Parser interface} với 5 output invariants, bộ hàm chuẩn hóa đường dẫn \texttt{ltree} dùng chung và ingestion pipeline kiểm tra tính toàn vẹn kèm differential vector cache.
+        \item Xây dựng dual-channel retrieval engine kết hợp Hybrid Search trên vector 512 chiều của \texttt{Qwen3-Embedding-0.6B} [4] và FTS cấu hình \texttt{simple} có proximity boost qua RRF [6], reranking bằng \texttt{mmarco-mMiniLMv2-L12-H384-v1} [8], hợp nhất theo Venn partitioning với kênh tìm kiếm regex/trigram, tách tiêu đề cha ra cấp nhóm theo đúng reading order và gán nhãn confidence qua cổng \texttt{Sparse Match Gating}.
+        \item Xây dựng hệ quản trị Knowledge Graph có hướng cho phép \texttt{Agent} duyệt đệ quy và tự curate edge ở runtime dưới ràng buộc kiểm chứng verbatim \texttt{citation\_text}, tự động mở rộng container target node xuống các leaf nodes, lưu append-only audit log và kiểm chứng trích dẫn câu trả lời qua 6 MCP tools [14] cùng giao diện Web Observatory Dashboard.
+    \end{itemize}
+    \item \textbf{Hiện thực hóa hai bộ \texttt{Parser} mẫu trên Next.js MDX và Node.js Markdown để kiểm định framework:}
+    \begin{itemize}
+        \item Xây dựng hai bộ \texttt{Parser} chuyên biệt giải quyết các cấu trúc phức tạp của tài liệu Next.js và Node.js, indexing 167 tài liệu gồm 162.757 dòng raw text thành 5.633 \texttt{chunk} bảo toàn 100\% code block và vị trí dòng 1:1, đồng thời thiết lập bộ dữ liệu đánh giá 100 truy vấn qua quy trình 3 pha cách ly mù cùng nghiên cứu Ablation và kiểm định thống kê McNemar trên 2 bộ test độc lập (\texttt{TS1-Lexical-API} và \texttt{TS2-Conceptual}).
+    \end{itemize}
+\end{enumerate}

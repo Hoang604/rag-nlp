@@ -24,9 +24,7 @@
 - Migrations must preserve existing promoted database records in-place without destructive data wiping.
 
 ## Testing Principles & Scope
-- **Infrastructure & System Mechanics Only**: All tests in this system must strictly and exclusively verify technical infrastructure, concurrency, architectural invariants, protocol compliance, transaction boundaries, and system mechanics using synthetic structural stubs.
-- **Strict Prohibition on Q&A / Evaluation Benchmarks**: Never write, mock, or introduce any question-and-answer (Q&A) pairs, golden datasets, ground-truth benchmarks, prompt templates, or sample question-answering evaluation cases.
-- **No Domain Input Data Testing**: Tests must not operate on or assert against specific domain input data (e.g., realistic domain documents, natural-language corpus queries, or domain-specific semantic answers) to eliminate any risk of retrieval algorithms or models overfitting to test fixtures.
+- **Infrastructure & System Mechanics**: Unit and integration tests in `tests/` verify technical infrastructure, concurrency, architectural invariants, protocol compliance, transaction boundaries, and system mechanics.
 
 ## MCP Testing & Tool Execution
 - **Always Test MCP via CLI**: When testing or verifying MCP tools during development, never attempt to interact with or restart persistent background MCP server daemons. Always test and verify tool payloads directly using the headless CLI runner:

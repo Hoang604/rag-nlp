@@ -234,7 +234,11 @@ Indicate the end of node options.
 
 
 def test_registry_dispatches_nodejs_vs_nextjs_accurately(tmp_path: Path) -> None:
-    """Verifies that CodingParserRegistry dispatches Node.js vs Next.js files without collision."""
+    """Verifies that CodingParserRegistry dispatches Node.js vs Next.js files without collision and rejects unknown Markdown."""
+    import pytest
+
+    from rag_eval.ingestion.registry import UnsupportedFrameworkError
+
     CodingParserRegistry.clear()
     CodingParserRegistry.register(NodeJSMarkdownParser())
     CodingParserRegistry.register(NextJSMDXParser())
@@ -249,6 +253,11 @@ def test_registry_dispatches_nodejs_vs_nextjs_accurately(tmp_path: Path) -> None
     next_file = nextjs_dir / "page.mdx"
     next_file.write_text("---\ntitle: Page\n---\n\n# Page\n\nNext content.\n", encoding="utf-8")
 
+    unknown_dir = tmp_path / "other_domain"
+    unknown_dir.mkdir()
+    unknown_file = unknown_dir / "random.md"
+    unknown_file.write_text("# Random Doc\n\nPlain text without Next.js or Node.js markers.\n", encoding="utf-8")
+
     node_parser = CodingParserRegistry.get_parser(node_file)
     assert node_parser.name == "nodejs_md"
     node_draft = node_parser.parse(node_file, corpus_root=nodejs_dir)
@@ -258,3 +267,6 @@ def test_registry_dispatches_nodejs_vs_nextjs_accurately(tmp_path: Path) -> None
     assert next_parser.name == "nextjs_mdx"
     next_draft = next_parser.parse(next_file, corpus_root=nextjs_dir)
     assert next_draft.doc_slug == "nextjs.page"
+
+    with pytest.raises(UnsupportedFrameworkError):
+        CodingParserRegistry.get_parser(unknown_file)

@@ -36,39 +36,53 @@ DEFAULT_EMBEDDING_DIM: Final[int] = 512
 def get_embedding_model(
     model_name: str = DEFAULT_EMBEDDING_MODEL,
     truncate_dim: int = DEFAULT_EMBEDDING_DIM,
+    device: str | None = None,
 ) -> SentenceTransformer | None:
     """Loads and caches the SentenceTransformer embedding model with GPU acceleration."""
-    cache_key = f"{model_name}:{truncate_dim}"
-    with _embedding_load_lock:
-        if cache_key in _embedding_model_cache:
-            return _embedding_model_cache[cache_key]
-
     try:
         import torch
         from sentence_transformers import SentenceTransformer
 
         device_env = os.environ.get("RAG_EMBEDDING_DEVICE")
-        device = (
-            device_env
-            if device_env
-            else ("cuda" if torch.cuda.is_available() else "cpu")
+        resolved_device = (
+            device
+            if device
+            else (
+                device_env
+                if device_env
+                else ("cuda" if torch.cuda.is_available() else "cpu")
+            )
         )
+        cache_key = f"{model_name}:{truncate_dim}:{resolved_device}"
+        with _embedding_load_lock:
+            if cache_key in _embedding_model_cache:
+                return _embedding_model_cache[cache_key]
+
         model_kwargs = (
             {"torch_dtype": torch.float16}
-            if device == "cuda"
+            if resolved_device == "cuda"
             else {"torch_dtype": torch.float32}
         )
-        model = SentenceTransformer(
-            model_name,
-            truncate_dim=truncate_dim,
-            model_kwargs=model_kwargs,
-            device=device,
-        )
+        try:
+            model = SentenceTransformer(
+                model_name,
+                truncate_dim=truncate_dim,
+                model_kwargs=model_kwargs,
+                device=resolved_device,
+                local_files_only=True,
+            )
+        except OSError:
+            model = SentenceTransformer(
+                model_name,
+                truncate_dim=truncate_dim,
+                model_kwargs=model_kwargs,
+                device=resolved_device,
+            )
         model.max_seq_length = 2048
         if model.tokenizer is not None:
             model.tokenizer.padding_side = "left"
         model.eval()
-        if device == "cuda":
+        if resolved_device == "cuda":
             logger.info(
                 "Loaded embedding model %s (dim=%d) on GPU (CUDA FP16).",
                 model_name,
@@ -81,7 +95,8 @@ def get_embedding_model(
                 truncate_dim,
             )
 
-        _embedding_model_cache[cache_key] = model
+        with _embedding_load_lock:
+            _embedding_model_cache[cache_key] = model
         return model
     except (ImportError, RuntimeError, OSError, ValueError) as exc:
         logger.debug(
@@ -169,13 +184,37 @@ def compute_chunk_embeddings(
                         )
                         embeddings = []
                         for single_text in formatted:
-                            single_emb = model.encode(
-                                [single_text],
-                                batch_size=1,
-                                normalize_embeddings=True,
-                                show_progress_bar=False,
-                                convert_to_numpy=True,
-                            )
+                            try:
+                                single_emb = model.encode(
+                                    [single_text],
+                                    batch_size=1,
+                                    normalize_embeddings=True,
+                                    show_progress_bar=False,
+                                    convert_to_numpy=True,
+                                )
+                            except (torch.cuda.OutOfMemoryError, RuntimeError) as single_oom:
+                                if "out of memory" in str(single_oom).lower():
+                                    torch.cuda.empty_cache()
+                                    logger.warning(
+                                        "Chunk (%d chars) exceeds GPU VRAM at batch_size=1; encoding on CPU.",
+                                        len(single_text),
+                                    )
+                                    cpu_model = get_embedding_model(
+                                        model_name,
+                                        truncate_dim=truncate_dim,
+                                        device="cpu",
+                                    )
+                                    if cpu_model is None:
+                                        raise
+                                    single_emb = cpu_model.encode(
+                                        [single_text],
+                                        batch_size=1,
+                                        normalize_embeddings=True,
+                                        show_progress_bar=False,
+                                        convert_to_numpy=True,
+                                    )
+                                else:
+                                    raise
                             embeddings.extend(single_emb)
                             torch.cuda.empty_cache()
                     else:

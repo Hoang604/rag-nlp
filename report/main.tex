@@ -1,0 +1,86 @@
+\documentclass[12pt,a4paper]{article}
+
+% ============================================================================
+% CẤU HÌNH TRANG & FONT CHỮ (TUÂN THỦ MẪU BÁO CÁO BTL NLP)
+% Lề chuẩn: Trái 3cm (1701 twips), Trên/Dưới/Phải 2cm (1134 twips)
+% ============================================================================
+\usepackage[a4paper, left=3cm, right=2cm, top=2cm, bottom=2cm]{geometry}
+\usepackage{fontspec}
+\setmainfont{Times New Roman}
+\setsansfont{Liberation Sans}
+\setmonofont{DejaVu Sans Mono}[Scale=0.85]
+
+\usepackage{setspace}
+\onehalfspacing
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{6pt}
+\sloppy
+\setlength{\emergencystretch}{3em}
+\raggedbottom
+
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{caption}
+\captionsetup[table]{name=Bảng, labelsep=period, position=top, font=bf}
+\captionsetup[figure]{name=Hình, labelsep=period, position=bottom, font=bf}
+
+\usepackage{enumitem}
+\setlist[itemize]{nosep, topsep=2pt, leftmargin=1.5em, label=--}
+\setlist[enumerate]{nosep, topsep=2pt, leftmargin=1.8em}
+
+\usepackage{xcolor}
+\usepackage{tikz}
+\usetikzlibrary{shapes.geometric, arrows.meta, positioning, fit, calc, backgrounds}
+
+\usepackage[colorlinks=true, linkcolor=black, citecolor=blue!70!black, urlcolor=blue!70!black]{hyperref}
+
+% ============================================================================
+% ĐỊNH DẠNG TIÊU ĐỀ MỤC THEO ĐÚNG MẪU: I., II., ... / 1., 2., ... / a), b), ...
+% ============================================================================
+\usepackage{titlesec}
+\renewcommand{\thesection}{\Roman{section}}
+\renewcommand{\thesubsection}{\arabic{subsection}}
+\renewcommand{\thesubsubsection}{\alph{subsubsection})}
+
+\titleformat{\section}{\normalfont\fontsize{13}{15}\bfseries}{\thesection.}{0.5em}{}
+\titleformat{\subsection}{\normalfont\fontsize{12}{14}\bfseries}{\thesubsection.}{0.5em}{}
+\titleformat{\subsubsection}{\normalfont\fontsize{12}{14}\bfseries\itshape}{\thesubsubsection}{0.5em}{}
+
+\titlespacing*{\section}{0pt}{10pt}{4pt}
+\titlespacing*{\subsection}{0pt}{8pt}{3pt}
+\titlespacing*{\subsubsection}{0pt}{6pt}{2pt}
+
+% Macro hỗ trợ hiển thị giá trị Placeholder chờ điền số liệu thực nghiệm
+\newcommand{\tbd}[1]{\textcolor{red!75!black}{\textbf{[#1]}}}
+
+\begin{document}
+
+% ============================================================================
+% PHẦN TIÊU ĐỀ BÁO CÁO
+% ============================================================================
+\begin{center}
+    {\fontsize{14}{17}\bfseries BÁO CÁO BÀI TẬP LỚN CUỐI KỲ}\\[4pt]
+    {\fontsize{13}{16}\bfseries HỌC PHẦN XỬ LÝ NGÔN NGỮ TỰ NHIÊN -- NĂM HỌC 2025 - 2026}
+\end{center}
+
+\vspace{4pt}
+\noindent\textbf{Kính gửi:}
+\begin{itemize}
+    \item Giảng viên phụ trách học phần
+    \item Hội đồng chấm bài tập lớn
+\end{itemize}
+
+\input{sections/01_thong_tin_chung}
+\input{sections/02_tom_tat}
+\input{sections/03_gioi_thieu}
+\input{sections/04_phuong_phap}
+\input{sections/05_thuc_nghiem}
+\input{sections/06_ket_luan}
+\input{sections/07_tai_lieu_phu_luc}
+
+\end{document}

@@ -339,11 +339,48 @@ def server(
             help="Path to write diagnostic log file (defaults to logs/mcp_server.log)",
         ),
     ] = "logs/mcp_server.log",
+    enable_answer_tool: Annotated[
+        bool,
+        typer.Option(
+            "--enable-answer-tool/--no-enable-answer-tool",
+            help="Enable the submit_grounded_answer MCP tool (disabled by default)",
+        ),
+    ] = False,
+    webhook_url: Annotated[
+        str | None,
+        typer.Option(
+            "--webhook-url",
+            help="Optional webhook URL to receive live MCP tool call and grounded answer events",
+        ),
+    ] = None,
+    answer_output: Annotated[
+        str | None,
+        typer.Option(
+            "--answer-output",
+            help="Optional file path to persist validated submit_grounded_answer payload",
+        ),
+    ] = None,
+    session_id: Annotated[
+        str | None,
+        typer.Option(
+            "--session-id",
+            help="Optional session identifier attached to webhook events",
+        ),
+    ] = None,
 ) -> None:
     """Launch the MCP JSON-RPC 2.0 Server over Stdio."""
+    import os
+
     from rag_eval.mcp.server import run_mcp_server
 
-    run_mcp_server(log_file=log_file)
+    os.environ.setdefault("RAG_API_URL", "http://127.0.0.1:8000")
+    run_mcp_server(
+        log_file=log_file,
+        enable_answer_tool=enable_answer_tool,
+        webhook_url=webhook_url,
+        answer_output_path=answer_output,
+        session_id=session_id,
+    )
 
 
 @app.command(name="tool")
@@ -351,7 +388,7 @@ def tool(
     tool_name: Annotated[
         str,
         typer.Argument(
-            help="Name of the MCP tool to execute (e.g. hybrid_search, hierarchical_navigate, graph_curate_edges)"
+            help="Name of the MCP tool to execute (e.g. hybrid_search, hierarchical_navigate, graph_curate_edges, submit_grounded_answer)"
         ),
     ],
     args: Annotated[
@@ -378,6 +415,34 @@ def tool(
             help="Output raw JSON-RPC response without extra console styling",
         ),
     ] = True,
+    enable_answer_tool: Annotated[
+        bool,
+        typer.Option(
+            "--enable-answer-tool/--no-enable-answer-tool",
+            help="Enable the submit_grounded_answer MCP tool during CLI execution",
+        ),
+    ] = False,
+    webhook_url: Annotated[
+        str | None,
+        typer.Option(
+            "--webhook-url",
+            help="Optional webhook URL to emit tool events",
+        ),
+    ] = None,
+    answer_output: Annotated[
+        str | None,
+        typer.Option(
+            "--answer-output",
+            help="Optional file path to persist validated submit_grounded_answer payload",
+        ),
+    ] = None,
+    session_id: Annotated[
+        str | None,
+        typer.Option(
+            "--session-id",
+            help="Optional session identifier attached to webhook events",
+        ),
+    ] = None,
 ) -> None:
     """Direct headless runner for all MCP tools."""
     import asyncio
@@ -398,8 +463,16 @@ def tool(
         raise typer.Exit(code=1) from err
 
     async def _execute() -> dict[str, object]:
+        import os
+
+        os.environ.setdefault("RAG_API_URL", "http://127.0.0.1:8000")
         try:
-            server = CorpusMCPServer()
+            server = CorpusMCPServer(
+                enable_answer_tool=enable_answer_tool or (tool_name.strip() == "submit_grounded_answer"),
+                webhook_url=webhook_url,
+                answer_output_path=answer_output,
+                session_id=session_id,
+            )
             res = await server.handle_request_dict(
                 {
                     "jsonrpc": "2.0",
