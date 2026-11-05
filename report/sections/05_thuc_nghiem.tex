@@ -49,8 +49,35 @@ Số liệu tại Bảng \ref{tab:chunk_dist} phản ánh đặc trưng cấu tr
         \item \textbf{Test set 2 -- \texttt{TS2-Conceptual} (\texttt{e051}--\texttt{e100}):} 50 câu hỏi (25 Next.js, 25 Node.js) diễn đạt tình huống kỹ thuật tự nhiên về kiến trúc, cơ chế vận hành và các chủ đề trùng tên tiêu đề con giữa các phạm vi phân cấp khác nhau (như \textit{Caching}, \textit{Revalidation}, \textit{Server Actions}, \textit{Streams}, \textit{Cluster}, \textit{TLS Session Resumption}).
     \end{itemize}
     \item \textbf{Pha 2 -- Lập lời gọi \texttt{hybrid\_search} đầu tiên (2 tác tử độc lập):} Đóng vai \texttt{Coding Agent} ở thời điểm gọi công cụ lần đầu, tác tử chỉ được đọc câu hỏi từ Pha 1 và bản đặc tả giao diện MCP của \texttt{hybrid\_search} (kèm danh mục 167 \texttt{doc\_slug}) để tự quyết định bộ tham số \texttt{query}, \texttt{pattern}, \texttt{is\_regex}, \texttt{case\_sensitive}, \texttt{doc\_slugs} và \texttt{path\_prefix}.
-    \item \textbf{Pha 3 -- Đối chiếu CSDL và gán nhãn Ground-Truth (2 tác tử độc lập):} Giữ nguyên tuyệt đối câu hỏi và tham số truy vấn của Pha 1--2, tác tử truy vấn trực tiếp bảng \texttt{chunks} trong PostgreSQL để xác định đường dẫn phân cấp \texttt{ltree} chuẩn trả lời trực tiếp câu hỏi (\texttt{expected}). Tổng cộng có \textbf{100 đường dẫn \texttt{ltree} đích} được gán nhãn và xác thực tồn tại 100\% trong CSDL (Bảng \ref{tab:test_sets}).
+    \item \textbf{Pha 3 -- Đối chiếu CSDL và gán nhãn Ground-Truth (2 tác tử độc lập):} Giữ nguyên tuyệt đối câu hỏi và tham số truy vấn của Pha 1--2, tác tử truy vấn trực tiếp bảng \texttt{chunks} trong PostgreSQL để xác định đường dẫn phân cấp \texttt{ltree} chuẩn trả lời trực tiếp câu hỏi (\texttt{expected}). Tổng cộng có \textbf{100 đường dẫn \texttt{ltree} đích} được gán nhãn và xác thực tồn tại 100\% trong CSDL (Hình \ref{fig:blind_eval_protocol} và Bảng \ref{tab:test_sets}).
 \end{enumerate}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    node distance=0.45cm and 0.5cm,
+    phase/.style={rectangle, rounded corners=3pt, draw=blue!75!black, thick, fill=blue!6, text width=4.0cm, align=center, minimum height=1.1cm, font=\footnotesize},
+    guard/.style={rectangle, rounded corners=2pt, draw=red!70!black, dashed, fill=red!4, text width=4.0cm, align=center, minimum height=0.65cm, font=\scriptsize},
+    outnode/.style={rectangle, rounded corners=3pt, draw=green!55!black, thick, fill=green!8, text width=4.0cm, align=center, minimum height=1.1cm, font=\footnotesize},
+    arrow/.style={-Stealth, thick, draw=black!80}
+]
+    \node[phase] (p1) {\textbf{Pha 1: Sinh câu hỏi tự nhiên}\\Subagent \#1 (\texttt{TS1}: 50 câu)\\Subagent \#2 (\texttt{TS2}: 50 câu)};
+    \node[phase, right=of p1] (p2) {\textbf{Pha 2: Lập lời gọi công cụ}\\Subagent \#3 \& \#4 chọn\\\texttt{query}, \texttt{pattern}, \texttt{doc\_slugs}};
+    \node[outnode, right=of p2] (p3) {\textbf{Pha 3: Gán nhãn \texttt{ltree} đích}\\Subagent \#5 \& \#6 đối chiếu\\trực tiếp bảng \texttt{chunks}};
+
+    \node[guard, below=0.35cm of p1] (g1) {Chỉ đọc đề cương tiêu đề\\\textit{Cấm đọc mã nguồn \& CSDL}};
+    \node[guard, below=0.35cm of p2] (g2) {Chỉ đọc câu hỏi \& đặc tả MCP\\\textit{Cấm đọc nội dung chunk}};
+    \node[guard, draw=green!55!black, fill=green!4, below=0.35cm of p3] (g3) {Cố định \texttt{query} \& \texttt{pattern}\\Xác thực 100/100 đường dẫn \texttt{ltree}};
+
+    \draw[arrow] (p1) -- (p2);
+    \draw[arrow] (p2) -- (p3);
+    \draw[arrow, densely dotted] (g1) -- (p1);
+    \draw[arrow, densely dotted] (g2) -- (p2);
+    \draw[arrow, densely dotted] (g3) -- (p3);
+\end{tikzpicture}
+\caption{Quy trình 3 pha cách ly mù (blind-isolated protocol) với 6 tác tử độc lập xây dựng bộ kiểm thử \texttt{data/eval/retrieval.jsonl}}
+\label{fig:blind_eval_protocol}
+\end{figure}
 
 \begin{table}[H]
 \centering
@@ -74,7 +101,7 @@ Số liệu tại Bảng \ref{tab:chunk_dist} phản ánh đặc trưng cấu tr
 \subsubsection{Tham số cấu hình của framework và mô hình}
 Các hyperparameters của framework cùng cơ sở lựa chọn tương ứng được tổng hợp tại Bảng \ref{tab:hyperparams}.
 
-\begin{table}[htbp]
+\begin{table}[H]
 \centering
 \caption{Hyperparameters, cấu hình và cơ sở lựa chọn của RAG framework}
 \label{tab:hyperparams}
@@ -106,7 +133,7 @@ Giới hạn MCP \& Parser & Nav $\le 50$ nodes; Graph $\le 100$ bước; Raw $\
 \subsubsection{Cấu hình phần cứng và môi trường}
 Môi trường phần cứng và phần mềm phục vụ thực nghiệm được tổng hợp tại Bảng \ref{tab:env}.
 
-\begin{table}[htbp]
+\begin{table}[H]
 \centering
 \caption{Cấu hình phần cứng và môi trường thực nghiệm}
 \label{tab:env}
@@ -136,7 +163,7 @@ Thời gian nạp \& lập chỉ mục & Phân tích AST \& kiểm định 5 b�
 \subsubsection{Kiểm thử chức năng và bất biến toàn vẹn dữ liệu}
 Trước khi đánh giá chất lượng xếp hạng, hệ thống được kiểm tra tự động qua bộ test tích hợp (\texttt{uv run scripts/check.py}) và kiểm định trực tiếp trên toàn bộ 5.633 phân đoạn trong CSDL nhằm xác nhận các bất biến kiến trúc (Bảng \ref{tab:func_tests}).
 
-\begin{table}[htbp]
+\begin{table}[H]
 \centering
 \caption{Kết quả kiểm thử chức năng và kiểm định bất biến trên kho dữ liệu thực tế}
 \label{tab:func_tests}
@@ -202,7 +229,7 @@ Gọi $\hat{R}_q^{(k)} = (\hat{c}_1, \hat{c}_2, \dots, \hat{c}_k)$ là danh sác
 \subsubsection{Kết quả chi tiết theo test set, miền tài liệu và kênh Venn}
 Bảng \ref{tab:results_per_testset} ghi nhận kết quả của cấu hình \textbf{Dual-Channel Venn} trên hai bộ test \texttt{TS1-Lexical-API} và \texttt{TS2-Conceptual}, tách riêng theo từng miền tài liệu \texttt{Next.js} và \texttt{Node.js}.
 
-\begin{table}[htbp]
+\begin{table}[H]
 \centering
 \caption{Kết quả truy xuất của cấu hình Dual-Channel Venn theo từng bộ test và miền dữ liệu (\%)}
 \label{tab:results_per_testset}
@@ -236,7 +263,7 @@ Số liệu tại Bảng \ref{tab:results_per_testset} cho thấy ba đặc trư
 \subsubsection{Phân bố nhãn độ tin cậy (\texorpdfstring{$\gamma$}{gamma}) của cổng Sparse Match Gating}
 Bảng \ref{tab:confidence_eval} đối chiếu phân bố nhãn độ tin cậy $\gamma \in \{\texttt{none}, \texttt{low}, \texttt{medium}, \texttt{high}\}$ giữa các cấu hình truy xuất đơn lẻ và cấu hình kết hợp.
 
-\begin{table}[htbp]
+\begin{table}[H]
 \centering
 \caption{Phân bố nhãn độ tin cậy $\gamma$ qua cổng kiểm soát Sparse Match Gating trên 100 truy vấn}
 \label{tab:confidence_eval}
@@ -258,9 +285,10 @@ Bảng \ref{tab:confidence_eval} đối chiếu phân bố nhãn độ tin cậy
 \end{table}
 
 \subsection{Đối sánh các cấu hình và Ablation Study}
-Để tách biệt đóng góp thực tế của từng mô-đun trong framework, nghiên cứu Ablation được thực hiện trên cùng 100 ca kiểm thử qua 6 cấu hình tại Bảng \ref{tab:comparison}:
-\begin{enumerate}
-    \item \textbf{AST + Sparse FTS Only}: Chỉ xếp hạng bằng điểm từ vựng $s_{\text{sparse}}(q, c)$ ở Phương trình (\ref{eq:sparse}) với cấu hình \texttt{simple}.
+Để tách biệt đóng góp thực tế của tiền tố ngữ cảnh cha (Invariant 3) và từng mô-đun truy xuất trong framework, nghiên cứu Ablation được thực hiện trên cùng 100 ca kiểm thử qua 7 cấu hình tại Bảng \ref{tab:comparison} và biểu diễn trực quan tại Hình \ref{fig:ablation_chart}:
+\begin{enumerate}[start=0]
+    \item \textbf{AST + Verbatim FTS Only (w/o Context Prefix)}: Chỉ đánh chỉ mục từ vựng \texttt{simple} trên văn bản nguyên gốc $\text{text}^{\text{verb}}_c$ (loại bỏ tiền tố ngữ cảnh cha \texttt{[Tài liệu > Mục cha]} của Invariant 3).
+    \item \textbf{AST + Sparse FTS Only (with Context Prefix)}: Xếp hạng bằng điểm từ vựng $s_{\text{sparse}}(q, c)$ ở Phương trình (\ref{eq:sparse}) trên $\text{text}^{\text{ctx}}_c$ với cấu hình \texttt{simple}.
     \item \textbf{AST + Dense Vector Only}: Chỉ xếp hạng bằng độ tương đồng Cosine $s_{\text{dense}}(q, c)$ ở Phương trình (\ref{eq:cosine}) trên vector 512 chiều \texttt{Qwen3-Embedding-0.6B}.
     \item \textbf{AST + Hybrid RRF w/o Rerank}: Kết hợp Dense + Sparse trên $\text{text}^{\text{ctx}}_c$ (đã gắn tiền tố ngữ cảnh cha \texttt{[Tài liệu > Mục cha]}) qua công thức RRF ở Phương trình (\ref{eq:rrf}) với $k_{\text{rrf}}=60$, không dùng Cross-Encoder.
     \item \textbf{AST + Hybrid RRF + Cross-Encoder Rerank}: Bật thêm tầng xếp hạng lại bằng \texttt{mmarco-mMiniLMv2} ($L_{\max} = 256$ token, $\alpha = 1,0$) trên $P = 10$ ứng viên đầu tiên của kênh ngữ nghĩa.
@@ -268,7 +296,7 @@ Bảng \ref{tab:confidence_eval} đối chiếu phân bố nhãn độ tin cậy
     \item \textbf{Full Dual-Channel Venn (with Rerank)}: Cấu hình đầy đủ kết hợp kênh ngữ nghĩa đã qua Cross-Encoder Rerank với kênh nguyên văn regex/trigram và gom nhóm theo ngữ cảnh cha.
 \end{enumerate}
 
-\begin{table}[htbp]
+\begin{table}[H]
 \centering
 \caption{Đối sánh các cấu hình Ablation và độ trễ truy vấn trên 100 ca kiểm thử (\texttt{data/eval/ablation\_results.json})}
 \label{tab:comparison}
@@ -278,7 +306,8 @@ Bảng \ref{tab:confidence_eval} đối chiếu phân bố nhãn độ tin cậy
 \cmidrule(lr){3-4}\cmidrule(lr){5-9}\cmidrule(lr){10-10}
  & \textbf{(\%)} & \textbf{\texttt{TS1-API}} & \textbf{\texttt{TS2-Con}} & \textbf{Hit@1} & \textbf{Hit@5} & \textbf{R@5} & \textbf{NDCG@10} & \textbf{MRR@10} & \textbf{p50 / p95} \\
 \midrule
-1. AST + Sparse FTS Only & 88,0 & 77,8 & 67,9 & 60,0 & 86,0 & 86,0 & 78,6 & 72,9 & 2,8 / 5,6 \\
+0. AST + Verbatim FTS (w/o Context) & 86,0 & 76,5 & 64,2 & 58,0 & 84,0 & 84,0 & 74,3 & 70,3 & 15,7 / 47,1 \\
+1. AST + Sparse FTS Only (with Context) & 88,0 & 77,8 & 67,9 & 60,0 & 86,0 & 86,0 & 78,6 & 72,9 & 2,8 / 5,6 \\
 2. AST + Dense Vector Only & 95,0 & 70,6 & 73,1 & 59,0 & 90,0 & 91,0 & 79,6 & 71,9 & 205,3 / 222,8 \\
 3. AST + Hybrid RRF w/o Rerank & 95,0 & 82,8 & \textbf{75,2} & \textbf{68,0} & \textbf{93,0} & \textbf{93,0} & \textbf{85,0} & \textbf{79,0} & 206,5 / 223,9 \\
 4. AST + Hybrid RRF + Rerank & 95,0 & 74,6 & 66,9 & 58,0 & 89,0 & 89,5 & 79,0 & 70,7 & 584,6 / 619,9 \\
@@ -288,16 +317,62 @@ Bảng \ref{tab:confidence_eval} đối chiếu phân bố nhãn độ tin cậy
 \end{tabularx}
 \end{table}
 
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=1.82cm, y=0.044cm]
+    % Lưới ngang từ 50% đến 100%
+    \foreach \y in {50,60,70,80,90,100} {
+        \draw[gray!25, very thin] (0.35,\y-50) -- (7.45,\y-50);
+        \node[left, font=\scriptsize] at (0.35,\y-50) {\y\%};
+    }
+    \draw[thick, -Stealth] (0.35,0) -- (0.35,55) node[above, font=\scriptsize\bfseries] {Tỷ lệ (\%)};
+    \draw[thick] (0.35,0) -- (7.45,0);
+
+    % Dữ liệu 7 cấu hình: {idx / label / Found / R@5 / MRR@10 / Hit@1}
+    \foreach \i/\lbl/\fnd/\rec/\mrr/\hit in {
+        1/{(0) No-Ctx}/86.0/84.0/70.3/58.0,
+        2/{(1) Sparse}/88.0/86.0/72.9/60.0,
+        3/{(2) Dense}/95.0/91.0/71.9/59.0,
+        4/{(3) RRF}/95.0/93.0/79.0/68.0,
+        5/{(4) +Rerank}/95.0/89.5/70.7/58.0,
+        6/{(5) Venn}/97.0/92.5/78.9/68.0,
+        7/{(6) Full Venn}/97.0/92.5/76.5/64.0
+    } {
+        \fill[blue!70!black] (\i-0.27,0) rectangle (\i-0.14,\fnd-50);
+        \fill[teal!75!black] (\i-0.13,0) rectangle (\i-0.00,\rec-50);
+        \fill[orange!85!black] (\i+0.01,0) rectangle (\i+0.14,\mrr-50);
+        \fill[purple!75!black] (\i+0.15,0) rectangle (\i+0.28,\hit-50);
+        \node[below, font=\scriptsize] at (\i,0) {\lbl};
+    }
+
+    % Chú giải
+    \begin{scope}[shift={(1.45,53)}]
+        \fill[blue!70!black] (0,0) rectangle (0.22,2.2);
+        \node[right, font=\scriptsize] at (0.24,1.1) {\texttt{Found}};
+        \fill[teal!75!black] (1.15,0) rectangle (1.37,2.2);
+        \node[right, font=\scriptsize] at (1.39,1.1) {\texttt{Recall@5}};
+        \fill[orange!85!black] (2.55,0) rectangle (2.77,2.2);
+        \node[right, font=\scriptsize] at (2.79,1.1) {\texttt{MRR@10}};
+        \fill[purple!75!black] (3.95,0) rectangle (4.17,2.2);
+        \node[right, font=\scriptsize] at (4.19,1.1) {\texttt{Hit@1}};
+    \end{scope}
+\end{tikzpicture}
+\caption{Biểu đồ đối sánh 4 chỉ số chính (\texttt{Found}, \texttt{Recall@5}, \texttt{MRR@10}, \texttt{Hit@1}) qua 7 cấu hình Ablation trên 100 truy vấn}
+\label{fig:ablation_chart}
+\end{figure}
+
 Để kiểm chứng ý nghĩa thống kê của các mức chênh lệch giữa từng cặp cấu hình trong Bảng \ref{tab:comparison}, Bảng \ref{tab:mcnemar} trình bày kết quả kiểm định McNemar hai phía chính xác theo Phương trình (\ref{eq:mcnemar}).
 
-\begin{table}[htbp]
+\begin{table}[H]
 \centering
 \caption{Kiểm định McNemar hai phía chính xác giữa các cặp cấu hình Ablation ($N = 100$)}
 \label{tab:mcnemar}
-\footnotesize\setlength{\tabcolsep}{3.2pt}\begin{tabularx}{\textwidth}{>{\raggedright\arraybackslash}Xccccl}
+\scriptsize\setlength{\tabcolsep}{3pt}\begin{tabularx}{\textwidth}{lcccc>{\raggedright\arraybackslash}X}
 \toprule
 \textbf{Cặp đối sánh (Cấu hình $A$ vs. $B$)} & \textbf{Chỉ số} & \textbf{Tốt lên ($b$)} & \textbf{Kém đi ($c$)} & \textbf{$p$-value} & \textbf{Kết luận thống kê ($\alpha = 0,05$)} \\
 \midrule
+Hybrid RRF (3) vs. Verbatim w/o Context (0) & \texttt{Found / Hit@5} & 9 & 0 & \textbf{0,0039} & Có ý nghĩa thống kê cao ($p < 0,01$) \\
+Hybrid RRF (3) vs. Verbatim w/o Context (0) & \texttt{Hit@1} & 14 & 4 & \textbf{0,0309} & Có ý nghĩa thống kê ($p < 0,05$) \\
 Hybrid RRF (3) vs. Sparse FTS Only (1) & \texttt{Found / Hit@5} & 7 & 0 & \textbf{0,0156} & Có ý nghĩa thống kê ($p < 0,05$) \\
 Hybrid RRF (3) vs. Sparse FTS Only (1) & \texttt{Hit@1} & 12 & 4 & 0,0768 & Cải thiện rõ rệt ở biên $\alpha = 0,10$ \\
 Hybrid RRF (3) vs. Dense Vector Only (2) & \texttt{Hit@1} & 17 & 8 & 0,1078 & Nâng \texttt{Hit@1} từ $59,0\%$ lên $68,0\%$ (+9,0 điểm \%) \\
@@ -308,10 +383,37 @@ Dual-Channel (6) vs. Hybrid RRF (3, 4) & \texttt{Found} & 2 & 0 & 0,5000 & Cứu
 \end{tabularx}
 \end{table}
 
+\subsubsection{Kiểm chứng chu trình đa công cụ MCP và quản trị Knowledge Graph thực tế}
+Bên cạnh việc đánh giá lượt truy xuất đầu tiên qua \texttt{hybrid\_search}, để kiểm chứng năng lực phối hợp toàn bộ 6 công cụ MCP của framework cùng cơ chế quản trị Knowledge Graph ở runtime, Bảng \ref{tab:mcp_kg_trajectory} ghi nhận nhật ký thực thi một chu trình điều tra đa bước thực tế của \texttt{Coding Agent} trên bài toán liên kết cơ chế \texttt{Caching} giữa \texttt{Route Handlers} và tài liệu \texttt{Caching and Revalidating} của Next.js.
+
+\begin{table}[H]
+\centering
+\caption{Nhật ký thực nghiệm chu trình điều tra 6 công cụ MCP và quản trị Knowledge Graph có kiểm chứng trích dẫn}
+\label{tab:mcp_kg_trajectory}
+\scriptsize\setlength{\tabcolsep}{3.5pt}\begin{tabularx}{\textwidth}{c>{\raggedright\arraybackslash}p{3.0cm}>{\raggedright\arraybackslash}p{4.1cm}>{\raggedright\arraybackslash}X}
+\toprule
+\textbf{Bước} & \textbf{Công cụ MCP gọi} & \textbf{Tham số đầu vào chính} & \textbf{Kết quả thực thi trên PostgreSQL 16} \\
+\midrule
+1 & \texttt{hybrid\_\allowbreak search} & \texttt{query="Cache Components use cache"}, \texttt{pattern="use cache"} & Trả về nhóm \texttt{ProvisionGroup} có tiêu đề cha \texttt{[Route Handlers > ... > Caching]}, định vị phân đoạn đích dòng 87--144, $\gamma = \texttt{medium}$. \\
+\addlinespace[2pt]
+2 & \texttt{hierarchical\_\allowbreak navigate} \& \texttt{get\_raw} & \texttt{direction="PARENT\_\allowbreak CHAIN"} (dòng 87--144); \texttt{get\_raw(87, 144)} & Tái tạo tự động nút tổ tiên trung gian \texttt{...route\_\allowbreak handlers.\allowbreak caching} bằng deterministic UUIDv5; trích xuất 58 dòng mã nguồn gốc. \\
+\addlinespace[2pt]
+3a & \texttt{graph\_\allowbreak curate\_\allowbreak edges}\newline \textit{(Ca trích dẫn sai)} & \texttt{relation="SEE\_ALSO"}, \texttt{citation\_\allowbreak text} bị lược bỏ dấu backtick quanh \texttt{'use cache'} & Bị chặn tức thì trong transaction bởi mã lỗi \texttt{UNGROUNDED\_\allowbreak CITATION\_\allowbreak TEXT} (\texttt{code=1004}); 0 cạnh được ghi vào CSDL. \\
+\addlinespace[2pt]
+3b & \texttt{graph\_\allowbreak curate\_\allowbreak edges}\newline \textit{(Ca hợp lệ vào container)} & \texttt{target="nextjs...\allowbreak 08\_caching"}, \texttt{citation\_\allowbreak text="By default, Route Handlers..."} & Kiểm chứng regex thành công; tự động mở rộng container đích xuống 14 leaf chunks của tài liệu \texttt{08\_caching}, ghi 14 cạnh \texttt{SEE\_ALSO} và 14 bản ghi \texttt{ADDED} vào \texttt{graph\_\allowbreak edge\_\allowbreak log}. \\
+\addlinespace[2pt]
+4 & \texttt{graph\_\allowbreak traverse} & \texttt{source="...08\_\allowbreak caching.\allowbreak overview"}, \texttt{direction="BOTH"}, \texttt{max\_depth=1} & Nhờ thuộc tính \texttt{is\_symmetric=TRUE} của \texttt{SEE\_ALSO}, CTE đệ quy duyệt ngược từ \texttt{08\_\allowbreak caching.\allowbreak overview} về đúng phân đoạn \texttt{Route Handlers} nguồn kèm trích dẫn. \\
+\addlinespace[2pt]
+5 & \texttt{submit\_\allowbreak grounded\_\allowbreak answer} & \texttt{answer="... [\#1]"}, \texttt{citations: "...with\_\allowbreak cache\_\allowbreak components"} & Đối chiếu tồn tại đường dẫn \texttt{ltree} trên PostgreSQL, đính kèm \texttt{verbatim\_\allowbreak text} dòng 87--144 và phát sự kiện WebSocket lên giao diện giám sát. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
 \subsection{Thảo luận, đánh đổi kiến trúc và phân tích lỗi chi tiết}
-Từ số liệu thực nghiệm tại Bảng \ref{tab:results_per_testset}--\ref{tab:mcnemar} và kết quả đối chiếu từng ca truy vấn cụ thể trong tệp \nolinkurl{ablation_results.json}, có thể rút ra năm nhận định kỹ thuật cốt lõi:
+Từ số liệu thực nghiệm tại Bảng \ref{tab:results_per_testset}--\ref{tab:mcp_kg_trajectory} và kết quả đối chiếu từng ca truy vấn cụ thể trong tệp \nolinkurl{ablation_results.json}, có thể rút ra sáu nhận định kỹ thuật cốt lõi:
 
 \begin{itemize}
+    \item \textbf{Đóng góp thực nghiệm của tiền tố ngữ cảnh cha (Invariant 3 -- \texttt{contextualized\_text} vs. \texttt{verbatim\_text}):} Đối chiếu cấu hình \textbf{(0) Verbatim FTS w/o Context} và \textbf{(1) Sparse FTS with Context} tại Bảng \ref{tab:comparison} cho thấy việc đính kèm chuỗi tiêu đề tổ tiên \texttt{[Tài liệu > Mục cha]} vào đầu mỗi phân đoạn giúp cải thiện đồng loạt mọi độ đo: \texttt{Found} tăng từ $86,0\%$ lên $88,0\%$, \texttt{Hit@1} tăng từ $58,0\%$ lên $60,0\%$, \texttt{MRR@10} tăng từ $70,3\%$ lên $72,9\%$ (riêng trên bộ \texttt{TS2-Conceptual} tăng $+3,7$ điểm \% từ $64,2\%$ lên $67,9\%$) và \texttt{NDCG@10} tăng $+4,3$ điểm \% ($74,3\% \to 78,6\%$). Tổng cộng có 7 truy vấn thăng hạng mà không có bất kỳ truy vấn nào bị tụt hạng: điển hình là câu \texttt{e071} và \texttt{e072} (hỏi về liên kết và triển khai kiến trúc \textit{Multi-Zones}) bị bỏ sót hoàn toàn ngoài top 10 khi chỉ tìm trên \texttt{verbatim\_text} do tiểu mục con chỉ mang tiêu đề \texttt{Linking between zones}, nhưng nhảy thẳng lên hạng 1 và hạng 2 khi có tiền tố tiêu đề tài liệu cha; tương tự, các câu \texttt{e027} ($2 \to 1$), \texttt{e044} ($3 \to 2$), \texttt{e051} ($4 \to 2$) và \texttt{e073} ($4 \to 3$) đều được phân giải nhập nhằng chính xác. Khi kết hợp thêm nhánh Dense trên \texttt{contextualized\_text} ở cấu hình \textbf{(3) Hybrid RRF}, mức cải thiện so với cấu hình không ngữ cảnh (0) đạt ý nghĩa thống kê cao trên cả \texttt{Found}/\texttt{Hit@5} ($p = 0,0039$) và \texttt{Hit@1} ($p = 0,0309$).
     \item \textbf{Sự bổ trợ ngược chiều giữa Sparse FTS và Dense Vector:} Khi đứng riêng lẻ, \textbf{Sparse FTS (1)} đạt \texttt{MRR@10 = 77,8\%} trên \texttt{TS1-Lexical-API} nhờ khớp chính xác tên định danh, nhưng tụt xuống \texttt{67,9\%} trên \texttt{TS2-Conceptual} và bỏ sót tới 12/100 câu (\texttt{Found = 88,0\%}) khi câu hỏi mô tả hiện tượng bằng từ vựng khác với tài liệu hoặc khi từ điển \texttt{simple} không tách các biểu thức có dấu câu đặc thù. Ngược lại, \textbf{Dense Vector (2)} nâng tỷ lệ tìm thấy lên \texttt{95,0\%} (\texttt{Recall@10 = 95,5\%}) và đạt \texttt{MRR@10 = 73,1\%} trên \texttt{TS2-Conceptual}, nhưng chỉ đạt \texttt{MRR@10 = 70,6\%} trên \texttt{TS1}. Khi hợp nhất qua \textbf{Hybrid RRF (3)}, \texttt{Hit@1} tăng từ $60,0\%$ (Sparse) và $59,0\%$ (Dense) lên \textbf{68,0\%}, \texttt{Recall@5} đạt \textbf{93,0\%}, \texttt{MRR@10} tăng lên \textbf{79,0\%} và \texttt{NDCG@10} đạt \textbf{85,0\%}, vượt trội có ý nghĩa thống kê so với Sparse FTS trên cả \texttt{Found} và \texttt{Hit@5} ($7$ câu tốt lên so với $0$ câu kém đi, $p = 0,0156$).
     \item \textbf{Sự đánh đổi thực tế giữa bảo toàn atomic AST chunk và cửa sổ 256 token của Cross-Encoder:} Bảng \ref{tab:comparison} phơi bày một hiện tượng thực nghiệm rất đáng chú ý khi đối chiếu cấu hình \textbf{(3) Hybrid RRF w/o Rerank} và \textbf{(4) Hybrid RRF + Cross-Encoder Rerank}:
     \begin{enumerate}

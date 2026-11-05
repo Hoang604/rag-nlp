@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
 import math
@@ -206,11 +207,157 @@ def build_and_load_cases() -> list[EvalCase]:
     raw_1 = json.loads(SET1_JSON.read_text(encoding="utf-8"))
     raw_2 = json.loads(SET2_JSON.read_text(encoding="utf-8"))
     combined = [*raw_1, *raw_2]
-    cases = [EvalCase.model_validate(item) for item in combined]
+    cases: list[EvalCase] = []
+    for item in combined:
+        raw_exp = item.get("expected", [])
+        norm_exp: list[str] = []
+        for e in raw_exp:
+            if isinstance(e, dict):
+                slug = str(e.get("doc_slug") or "").strip()
+                suffix = str(e.get("path_suffix") or "").strip()
+                norm_exp.append(f"{slug}.{suffix}" if suffix else slug)
+            else:
+                norm_exp.append(str(e).strip())
+        clean_item = {
+            "id": item["id"],
+            "test_set": item["test_set"],
+            "domain": item["domain"],
+            "question": item["question"],
+            "query": item["query"],
+            "pattern": item["pattern"],
+            "is_regex": item.get("is_regex", False),
+            "case_sensitive": item.get("case_sensitive", False),
+            "doc_slugs": item.get("doc_slugs", []),
+            "path_prefix": item.get("path_prefix"),
+            "expected": norm_exp,
+            "note": item.get("note"),
+        }
+        cases.append(EvalCase.model_validate(clean_item))
     cases.sort(key=lambda c: c.id)
-    lines = [json.dumps(c.model_dump(mode="json"), ensure_ascii=False) + "\n" for c in cases]
-    RETRIEVAL_JSONL.write_text("".join(lines), encoding="utf-8")
     return cases
+
+
+async def search_sparse_verbatim_no_ctx(
+    pool: asyncpg.Pool,
+    query_text: str,
+    doc_slugs: list[str] | None,
+    path_prefix: str | None,
+    limit: int = LIMIT,
+    rrf_k: int = RRF_K,
+) -> list[SearchHitDTO]:
+    """Sparse FTS ranking computed strictly on `verbatim_text` (without ancestor context prefix)."""
+    rows = await pool.fetch(
+        """
+        WITH params AS (
+            SELECT
+                plainto_tsquery('simple'::regconfig, trim(COALESCE($1::text, ''))) AS ts_q
+        ),
+        lex AS (
+            SELECT
+                ts_q,
+                CASE
+                    WHEN ts_q IS NOT NULL AND ts_q::text != '' THEN
+                        string_to_array(replace(ts_q::text, '''', ''), ' & ')
+                    ELSE NULL
+                END AS lexemes
+            FROM params
+        ),
+        queries AS (
+            SELECT
+                ts_q,
+                CASE
+                    WHEN lexemes IS NOT NULL AND array_length(lexemes, 1) >= 2 THEN (
+                        SELECT string_agg(
+                            format('''%s'' <-> ''%s''', replace(lexemes[i], '''', ''''''), replace(lexemes[i + 1], '''', '''''')),
+                            ' | '
+                        )::tsquery
+                        FROM generate_subscripts(lexemes, 1) AS i
+                        WHERE i < array_length(lexemes, 1)
+                    )
+                    WHEN lexemes IS NOT NULL AND array_length(lexemes, 1) = 1 THEN
+                        format('''%s''', replace(lexemes[1], '''', ''''''))::tsquery
+                    ELSE NULL
+                END AS ts_any
+            FROM lex
+        ),
+        sparse_pool AS (
+            SELECT
+                c.id,
+                to_tsvector('simple'::regconfig, c.verbatim_text) AS tsv_verb,
+                COALESCE(
+                    ts_rank(to_tsvector('simple'::regconfig, c.verbatim_text), q.ts_any, 32),
+                    0.0
+                ) AS base_score,
+                q.ts_q
+            FROM chunks c
+            JOIN documents d ON c.document_id = d.id
+            CROSS JOIN queries q
+            WHERE (
+                    (q.ts_any IS NOT NULL AND to_tsvector('simple'::regconfig, c.verbatim_text) @@ q.ts_any)
+                    OR (q.ts_q IS NOT NULL AND to_tsvector('simple'::regconfig, c.verbatim_text) @@ q.ts_q)
+                  )
+              AND ($2::text[] IS NULL OR cardinality($2::text[]) = 0 OR d.doc_slug = ANY($2::text[]))
+              AND ($3::ltree IS NULL OR c.path <@ $3::ltree)
+            ORDER BY base_score DESC
+            LIMIT 240
+        ),
+        sparse_ranked AS (
+            SELECT
+                p.id,
+                ROW_NUMBER() OVER (
+                    ORDER BY (
+                        p.base_score * 4.0
+                        + CASE WHEN p.ts_q IS NOT NULL AND p.tsv_verb @@ p.ts_q THEN 2.0 ELSE 0.0 END
+                    ) DESC
+                ) AS rank_sparse
+            FROM sparse_pool p
+            LIMIT 120
+        )
+        SELECT
+            c.id AS chunk_id,
+            d.doc_slug,
+            d.title AS doc_title,
+            c.path::text AS path,
+            c.start_line,
+            c.end_line,
+            c.verbatim_text,
+            c.contextualized_text,
+            c.metadata,
+            (1.0 / ($5::int + s.rank_sparse))::DOUBLE PRECISION AS rrf_score,
+            s.rank_sparse
+        FROM sparse_ranked s
+        JOIN chunks c ON c.id = s.id
+        JOIN documents d ON c.document_id = d.id
+        ORDER BY rrf_score DESC
+        LIMIT $4
+        """,
+        query_text,
+        doc_slugs or None,
+        path_prefix,
+        limit,
+        rrf_k,
+    )
+    hits: list[SearchHitDTO] = []
+    for r in rows:
+        meta = json.loads(r["metadata"]) if isinstance(r["metadata"], str) else dict(r["metadata"])
+        hits.append(
+            SearchHitDTO(
+                chunk_id=r["chunk_id"],
+                doc_slug=str(r["doc_slug"]),
+                doc_title=str(r["doc_title"]),
+                path=str(r["path"]),
+                start_line=int(r["start_line"]),
+                end_line=int(r["end_line"]),
+                verbatim_text=str(r["verbatim_text"]),
+                contextualized_text=str(r["contextualized_text"]),
+                metadata=meta,
+                score=float(r["rrf_score"]),
+                dense_rank=999,
+                sparse_rank=int(r["rank_sparse"]),
+                dense_similarity=0.0,
+            )
+        )
+    return hits
 
 
 async def search_dense_only(
@@ -304,13 +451,76 @@ def summarize_outcomes(outcomes: list[CaseEvalOutcome]) -> dict[str, object]:
     }
 
 
-async def main() -> None:
+async def main(only_verbatim_ablation: bool = False) -> None:
     cases = build_and_load_cases()
     print(f"Loaded and wrote {len(cases)} cases to {RETRIEVAL_JSONL}")
 
     pool = await get_db_pool()
     try:
         repo = CorpusRepository(pool)
+
+        if only_verbatim_ablation and RESULTS_JSON.exists():
+            existing = json.loads(RESULTS_JSON.read_text(encoding="utf-8"))
+            configs_dict = cast(dict[str, object], existing["configs"])
+            outcomes_0: list[CaseEvalOutcome] = []
+            for case in cases:
+                slugs = case.doc_slugs or None
+                prefix = case.path_prefix
+                t0 = time.perf_counter()
+                verb_hits = await search_sparse_verbatim_no_ctx(pool, case.query, slugs, prefix, limit=LIMIT)
+                lat_0 = (time.perf_counter() - t0) * 1000.0
+                paths_0 = [h.path for h in verb_hits[:LIMIT]]
+                fmap_0: dict[str, FoundIn] = {p: "semantic_only" for p in paths_0}
+                outcomes_0.append(
+                    score_ranked_list(case, paths_0, fmap_0, lat_0, compute_search_confidence(verb_hits[:LIMIT]))
+                )
+            ts1 = [o for o in outcomes_0 if o.test_set == "TS1-Lexical-API"]
+            ts2 = [o for o in outcomes_0 if o.test_set == "TS2-Conceptual"]
+            njs = [o for o in outcomes_0 if o.domain == "nextjs"]
+            ndjs = [o for o in outcomes_0 if o.domain == "nodejs"]
+            configs_dict["0_sparse_verbatim_no_ctx"] = {
+                "overall": summarize_outcomes(outcomes_0),
+                "TS1-Lexical-API": summarize_outcomes(ts1),
+                "TS2-Conceptual": summarize_outcomes(ts2),
+                "nextjs": summarize_outcomes(njs),
+                "nodejs": summarize_outcomes(ndjs),
+                "TS1_nextjs": summarize_outcomes([o for o in ts1 if o.domain == "nextjs"]),
+                "TS1_nodejs": summarize_outcomes([o for o in ts1 if o.domain == "nodejs"]),
+                "TS2_nextjs": summarize_outcomes([o for o in ts2 if o.domain == "nextjs"]),
+                "TS2_nodejs": summarize_outcomes([o for o in ts2 if o.domain == "nodejs"]),
+                "outcomes": [asdict(o) for o in outcomes_0],
+            }
+            mcnemar_dict = cast(dict[str, object], existing["mcnemar"])
+            for target_cfg in ("1_sparse_only", "4_hybrid_rrf_no_rerank"):
+                target_raw = cast(
+                    list[dict[str, object]],
+                    cast(dict[str, object], configs_dict[target_cfg])["outcomes"],
+                )
+                f_better = sum(1 for a, b in zip(target_raw, outcomes_0, strict=True) if bool(a["found"]) and not b.found)
+                f_worse = sum(1 for a, b in zip(target_raw, outcomes_0, strict=True) if not bool(a["found"]) and b.found)
+                h1_better = sum(1 for a, b in zip(target_raw, outcomes_0, strict=True) if bool(a["hit_1"]) and not b.hit_1)
+                h1_worse = sum(1 for a, b in zip(target_raw, outcomes_0, strict=True) if not bool(a["hit_1"]) and b.hit_1)
+                h5_better = sum(1 for a, b in zip(target_raw, outcomes_0, strict=True) if bool(a["hit_5"]) and not b.hit_5)
+                h5_worse = sum(1 for a, b in zip(target_raw, outcomes_0, strict=True) if not bool(a["hit_5"]) and b.hit_5)
+                mcnemar_dict[f"{target_cfg}_vs_0_sparse_verbatim_no_ctx"] = {
+                    "found": {"better": f_better, "worse": f_worse, "p": exact_mcnemar_p(f_better, f_worse)},
+                    "hit_1": {"better": h1_better, "worse": h1_worse, "p": exact_mcnemar_p(h1_better, h1_worse)},
+                    "hit_5": {"better": h5_better, "worse": h5_worse, "p": exact_mcnemar_p(h5_better, h5_worse)},
+                }
+            RESULTS_JSON.write_text(json.dumps(existing, indent=2, ensure_ascii=False), encoding="utf-8")
+            ov = cast(dict[str, object], cast(dict[str, object], configs_dict["0_sparse_verbatim_no_ctx"])["overall"])
+            ts1_s = cast(dict[str, object], cast(dict[str, object], configs_dict["0_sparse_verbatim_no_ctx"])["TS1-Lexical-API"])
+            ts2_s = cast(dict[str, object], cast(dict[str, object], configs_dict["0_sparse_verbatim_no_ctx"])["TS2-Conceptual"])
+            print(
+                f"0_sparse_verbatim_no_ctx | Found={ov['found_pct']:5.1f}% | H@1={ov['hit_1_pct']:5.1f}% | "
+                f"H@5={ov['hit_5_pct']:5.1f}% | R@5={ov['recall_5_pct']:5.1f}% | R@10={ov['recall_10_pct']:5.1f}% | "
+                f"MRR@10={ov['mrr_10_pct']:5.1f}% | NDCG@10={ov['ndcg_10_pct']:5.1f}% | "
+                f"TS1_MRR={ts1_s['mrr_10_pct']:5.1f}% | TS2_MRR={ts2_s['mrr_10_pct']:5.1f}% | "
+                f"p50={ov['latency_p50_ms']:5.1f}ms p95={ov['latency_p95_ms']:5.1f}ms"
+            )
+            print("McNemar 1_sparse_only vs 0_sparse_verbatim_no_ctx:", mcnemar_dict["1_sparse_only_vs_0_sparse_verbatim_no_ctx"])
+            return
+
         embedder = SentenceTransformerQueryEmbedder()
         reranker = CrossEncoderReranker(max_cache_size=0)  # Disable cache for honest latency measurement
         _ = await embedder.embed_query("warmup query")
@@ -323,6 +533,7 @@ async def main() -> None:
         )
 
         configs_outcomes: dict[str, list[CaseEvalOutcome]] = {
+            "0_sparse_verbatim_no_ctx": [],
             "1_sparse_only": [],
             "2_dense_only": [],
             "4_hybrid_rrf_no_rerank": [],
@@ -334,6 +545,16 @@ async def main() -> None:
         for idx, case in enumerate(cases, start=1):
             slugs = case.doc_slugs or None
             prefix = case.path_prefix
+
+            # 0. Sparse FTS on Verbatim Text Only (w/o Context Prefix)
+            t0 = time.perf_counter()
+            verb_hits = await search_sparse_verbatim_no_ctx(pool, case.query, slugs, prefix, limit=LIMIT)
+            lat_0 = (time.perf_counter() - t0) * 1000.0
+            paths_0 = [h.path for h in verb_hits[:LIMIT]]
+            fmap_0_full: dict[str, FoundIn] = {p: "semantic_only" for p in paths_0}
+            configs_outcomes["0_sparse_verbatim_no_ctx"].append(
+                score_ranked_list(case, paths_0, fmap_0_full, lat_0, compute_search_confidence(verb_hits[:LIMIT]))
+            )
 
             # 1. Sparse FTS Only
             t0 = time.perf_counter()
@@ -464,6 +685,8 @@ async def main() -> None:
 
         # McNemar exact tests between pairs of configurations
         pairs = [
+            ("1_sparse_only", "0_sparse_verbatim_no_ctx"),
+            ("4_hybrid_rrf_no_rerank", "0_sparse_verbatim_no_ctx"),
             ("1_sparse_only", "2_dense_only"),
             ("4_hybrid_rrf_no_rerank", "1_sparse_only"),
             ("4_hybrid_rrf_no_rerank", "2_dense_only"),
@@ -510,4 +733,11 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--only-verbatim-ablation",
+        action="store_true",
+        help="Compute only 0_sparse_verbatim_no_ctx and update ablation_results.json in place.",
+    )
+    args = parser.parse_args()
+    asyncio.run(main(only_verbatim_ablation=args.only_verbatim_ablation))

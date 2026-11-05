@@ -8,7 +8,7 @@ Chương này được chia thành hai phần tách biệt: \textbf{Phần A t�
 % ----------------------------------------------------------------------------
 % PHẦN A: KHUNG HỆ THỐNG RAG ĐỘC LẬP MIỀN DỮ LIỆU
 % ----------------------------------------------------------------------------
-\subsection{Phần A.1 -- Kiến trúc tổng thể và Parser interface của framework}
+\subsection{Quy trình tổng thể (Workflow) và Parser interface của framework (Phần A.1)}
 Kiến trúc vận hành tổng thể của hệ thống được biểu diễn tại Hình \ref{fig:workflow}, phân tách rõ ranh giới giữa \textbf{vùng lắp ghép \texttt{Parser} theo 5 output invariants} từ bước 1 đến bước 3 và \textbf{lõi storage, hybrid retrieval, Knowledge Graph cố định của framework} từ bước 4 đến bước 8.
 
 \begin{figure}[H]
@@ -60,7 +60,7 @@ Kiến trúc vận hành tổng thể của hệ thống được biểu diễn 
     \item \textbf{Kiểm tra tự động 5 invariants trước khi ghi database:} Trước khi cho phép bước 4 thực hiện batch encoding, framework kiểm tra mọi \texttt{chunk} và graph edge do \texttt{Parser} trả về: tính hợp lệ và tính duy nhất của đường dẫn $\text{path}_i \in \mathcal{T}_{\text{ltree}}$, bất đẳng thức dòng $1 \le s_i \le e_i \le |d_m|$, khuôn dạng tiền tố $\text{text}^{\text{ctx}}_i = \texttt{"[}\text{context}_i\texttt{]\textbackslash n"} \circ \text{text}^{\text{verb}}_i$, mảng \texttt{ancestor\_titles} trong metadata và citation grounding của \texttt{citation\_text} trong \texttt{chunk} nguồn.
 \end{itemize}
 
-\subsection{Phần A.2 -- Kiến trúc storage, retrieval và Knowledge Graph của framework}
+\subsection{Mô hình đề xuất: Kiến trúc lưu trữ, truy xuất và Knowledge Graph (Phần A.2)}
 
 \subsubsection{Các mô-đun xử lý trung tâm và sự đánh đổi kỹ thuật}
 Sau khi dữ liệu đi qua bước kiểm tra 5 invariants, toàn bộ quá trình storage, retrieval và navigation được thực thi bởi 4 mô-đun cố định của framework:
@@ -79,7 +79,7 @@ Sau khi dữ liệu đi qua bước kiểm tra 5 invariants, toàn bộ quá tr�
     \item \textbf{Tree Navigation trên \texttt{ltree}, Knowledge Graph và Grounded Answer Verification qua 6 MCP tools [14]:}
     \begin{itemize}
         \item \textit{Tree navigation và tự động tái tạo virtual parent node}: Hỗ trợ 4 hướng duyệt dựa trên toán tử \texttt{ltree} gồm \texttt{CHILDREN} (\texttt{c.path <@ anchor} và \texttt{nlevel(c.path) = nlevel(anchor) + 1}), \texttt{SUBTREE} (\texttt{c.path <@ anchor}), \texttt{PARENT\_CHAIN} (\texttt{c.path @> anchor}) và \texttt{SIBLINGS}. Khi một mục cha trong tài liệu chỉ có dòng tiêu đề mà không có đoạn văn thân bài riêng nên không tạo \texttt{chunk} vật lý trong bảng \texttt{chunks}, truy vấn \texttt{PARENT\_CHAIN} tự động tái tạo virtual parent node từ mảng \texttt{ancestor\_titles} lưu trong metadata của nút con với deterministic UUIDv5, đảm bảo cây điều hướng không bị đứt quãng.
-        \item \textit{Duyệt, curate Knowledge Graph và xác thực trích dẫn câu trả lời}: Hỗ trợ 9 loại quan hệ ngữ nghĩa, trong đó \texttt{CONTRADICTS} và \texttt{SEE\_ALSO} là hai quan hệ đối xứng được recursive CTE \texttt{WITH RECURSIVE} tự động duyệt hai chiều kèm cycle detection. Khi \texttt{Agent} gọi công cụ thêm hoặc xóa cạnh trỏ tới một container node, framework tự động mở rộng đích xuống toàn bộ các leaf nodes ($\texttt{c.path <@ target\_path}$), kiểm tra citation grounding của chuỗi \texttt{citation\_text} trong \texttt{chunk} nguồn và ghi vào bảng append-only audit log trong một atomic transaction. Khi kết thúc điều tra, công cụ \texttt{submit\_grounded\_answer} kiểm tra từng trích dẫn \texttt{(path, start\_line, end\_line)} trực tiếp trên PostgreSQL trước khi chấp nhận câu trả lời của \texttt{Agent}.
+        \item \textit{Duyệt, curate Knowledge Graph và xác thực trích dẫn câu trả lời}: Danh mục \texttt{relation\_types} chuẩn hóa 9 mã quan hệ ngữ nghĩa chia thành hai nhóm: \textbf{7 quan hệ có hướng} (\texttt{is\_symmetric = FALSE}) gồm \texttt{REFERENCES} (tham chiếu thông tin trung lập), \texttt{SUPPORTS} (cung cấp dữ liệu/số liệu củng cố nút đích), \texttt{DEFINES} (định nghĩa thuật ngữ hoặc thực thể dùng ở nút đích), \texttt{EXTENDS} (mở rộng, phát triển chi tiết từ nút đích), \texttt{EXEMPLIFIES} (cung cấp ví dụ hoặc ca minh họa thực tế), \texttt{DEPENDS\_ON} (phụ thuộc tiên quyết logic hoặc kỹ thuật) và \texttt{SUPERSEDES} (thay thế nội dung đã lỗi thời); cùng \textbf{2 quan hệ đối xứng} (\texttt{is\_symmetric = TRUE}) gồm \texttt{CONTRADICTS} (mâu thuẫn/xung đột thông tin) và \texttt{SEE\_ALSO} (liên kết tham khảo chéo), được mệnh đề đệ quy \texttt{WITH RECURSIVE} tự động duyệt hai chiều kèm cycle detection. Khi \texttt{Agent} gọi công cụ thêm hoặc xóa cạnh trỏ tới một container node, framework tự động mở rộng đích xuống toàn bộ các leaf nodes ($\texttt{c.path <@ target\_path}$), kiểm tra citation grounding của chuỗi \texttt{citation\_text} trong \texttt{chunk} nguồn và ghi vào bảng append-only audit log trong một atomic transaction. Khi kết thúc điều tra, công cụ \texttt{submit\_grounded\_answer} kiểm tra từng trích dẫn \texttt{(path, start\_line, end\_line)} trực tiếp trên PostgreSQL trước khi chấp nhận câu trả lời của \texttt{Agent}.
     \end{itemize}
 \end{enumerate}
 
@@ -98,7 +98,7 @@ Framework lưu trữ toàn bộ dữ liệu trong database schema gồm 5 bảng
 \addlinespace[3pt]
 \texttt{chunks} & \texttt{id} (UUID PK), \texttt{document\_id} (FK), \texttt{path} (\texttt{LTREE} UNIQUE), \texttt{verbatim\_text}, \texttt{contextualized\_text}, \texttt{start\_line}, \texttt{end\_line}, \texttt{embedding} (\texttt{VECTOR(512)}), \texttt{tsv\_content} (\texttt{TSVECTOR}) & HNSW Cosine \texttt{m=16, ef\_construction=64} trên \texttt{embedding}; GiST \& B-Tree trên \texttt{path}; GIN trên \texttt{tsv\_content}; 2 GIN index \texttt{gin\_trgm\_ops} trên \texttt{verbatim\_text} và \texttt{contextualized\_text}; Trigger tự động cập nhật \texttt{tsv\_content} \\
 \addlinespace[3pt]
-\texttt{relation\_types} & \texttt{code} (PK), \texttt{description}, \texttt{is\_symmetric} (BOOLEAN) & Khởi tạo sẵn 9 loại quan hệ; \texttt{CONTRADICTS} và \texttt{SEE\_ALSO} có \texttt{is\_symmetric = TRUE} \\
+\texttt{relation\_types} & \texttt{code} (PK), \texttt{description}, \texttt{is\_symmetric} (BOOLEAN) & Khởi tạo sẵn 9 mã quan hệ: 7 có hướng (\texttt{REFERENCES}, \texttt{SUPPORTS}, \texttt{DEFINES}, \texttt{EXTENDS}, \texttt{EXEMPLIFIES}, \texttt{DEPENDS\_ON}, \texttt{SUPERSEDES}) và 2 đối xứng (\texttt{CONTRADICTS}, \texttt{SEE\_ALSO}) \\
 \addlinespace[3pt]
 \texttt{graph\_edges} & \texttt{id} (PK), \texttt{source\_chunk\_id} (FK), \texttt{target\_chunk\_id} (FK), \texttt{relation\_type} (FK), \texttt{citation\_text} (NOT NULL), \texttt{rationale} & Ràng buộc \texttt{CHECK (target != source)} chống tự nối, \texttt{UNIQUE (source, target, relation)}; B-Tree trên \texttt{source}, \texttt{target}, \texttt{relation} \\
 \addlinespace[3pt]
@@ -109,7 +109,7 @@ Framework lưu trữ toàn bộ dữ liệu trong database schema gồm 5 bảng
 
 \noindent\textbf{Phân định phần kế thừa và tự phát triển:} Hệ thống kế thừa trọng số huấn luyện sẵn của mô hình \texttt{Qwen3-\allowbreak Embedding-\allowbreak 0.6B} [4] và \texttt{mmarco-\allowbreak mMiniLMv2-\allowbreak L12-\allowbreak H384-\allowbreak v1} [8], công thức RRF [6], nguyên lý context prefixing [12], thư viện \texttt{markdown-it-py} và các tiện ích \texttt{pgvector}, \texttt{ltree}, \texttt{pg\_trgm} của PostgreSQL. Các thành phần do nhóm trực tiếp thiết kế và cài đặt gồm: \texttt{Parser interface} 5 invariants, ingestion pipeline có differential vector cache, database schema 5 bảng cùng các stored procedures cho hybrid retrieval, verbatim matching và recursive graph traversal, thuật toán Venn partitioning kèm reading order grouping và cổng \texttt{Sparse Match Gating}, dịch vụ citation grounding cho Knowledge Graph, 6-tool MCP server (hỗ trợ cả \texttt{stdio} và Warm Streamable HTTP \texttt{POST /api/mcp} chia sẻ GPU engine), giao diện Web Observatory Dashboard và hai bộ \texttt{Parser} mẫu cho Next.js, Node.js.
 
-\subsection{Phần A.3 -- Luồng vận hành dữ liệu trong framework}
+\subsection{Luồng liên kết dữ liệu giữa các thành phần (Phần A.3)}
 
 \subsubsection{Ingestion pipeline qua Parser và differential vector cache}
 Khi nạp một tài liệu $d_m$ vào framework:
@@ -146,7 +146,7 @@ Khi xử lý một query $(q, p)$ với giới hạn kết quả $K = 10$ và re
 \end{tabularx}
 \end{table}
 
-\subsection{Phần A.4 -- Cơ sở toán học của các mô-đun lõi}
+\subsection{Cơ sở lý thuyết của các mô-đun lõi (Phần A.4)}
 
 \subsubsection{Biểu diễn Dense Bi-Encoder với Matryoshka Representation Learning}
 Query $q$ và văn bản ngữ cảnh $\text{text}^{\text{ctx}}_c$ của \texttt{chunk} $c$ được ánh xạ qua mạng Transformer $f_{\theta}$ [4] thành hidden vector $\tilde{\mathbf{q}}, \tilde{\mathbf{v}}_c \in \mathbb{R}^{D_{\text{full}}}$. Nhờ hàm loss đa chiều lồng nhau của Matryoshka Representation Learning [5], embedding vector $d = 512$ chiều được trích xuất bằng phép cắt chiều và chuẩn hóa $L_2$:
@@ -210,7 +210,7 @@ với $\tau_{\text{low}} = 0.70$, $\tau_{\text{high}} = 0.82$ và $\tau_{\text{v
 % ----------------------------------------------------------------------------
 % PHẦN B: HAI BỘ PARSER DEMO LẮP GHÉP VÀO KHUNG HỆ THỐNG
 % ----------------------------------------------------------------------------
-\subsection{Phần B -- Hai bộ Parser thử nghiệm lắp vào framework: Next.js và Node.js}
+\subsection{Tiền xử lý và phân rã AST trên hai bộ Parser thử nghiệm: Next.js và Node.js (Phần B)}
 Để minh họa cách lắp ghép các bộ \texttt{Parser} miền cụ thể vào \texttt{Parser interface} 5 invariants của Phần A, hai bộ \texttt{Parser} độc lập được xây dựng cho hai kho tài liệu kỹ thuật có cấu trúc đánh dấu khác biệt nhau là \textbf{Next.js MDX} và \textbf{Node.js Markdown}.
 
 \subsubsection{Bộ Parser demo 1: Phân rã tài liệu Next.js MDX}
@@ -251,3 +251,6 @@ Bộ \texttt{Parser} của Node.js nhận diện tài liệu qua prefix \texttt{
     \item \textit{Phân biệt parameter subheadings nội bộ với standalone sub-APIs}: Khi đang đứng ở một leaf node biểu diễn hàm, phương thức hoặc sự kiện, nếu gặp một tiêu đề con cấp thấp hơn như H4/H5 dưới H3, thuật toán trích xuất tập tên tham số $\mathcal{P}_{\text{parent}}$ bên trong cặp ngoặc đơn của chữ ký hàm cha. Nếu tiêu đề con chỉ mô tả một tham số hoặc thuộc tính con của tham số thuộc $\mathcal{P}_{\text{parent}}$ — ví dụ tiêu đề \texttt{`options.detached`} nằm dưới \texttt{child\_process.spawn(command[, args][, options])} có prefix \texttt{options} $\in \mathcal{P}_{\text{parent}}$ — hoặc là mục ghi chú/ví dụ nội bộ, tiêu đề đó được giữ nguyên bên trong phần thân của \texttt{chunk} hàm cha. Ngược lại, nếu tiêu đề con là một standalone sub-API như \texttt{`util.inspect.custom`} dưới \texttt{util.inspect(object[, options])} hay các mục bắt đầu bằng \texttt{Class:}, \texttt{Event:}, \texttt{Static method:}, \texttt{ERR\_*}, \texttt{Parser} tách nó thành một nút con riêng trên cây \texttt{ltree}.
     \item \textit{Cắt tỉa intermediate nodes chỉ chứa metadata \& lan truyền chỉ số Stability}: Phép post-order traversal trên cây AST lan truyền chỉ số \texttt{Stability} từ mục cha xuống các mục con chưa có nhãn riêng, đồng thời loại bỏ các khối văn bản ở intermediate node chỉ chứa dòng thông báo \texttt{Stability} hoặc \texttt{Added in} nhằm tránh sinh ra các \texttt{chunk} rỗng không mang nội dung giải thích.
 \end{enumerate}
+
+\subsubsection{Phân tách liên kết tĩnh lúc Ingestion và Curation Knowledge Graph ở Runtime}
+Trong thiết kế của hai bộ \texttt{Parser} mẫu, các liên kết tham chiếu mức tài liệu (như trường \texttt{related.\allowbreak links} trong YAML frontmatter của Next.js) được trích xuất vào trường \texttt{metadata.\allowbreak related\_\allowbreak links} của bảng \texttt{documents}, trong khi tập cạnh mức phân đoạn $\mathcal{E}$ ở pha nạp tĩnh được khởi tạo rỗng ($\texttt{edges} = \emptyset$). Thiết kế này tránh việc dùng biểu thức heuristic tĩnh sinh hàng loạt cạnh suy đoán thiếu ngữ cảnh giữa các mục con; thay vào đó, toàn bộ các cạnh ngữ nghĩa mức \texttt{chunk} thuộc 9 mã quan hệ chuẩn được trao quyền cho \texttt{Coding Agent} xác lập và kiểm chứng động ở runtime qua công cụ \texttt{graph\_\allowbreak curate\_\allowbreak edges} dưới ràng buộc đối sánh nguyên văn \texttt{citation\_\allowbreak text} tại Phương trình (\ref{eq:citation_grounding}).
