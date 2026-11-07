@@ -3,29 +3,31 @@
 % ============================================================================
 \section{THỰC NGHIỆM}
 
-\subsection{Dữ liệu thực nghiệm từ hai bộ Parser mẫu}
-Để kiểm định RAG framework sau khi lắp hai bộ \texttt{Parser} mẫu ở Mục IV.5, thực nghiệm được tiến hành trên toàn bộ hai kho tài liệu kỹ thuật chính thức: \textbf{Next.js Documentation} ở định dạng \texttt{.mdx}, \texttt{.md} và \textbf{Node.js Official API Documentation} ở định dạng \texttt{.md}. Thống kê quy mô và phân phối cấu trúc của 167 tài liệu gồm 162.757 dòng raw text, sinh ra 5.633 \texttt{chunk} sau khi chạy qua hai bộ \texttt{Parser} được trình bày tại Bảng \ref{tab:corpus_stats} và Bảng \ref{tab:chunk_dist}.
+\subsection{Dữ liệu thực nghiệm từ ba bộ Parser mẫu}
+Để kiểm định RAG framework sau khi lắp ba bộ \texttt{Parser} mẫu ở Mục IV.5, thực nghiệm được tiến hành trên hai kho tài liệu kỹ thuật chính thức (\textbf{Next.js Documentation} ở định dạng \texttt{.mdx}, \texttt{.md}; \textbf{Node.js Official API Documentation} ở định dạng \texttt{.md}) và kho \textbf{Văn bản quy phạm pháp luật về Kinh doanh bảo hiểm Việt Nam} (Luật số \texttt{08/2022/QH15}, Nghị định số \texttt{46/2023/NĐ-CP} và Thông tư số \texttt{67/2023/TT-BTC}). Thống kê quy mô và phân phối cấu trúc của 170 tài liệu gồm 171.183 dòng raw text, sinh ra 5.975 \texttt{chunk} sau khi chạy qua ba bộ \texttt{Parser} được trình bày tại Bảng \ref{tab:corpus_stats} và Bảng \ref{tab:chunk_dist}.
 
 \begin{table}[H]
 \centering
-\caption{Thống kê kho ngữ liệu thực nghiệm sau khi indexing qua hai bộ \texttt{Parser} Next.js và Node.js}
+\caption{Thống kê kho ngữ liệu thực nghiệm sau khi indexing qua ba bộ \texttt{Parser} Next.js, Node.js và Pháp luật Bảo hiểm}
 \label{tab:corpus_stats}
-\footnotesize\setlength{\tabcolsep}{3.5pt}\begin{tabularx}{\textwidth}{p{1.95cm}crrrrr>{\raggedright\arraybackslash}X}
+\footnotesize\setlength{\tabcolsep}{3.5pt}\begin{tabularx}{\textwidth}{p{2.15cm}crrrrr>{\raggedright\arraybackslash}X}
 \toprule
-\textbf{Miền tài liệu} & \textbf{Định dạng} & \textbf{Tài liệu} & \textbf{Total Lines} & \textbf{Chunks} & \textbf{With Code} & \textbf{With Table} & \textbf{Scope \& Stability Distribution} \\
+\textbf{Miền tài liệu} & \textbf{Định dạng} & \textbf{Tài liệu} & \textbf{Total Lines} & \textbf{Chunks} & \textbf{With Code} & \textbf{With Table} & \textbf{Scope, Stability \& Statutory Structure} \\
 \midrule
 Next.js Docs & \texttt{.mdx, .md} & 101 & 39.009 & 1.239 & 671 (54,16\%) & 106 (8,56\%) & Shared: 1.119; App Router: 95; Pages Router: 25 \\
 \addlinespace[2pt]
 Node.js API & \texttt{.md} & 66 & 123.748 & 4.394 & 1.436 (32,68\%) & 685 (15,59\%) & Stability 2: 2.974; Stability 1.x: 389; Stability 0: 161; Stability 3: 33; Khác: 837 \\
+\addlinespace[2pt]
+Pháp luật Bảo hiểm & \texttt{.md} & 3 & 8.426 & 342 & 0 (0,00\%) & 0 (0,00\%) & 22 Chương, 38 Mục, 3 Tiểu mục, 342 Điều (1.316 Khoản, 1.452 Điểm) \\
 \midrule
-\textbf{Tổng cộng} & -- & \textbf{167} & \textbf{162.757} & \textbf{5.633} & \textbf{2.107 (37,40\%)} & \textbf{791 (14,04\%)} & Chuẩn hóa \texttt{ltree} \& bảo toàn dòng 1:1 \\
+\textbf{Tổng cộng} & -- & \textbf{170} & \textbf{171.183} & \textbf{5.975} & \textbf{2.107 (35,26\%)} & \textbf{791 (13,24\%)} & Chuẩn hóa \texttt{ltree} \& bảo toàn dòng 1:1 trên cả 3 miền \\
 \bottomrule
 \end{tabularx}
 \end{table}
 
 \begin{table}[H]
 \centering
-\caption{Phân phối độ dài ký tự, số dòng và độ sâu cây phân cấp \texttt{ltree} của 5.633 chunk}
+\caption{Phân phối độ dài ký tự, số dòng và độ sâu cây phân cấp \texttt{ltree} của 5.975 chunk trên 3 miền}
 \label{tab:chunk_dist}
 \footnotesize\setlength{\tabcolsep}{4pt}\begin{tabularx}{\textwidth}{>{\raggedright\arraybackslash}Xrrrrrrrc}
 \toprule
@@ -35,6 +37,7 @@ Node.js API & \texttt{.md} & 66 & 123.748 & 4.394 & 1.436 (32,68\%) & 685 (15,59
 \midrule
 Next.js: 1.239 chunks & 60 & 890 & 1.185,6 & 3.112 & 8.787 & 18 & 29,5 / 325 & 3 / 5 / 4,80 / 7 \\
 Node.js: 4.394 chunks & 40 & 356 & 729,7 & 2.518 & 15.726 & 16 & 26,3 / 637 & 2 / 4 / 4,08 / 6 \\
+Bảo hiểm: 342 chunks & 147 & 1.379 & 1.905,5 & 5.281 & 12.335 & 15 & 23,2 / 721 & 4 / 5 / 4,81 / 6 \\
 \bottomrule
 \end{tabularx}
 \end{table}

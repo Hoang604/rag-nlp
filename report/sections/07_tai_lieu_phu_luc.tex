@@ -44,22 +44,21 @@
         \item \texttt{submit\_grounded\_answer(answer, \allowbreak citations, \allowbreak abstained)}: Xác thực câu trả lời của \texttt{Agent} bằng cách kiểm tra từng trích dẫn \texttt{(path, start\_line, end\_line)} trực tiếp trên PostgreSQL, trích xuất văn bản nguyên gốc và từ chối ngay lập tức nếu đường dẫn \texttt{ltree} không tồn tại trong kho ngữ liệu.
     \end{enumerate}
     \endgroup
-    \item \textbf{Giao diện Corpus \& Graph Observatory Dashboard (\texttt{uv run rag-eval ui}):} Cung cấp cây thư mục tài liệu và \texttt{ltree} trực quan, chế độ xem đối chiếu raw text theo dòng, bản đồ Knowledge Graph 2D hiển thị in-degree/out-degree của từng node, giao diện thử nghiệm Venn retrieval và không gian \textbf{Hỏi đáp có kiểm chứng trích dẫn (Grounded Agent Q\&A)} hiển thị trực tiếp tiến trình gọi công cụ MCP theo thời gian thực qua WebSocket (\texttt{/api/qa/ws}) cùng thẻ đối chiếu văn bản nguyên gốc cho từng dấu trích dẫn \texttt{[\#k]} (Hình \ref{fig:ui_dashboard}).
+    \item \textbf{Giao diện Corpus \& Graph Observatory Dashboard (\texttt{uv run rag-eval ui}):} Cung cấp không gian \textbf{Hỏi đáp có kiểm chứng trích dẫn (Grounded Agent Q\&A)} với giao diện hội thoại tối giản hỗ trợ đa mô hình CLI Agent (Antigravity Gemini 3.8 Flash, Gemini 4 Argon Medium, Claude Code), hiển thị trực tiếp tiến trình gọi công cụ MCP theo thời gian thực qua WebSocket (\texttt{/api/qa/ws}), kết xuất câu trả lời định dạng GFM Markdown kèm thẻ đối chiếu văn bản nguyên gốc cho từng dấu trích dẫn \texttt{[\#k]}; cùng không gian \textbf{Cấu trúc \& Đồ thị (Structure \& Graph)} dạng \textbf{Sơ đồ tư duy tương tác (Interactive Mind Map)} phân nhánh từ Văn bản $\to$ Chương $\to$ Mục $\to$ Điều với nhãn tiếng Việt chuẩn hóa từ \texttt{ancestor\_titles} và khung đọc điều khoản trực tiếp (Hình \ref{fig:ui_dashboard}).
     \item \textbf{Mẫu các ca kiểm thử tiêu biểu từ bộ dữ liệu \nolinkurl{data/eval/retrieval.jsonl}:} Bảng \ref{tab:sample_queries} trích dẫn 6 ca kiểm thử đại diện cho hai bộ \texttt{TS1-Lexical-API} và \texttt{TS2-Conceptual} trên hai miền Next.js và Node.js, minh họa rõ vai trò của từng phân vùng Venn (\texttt{both}, \texttt{semantic\_only}, \texttt{verbatim\_only}).
 \end{itemize}
 
 \begin{figure}[H]
 \centering
-\begin{minipage}[t]{0.485\textwidth}
-    \centering
-    \includegraphics[width=\textwidth]{figures/ui_grounded_qa.png}
-    \par\vspace{2pt}{\footnotesize (a) Không gian Hỏi đáp có kiểm chứng trích dẫn (\texttt{Grounded Q\&A}) và luồng sự kiện MCP}
-\end{minipage}\hfill
-\begin{minipage}[t]{0.485\textwidth}
-    \centering
-    \includegraphics[width=\textwidth]{figures/ui_explorer_graph.png}
-    \par\vspace{2pt}{\footnotesize (b) Không gian khám phá cây phân cấp \texttt{ltree}, đối chiếu dòng nguyên bản 1:1 và Knowledge Graph}
-\end{minipage}
+\setlength{\fboxsep}{0pt}
+\setlength{\fboxrule}{0.4pt}
+\fbox{\includegraphics[width=0.96\textwidth]{figures/ui_grounded_qa.png}}
+\par\vspace{3pt}{\footnotesize (a) Không gian Hỏi đáp có kiểm chứng trích dẫn (\texttt{Grounded Q\&A}) với kết xuất Markdown và tiến trình MCP}
+
+\vspace{10pt}
+
+\fbox{\includegraphics[width=0.96\textwidth]{figures/ui_explorer_graph.png}}
+\par\vspace{3pt}{\footnotesize (b) Sơ đồ tư duy tương tác (\texttt{Interactive Mind Map}) khám phá cấu trúc phân cấp và khung đọc điều khoản}
 \caption{Giao diện thực tế của hệ thống Corpus \& Graph Observatory Dashboard (\texttt{uv run rag-eval ui})}
 \label{fig:ui_dashboard}
 \end{figure}
