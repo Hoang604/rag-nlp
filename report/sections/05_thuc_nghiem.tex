@@ -55,19 +55,19 @@ Số liệu tại Bảng \ref{tab:chunk_dist} phản ánh đặc trưng cấu tr
 \begin{figure}[H]
 \centering
 \begin{tikzpicture}[
-    node distance=0.45cm and 0.5cm,
-    phase/.style={rectangle, rounded corners=3pt, draw=blue!75!black, thick, fill=blue!6, text width=4.0cm, align=center, minimum height=1.1cm, font=\footnotesize},
-    guard/.style={rectangle, rounded corners=2pt, draw=red!70!black, dashed, fill=red!4, text width=4.0cm, align=center, minimum height=0.65cm, font=\scriptsize},
-    outnode/.style={rectangle, rounded corners=3pt, draw=green!55!black, thick, fill=green!8, text width=4.0cm, align=center, minimum height=1.1cm, font=\footnotesize},
+    node distance=0.55cm and 0.6cm,
+    phase/.style={rectangle, rounded corners=3pt, draw=blue!75!black, thick, fill=blue!6, text width=4.2cm, align=center, minimum height=1.55cm, font=\footnotesize},
+    guard/.style={rectangle, rounded corners=2pt, draw=red!70!black, dashed, fill=red!4, text width=4.2cm, align=center, minimum height=1.0cm, font=\scriptsize},
+    outnode/.style={rectangle, rounded corners=3pt, draw=green!55!black, thick, fill=green!8, text width=4.2cm, align=center, minimum height=1.55cm, font=\footnotesize},
     arrow/.style={-Stealth, thick, draw=black!80}
 ]
-    \node[phase] (p1) {\textbf{Pha 1: Sinh câu hỏi tự nhiên}\\Subagent \#1 (\texttt{TS1}: 50 câu)\\Subagent \#2 (\texttt{TS2}: 50 câu)};
+    \node[phase] (p1) {\textbf{Pha 1: Sinh câu hỏi}\\Subagent \#1 (\texttt{TS1}: 50 câu)\\Subagent \#2 (\texttt{TS2}: 50 câu)};
     \node[phase, right=of p1] (p2) {\textbf{Pha 2: Lập lời gọi công cụ}\\Subagent \#3 \& \#4 chọn\\\texttt{query}, \texttt{pattern}, \texttt{doc\_slugs}};
-    \node[outnode, right=of p2] (p3) {\textbf{Pha 3: Gán nhãn \texttt{ltree} đích}\\Subagent \#5 \& \#6 đối chiếu\\trực tiếp bảng \texttt{chunks}};
+    \node[outnode, right=of p2] (p3) {\textbf{Pha 3: Gán nhãn \texttt{ltree}}\\Subagent \#5 \& \#6 đối chiếu\\trực tiếp bảng \texttt{chunks}};
 
-    \node[guard, below=0.35cm of p1] (g1) {Chỉ đọc đề cương tiêu đề\\\textit{Cấm đọc mã nguồn \& CSDL}};
-    \node[guard, below=0.35cm of p2] (g2) {Chỉ đọc câu hỏi \& đặc tả MCP\\\textit{Cấm đọc nội dung chunk}};
-    \node[guard, draw=green!55!black, fill=green!4, below=0.35cm of p3] (g3) {Cố định \texttt{query} \& \texttt{pattern}\\Xác thực 100/100 đường dẫn \texttt{ltree}};
+    \node[guard, below=0.55cm of p1] (g1) {Chỉ đọc đề cương tiêu đề\\\textit{Cấm đọc mã nguồn \& CSDL}};
+    \node[guard, below=0.55cm of p2] (g2) {Chỉ đọc câu hỏi \& đặc tả MCP\\\textit{Cấm đọc nội dung chunk}};
+    \node[guard, draw=green!55!black, fill=green!4, below=0.55cm of p3] (g3) {Cố định \texttt{query} \& \texttt{pattern}\\Xác thực 100/100 đường dẫn \texttt{ltree}};
 
     \draw[arrow] (p1) -- (p2);
     \draw[arrow] (p2) -- (p3);
@@ -325,7 +325,7 @@ Bảng \ref{tab:confidence_eval} đối chiếu phân bố nhãn độ tin cậy
         \draw[gray!25, very thin] (0.35,\y-50) -- (7.45,\y-50);
         \node[left, font=\scriptsize] at (0.35,\y-50) {\y\%};
     }
-    \draw[thick, -Stealth] (0.35,0) -- (0.35,55) node[above, font=\scriptsize\bfseries] {Tỷ lệ (\%)};
+    \draw[thick, -Stealth] (0.35,0) -- (0.35,57.5) node[above, font=\scriptsize\bfseries] {Tỷ lệ (\%)};
     \draw[thick] (0.35,0) -- (7.45,0);
 
     % Dữ liệu 7 cấu hình: {idx / label / Found / R@5 / MRR@10 / Hit@1}
@@ -346,7 +346,7 @@ Bảng \ref{tab:confidence_eval} đối chiếu phân bố nhãn độ tin cậy
     }
 
     % Chú giải
-    \begin{scope}[shift={(1.45,53)}]
+    \begin{scope}[shift={(1.45,54.5)}]
         \fill[blue!70!black] (0,0) rectangle (0.22,2.2);
         \node[right, font=\scriptsize] at (0.24,1.1) {\texttt{Found}};
         \fill[teal!75!black] (1.15,0) rectangle (1.37,2.2);
