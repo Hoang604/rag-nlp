@@ -10,14 +10,14 @@
 \@writefile{toc}{\contentsline {section}{\numberline {III}GIỚI THIỆU BÀI TOÁN VÀ CÁC PHƯƠNG PHÁP LIÊN QUAN}{2}{section.3}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {1}Bối cảnh và động lực}{2}{subsection.3.1}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {2}Phát biểu bài toán}{3}{subsection.3.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {3}Các phương pháp liên quan}{4}{subsection.3.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3}Các phương pháp liên quan}{5}{subsection.3.3}\protected@file@percent }
 \@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces Tổng hợp các công trình nghiên cứu liên quan và giới hạn khi áp dụng lên tài liệu phân cấp phức tạp}}{6}{table.caption.2}\protected@file@percent }
 \newlabel{tab:related_work}{{2}{6}{Tổng hợp các công trình nghiên cứu liên quan và giới hạn khi áp dụng lên tài liệu phân cấp phức tạp}{table.caption.2}{}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {4}Đóng góp của báo cáo}{7}{subsection.3.4}\protected@file@percent }
 \@writefile{toc}{\contentsline {section}{\numberline {IV}PHƯƠNG PHÁP THỰC HIỆN}{7}{section.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {1}Quy trình tổng thể (Workflow) và Parser interface của framework (Phần A.1)}{8}{subsection.4.1}\protected@file@percent }
-\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces Kiến trúc RAG framework tách biệt \texttt  {Parser interface} ở bước 1--3 và lõi storage -- retrieval cố định ở bước 4--8}}{8}{figure.caption.3}\protected@file@percent }
-\newlabel{fig:workflow}{{1}{8}{Kiến trúc RAG framework tách biệt \texttt {Parser interface} ở bước 1--3 và lõi storage -- retrieval cố định ở bước 4--8}{figure.caption.3}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {1}Workflow tổng thể và Parser interface của framework (Phần A.1)}{8}{subsection.4.1}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces Kiến trúc RAG động: \texttt  {Coding Agent} viết \texttt  {Parser} theo 5 invariants ở bước 1--4 và chủ động điều phối vòng lặp 6 MCP tools trên PostgreSQL ở bước 5--8}}{8}{figure.caption.3}\protected@file@percent }
+\newlabel{fig:workflow}{{1}{8}{Kiến trúc RAG động: \texttt {Coding Agent} viết \texttt {Parser} theo 5 invariants ở bước 1--4 và chủ động điều phối vòng lặp 6 MCP tools trên PostgreSQL ở bước 5--8}{figure.caption.3}{}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {2}Mô hình đề xuất: Kiến trúc lưu trữ, truy xuất và Knowledge Graph (Phần A.2)}{9}{subsection.4.2}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsubsection}{\numberline {a)}Các mô-đun xử lý trung tâm và sự đánh đổi kỹ thuật}{9}{subsubsection.4.2.1}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsubsection}{\numberline {b)}Database Schema trên PostgreSQL 16}{10}{subsubsection.4.2.2}\protected@file@percent }
@@ -53,8 +53,8 @@
 \newlabel{tab:corpus_stats}{{6}{19}{Thống kê kho ngữ liệu thực nghiệm sau khi indexing qua ba bộ \texttt {Parser} Next.js, Node.js và Pháp luật Bảo hiểm}{table.caption.7}{}}
 \@writefile{lot}{\contentsline {table}{\numberline {7}{\ignorespaces Phân phối độ dài ký tự, số dòng và độ sâu cây phân cấp \texttt  {ltree} của 5.975 chunk trên 3 miền}}{19}{table.caption.8}\protected@file@percent }
 \newlabel{tab:chunk_dist}{{7}{19}{Phân phối độ dài ký tự, số dòng và độ sâu cây phân cấp \texttt {ltree} của 5.975 chunk trên 3 miền}{table.caption.8}{}}
-\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Quy trình 3 pha cách ly mù (blind-isolated protocol) với 6 tác tử độc lập xây dựng bộ kiểm thử \texttt  {data/eval/retrieval.jsonl}}}{20}{figure.caption.9}\protected@file@percent }
-\newlabel{fig:blind_eval_protocol}{{2}{20}{Quy trình 3 pha cách ly mù (blind-isolated protocol) với 6 tác tử độc lập xây dựng bộ kiểm thử \texttt {data/eval/retrieval.jsonl}}{figure.caption.9}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Quy trình 3 pha cách ly mù với 6 \texttt  {subagent} độc lập xây dựng bộ kiểm thử \texttt  {data/eval/retrieval.jsonl}}}{20}{figure.caption.9}\protected@file@percent }
+\newlabel{fig:blind_eval_protocol}{{2}{20}{Quy trình 3 pha cách ly mù với 6 \texttt {subagent} độc lập xây dựng bộ kiểm thử \texttt {data/eval/retrieval.jsonl}}{figure.caption.9}{}}
 \@writefile{lot}{\contentsline {table}{\numberline {8}{\ignorespaces Cấu trúc các bộ dữ liệu kiểm thử truy xuất (\texttt  {data/eval/retrieval.jsonl})}}{21}{table.caption.10}\protected@file@percent }
 \newlabel{tab:test_sets}{{8}{21}{Cấu trúc các bộ dữ liệu kiểm thử truy xuất (\texttt {data/eval/retrieval.jsonl})}{table.caption.10}{}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {2}Thiết lập thực nghiệm và Kiểm thử chức năng}{21}{subsection.5.2}\protected@file@percent }

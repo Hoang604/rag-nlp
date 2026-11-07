@@ -44,15 +44,15 @@ Bảo hiểm: 342 chunks & 147 & 1.379 & 1.905,5 & 5.281 & 12.335 & 15 & 23,2 / 
 
 Số liệu tại Bảng \ref{tab:chunk_dist} phản ánh đặc trưng cấu trúc của chiến lược AST section chunking: median chunk length khá gọn với 890 ký tự trên Next.js và 356 ký tự trên Node.js, nhưng phân phối có dạng heavy-tailed với P95 tương ứng là 3.112 và 2.518 ký tự, và cực đại lên tới 15.726 ký tự ở các mục đặc tả table lớn hoặc ví dụ code đầy đủ.
 
-Để đánh giá khách quan năng lực truy xuất của công cụ \texttt{hybrid\_search} mà không bị thiên lệch do người viết mã tự đặt câu hỏi nhìn trước cơ sở dữ liệu, bộ dữ liệu kiểm thử \texttt{data/eval/retrieval.jsonl} gồm 100 ca kiểm thử được xây dựng qua quy trình \textbf{3 pha cách ly mù (blind-isolated phases)} với 6 tác tử độc lập:
+Để đánh giá khách quan năng lực truy xuất của công cụ \texttt{hybrid\_\allowbreak search} mà không bị thiên lệch do người viết mã tự đặt câu hỏi nhìn trước cơ sở dữ liệu, bộ dữ liệu kiểm thử \nolinkurl{data/eval/retrieval.jsonl} gồm 100 ca kiểm thử được xây dựng qua quy trình \textbf{3 pha cách ly mù} với 6 \texttt{subagent} độc lập:
 \begin{enumerate}
-    \item \textbf{Pha 1 -- Sinh câu hỏi từ đề cương chủ đề (2 tác tử độc lập):} Tác tử chỉ được đọc danh mục tiêu đề của 167 tài liệu (\texttt{corpus\_topics\_outline.md}), hoàn toàn không được truy cập mã nguồn hay nội dung phân đoạn trong CSDL, để biên soạn câu hỏi cho hai lớp tác vụ:
+    \item \textbf{Pha 1 -- Sinh câu hỏi từ đề cương chủ đề (2 \texttt{subagent} độc lập):} Tác tử chỉ được đọc danh mục tiêu đề của 167 tài liệu (\texttt{corpus\_topics\_outline.md}), hoàn toàn không được truy cập mã nguồn hay nội dung phân đoạn trong CSDL, để biên soạn câu hỏi cho hai lớp tác vụ:
     \begin{itemize}
-        \item \textbf{Test set 1 -- \texttt{TS1-Lexical-API} (\texttt{e001}--\texttt{e050}):} 50 câu hỏi (25 Next.js, 25 Node.js) tra cứu chính xác tên hàm, chữ ký nạp chồng (overloaded signatures), thuộc tính cấu hình \nolinkurl{next.config.js}, mã lỗi hệ thống hoặc CLI flags.
+        \item \textbf{Test set 1 -- \texttt{TS1-Lexical-API} (\texttt{e001}--\texttt{e050}):} 50 câu hỏi (25 Next.js, 25 Node.js) tra cứu chính xác tên hàm, \texttt{overloaded signatures}, thuộc tính cấu hình \nolinkurl{next.config.js}, mã lỗi hệ thống hoặc CLI flags.
         \item \textbf{Test set 2 -- \texttt{TS2-Conceptual} (\texttt{e051}--\texttt{e100}):} 50 câu hỏi (25 Next.js, 25 Node.js) diễn đạt tình huống kỹ thuật tự nhiên về kiến trúc, cơ chế vận hành và các chủ đề trùng tên tiêu đề con giữa các phạm vi phân cấp khác nhau (như \textit{Caching}, \textit{Revalidation}, \textit{Server Actions}, \textit{Streams}, \textit{Cluster}, \textit{TLS Session Resumption}).
     \end{itemize}
-    \item \textbf{Pha 2 -- Lập lời gọi \texttt{hybrid\_search} đầu tiên (2 tác tử độc lập):} Đóng vai \texttt{Coding Agent} ở thời điểm gọi công cụ lần đầu, tác tử chỉ được đọc câu hỏi từ Pha 1 và bản đặc tả giao diện MCP của \texttt{hybrid\_search} (kèm danh mục 167 \texttt{doc\_slug}) để tự quyết định bộ tham số \texttt{query}, \texttt{pattern}, \texttt{is\_regex}, \texttt{case\_sensitive}, \texttt{doc\_slugs} và \texttt{path\_prefix}.
-    \item \textbf{Pha 3 -- Đối chiếu CSDL và gán nhãn Ground-Truth (2 tác tử độc lập):} Giữ nguyên tuyệt đối câu hỏi và tham số truy vấn của Pha 1--2, tác tử truy vấn trực tiếp bảng \texttt{chunks} trong PostgreSQL để xác định đường dẫn phân cấp \texttt{ltree} chuẩn trả lời trực tiếp câu hỏi (\texttt{expected}). Tổng cộng có \textbf{100 đường dẫn \texttt{ltree} đích} được gán nhãn và xác thực tồn tại 100\% trong CSDL (Hình \ref{fig:blind_eval_protocol} và Bảng \ref{tab:test_sets}).
+    \item \textbf{Pha 2 -- Lập lời gọi \texttt{hybrid\_search} đầu tiên (2 \texttt{subagent} độc lập):} Đóng vai \texttt{Coding Agent} ở thời điểm gọi công cụ lần đầu, tác tử chỉ được đọc câu hỏi từ Pha 1 và bản đặc tả giao diện MCP của \texttt{hybrid\_search} (kèm danh mục 167 \texttt{doc\_slug}) để tự quyết định bộ tham số \texttt{query}, \texttt{pattern}, \texttt{is\_regex}, \texttt{case\_sensitive}, \texttt{doc\_slugs} và \texttt{path\_prefix}.
+    \item \textbf{Pha 3 -- Đối chiếu CSDL và gán nhãn \texttt{ground-truth} (2 \texttt{subagent} độc lập):} Giữ nguyên tuyệt đối câu hỏi và tham số truy vấn của Pha 1--2, tác tử truy vấn trực tiếp bảng \texttt{chunks} trong PostgreSQL để xác định đường dẫn phân cấp \texttt{ltree} chuẩn trả lời trực tiếp câu hỏi (\texttt{expected}). Tổng cộng có \textbf{100 đường dẫn \texttt{ltree} đích} được gán nhãn và xác thực tồn tại 100\% trong CSDL (Hình \ref{fig:blind_eval_protocol} và Bảng \ref{tab:test_sets}).
 \end{enumerate}
 
 \begin{figure}[H]
@@ -78,7 +78,7 @@ Số liệu tại Bảng \ref{tab:chunk_dist} phản ánh đặc trưng cấu tr
     \draw[arrow, densely dotted] (g2) -- (p2);
     \draw[arrow, densely dotted] (g3) -- (p3);
 \end{tikzpicture}
-\caption{Quy trình 3 pha cách ly mù (blind-isolated protocol) với 6 tác tử độc lập xây dựng bộ kiểm thử \texttt{data/eval/retrieval.jsonl}}
+\caption{Quy trình 3 pha cách ly mù với 6 \texttt{subagent} độc lập xây dựng bộ kiểm thử \texttt{data/eval/retrieval.jsonl}}
 \label{fig:blind_eval_protocol}
 \end{figure}
 
@@ -90,11 +90,11 @@ Số liệu tại Bảng \ref{tab:chunk_dist} phản ánh đặc trưng cấu tr
 \toprule
 \textbf{Test Set} & \textbf{Phạm vi miền} & \textbf{Số câu} & \textbf{Tổng đích} & \textbf{Đích/câu} & \textbf{Mục tiêu kiểm định chính} \\
 \midrule
-\texttt{TS1-Lexical-API} & Next.js (25) + Node.js (25) & 50 & 50 & 1,00 & Độ chính xác khi tìm ký hiệu API, CLI flags, overloaded signatures và khớp mẫu regex/trigram \\
+\texttt{TS1-Lexical-API} & Next.js (25) + Node.js (25) & 50 & 50 & 1,00 & Độ chính xác khi tìm ký hiệu API, CLI flags, \texttt{overloaded signatures} và khớp mẫu regex/trigram \\
 \addlinespace[2pt]
 \texttt{TS2-Conceptual} & Next.js (25) + Node.js (25) & 50 & 50 & 1,00 & Khả năng nắm bắt ngữ nghĩa kiến trúc và phân biệt phạm vi phân cấp \texttt{ltree} nhờ context prefix \\
 \midrule
-\textbf{Tổng cộng} & \textbf{167 tài liệu (5.633 chunks)} & \textbf{100} & \textbf{100} & \textbf{1,00} & \textbf{Đánh giá toàn diện kênh đôi (Dual-Channel Venn) và nghiên cứu Ablation} \\
+\textbf{Tổng cộng} & \textbf{167 tài liệu (5.633 chunks)} & \textbf{100} & \textbf{100} & \textbf{1,00} & \textbf{Đánh giá toàn diện \texttt{Dual-Channel Venn} và nghiên cứu Ablation} \\
 \bottomrule
 \end{tabularx}
 \end{table}
@@ -434,7 +434,7 @@ Từ số liệu thực nghiệm tại Bảng \ref{tab:results_per_testset}--\re
 
 \noindent\textbf{Tổng hợp trả lời các câu hỏi nghiên cứu (CH1--CH3):}
 \begin{itemize}
-    \item \textbf{Trả lời CH1:} Hai bộ \texttt{Parser} mẫu cho Next.js MDX và Node.js Markdown đã phân rã toàn bộ 167 tài liệu (162.757 dòng) thành 5.633 \texttt{chunk} trong $\approx 2,1$ giây, đạt \textbf{100\%} toàn vẹn ánh xạ dòng 1:1 (\texttt{line\_errors = 0}), \textbf{100\%} tiền tố ngữ cảnh hợp lệ (\texttt{ctx\_errors = 0}) và bảo toàn trọn vẹn 2.107 phân đoạn chứa code block (\texttt{KT01}, \texttt{KT02}).
-    \item \textbf{Trả lời CH2:} Kết hợp Dense + Sparse qua RRF trên $\text{text}^{\text{ctx}}_i$ vượt trội có ý nghĩa thống kê so với Sparse FTS đơn lẻ ($p = 0,0156$), nâng \texttt{MRR@10} lên \textbf{79,0\%} và \texttt{Recall@5} lên \textbf{93,0\%}. Việc bổ sung kênh nguyên văn theo phân hoạch Venn cứu sống các truy vấn ký hiệu đặc thù (\texttt{e021}, \texttt{e083}), nâng tỷ lệ tìm thấy lên \textbf{97,0\%} (và \textbf{100\%} trên 97/97 câu có phạm vi lọc hợp lệ), đồng thời kéo 10 phân đoạn dài bị cửa sổ 256 token của Cross-Encoder hạ bậc về lại hạng 1.
-    \item \textbf{Trả lời CH3:} Kiến trúc Warm Streamable HTTP MCP (\texttt{POST /api/mcp}) giảm độ trễ lệnh gọi công cụ đầu tiên từ $29.727\text{ ms}$ xuống $695\text{--}768\text{ ms}$ ($\approx 40\times$), trong khi công cụ \nolinkurl{submit_grounded_answer} đối chiếu trực tiếp từng bộ ba trích dẫn \texttt{(path, \allowbreak start\_line, \allowbreak end\_line)} trên PostgreSQL (\texttt{KT07}), chặn đứng mọi trích dẫn đường dẫn \texttt{ltree} không tồn tại trong kho ngữ liệu.
+    \item \textbf{Trả lời CH1:} Ba bộ \texttt{Parser} cho Next.js MDX, Node.js Markdown và Văn bản Pháp luật Bảo hiểm tiếng Việt đã phân rã toàn bộ 170 tài liệu (171.183 dòng) thành 5.975 \texttt{chunk}, đạt \textbf{100\%} toàn vẹn ánh xạ dòng 1:1 (\texttt{line\_errors = 0}), \textbf{100\%} tiền tố ngữ cảnh hợp lệ (\texttt{ctx\_errors = 0}) và bảo toàn trọn vẹn mọi code block, bảng biểu cũng như cấu trúc Điều -- Khoản -- Điểm (\texttt{KT01}, \texttt{KT02}).
+    \item \textbf{Trả lời CH2:} Kết hợp Dense + Sparse qua RRF trên $\text{text}^{\text{ctx}}_i$ vượt trội có ý nghĩa thống kê so với Sparse FTS đơn lẻ ($p = 0,0156$), nâng \texttt{MRR@10} lên \textbf{79,0\%} và \texttt{Recall@5} lên \textbf{93,0\%}. Việc bổ sung kênh nguyên văn theo \texttt{Venn partitioning} cứu sống các truy vấn ký hiệu đặc thù (\texttt{e021}, \texttt{e083}), nâng tỷ lệ tìm thấy lên \textbf{97,0\%} (và \textbf{100\%} trên 97/97 câu có phạm vi lọc hợp lệ), đồng thời kéo 10 phân đoạn dài bị cửa sổ 256 token của Cross-Encoder hạ bậc về lại hạng 1.
+    \item \textbf{Trả lời CH3:} Thay vì nhồi thụ động kết quả tìm kiếm một chiều vào prompt, \texttt{Coding Agent} chủ động phối hợp 6 MCP tools để mở rộng ngữ cảnh qua \texttt{hierarchical\_\allowbreak navigate}, đọc nguyên văn qua \texttt{get\_\allowbreak raw} và đan liên kết \texttt{Knowledge Graph} qua \texttt{graph\_\allowbreak curate\_\allowbreak edges} (Bảng \ref{tab:mcp_kg_trajectory}); kiến trúc \texttt{Warm Streamable HTTP MCP} (\texttt{POST /api/mcp}) giảm độ trễ lệnh gọi công cụ đầu tiên từ $29.727\text{ ms}$ xuống $695\text{--}768\text{ ms}$ ($\approx 40\times$), trong khi công cụ \texttt{submit\_\allowbreak grounded\_\allowbreak answer} kiểm chứng từng trích dẫn \texttt{(path, \allowbreak start\_line, \allowbreak end\_line)} trên PostgreSQL (\texttt{KT07}), chặn đứng mọi trích dẫn đường dẫn \texttt{ltree} không tồn tại trong kho ngữ liệu.
 \end{itemize}

@@ -44,8 +44,8 @@
         \item \texttt{submit\_grounded\_answer(answer, \allowbreak citations, \allowbreak abstained)}: Xác thực câu trả lời của \texttt{Agent} bằng cách kiểm tra từng trích dẫn \texttt{(path, start\_line, end\_line)} trực tiếp trên PostgreSQL, trích xuất văn bản nguyên gốc và từ chối ngay lập tức nếu đường dẫn \texttt{ltree} không tồn tại trong kho ngữ liệu.
     \end{enumerate}
     \endgroup
-    \item \textbf{Giao diện Corpus \& Graph Observatory Dashboard (\texttt{uv run rag-eval ui}):} Cung cấp không gian \textbf{Hỏi đáp có kiểm chứng trích dẫn (Grounded Agent Q\&A)} với giao diện hội thoại tối giản hỗ trợ đa mô hình CLI Agent (Antigravity Gemini 3.8 Flash, Gemini 4 Argon Medium, Claude Code), hiển thị trực tiếp tiến trình gọi công cụ MCP theo thời gian thực qua WebSocket (\texttt{/api/qa/ws}), kết xuất câu trả lời định dạng GFM Markdown kèm thẻ đối chiếu văn bản nguyên gốc cho từng dấu trích dẫn \texttt{[\#k]}; cùng không gian \textbf{Cấu trúc \& Đồ thị (Structure \& Graph)} dạng \textbf{Sơ đồ tư duy tương tác (Interactive Mind Map)} phân nhánh từ Văn bản $\to$ Chương $\to$ Mục $\to$ Điều với nhãn tiếng Việt chuẩn hóa từ \texttt{ancestor\_titles} và khung đọc điều khoản trực tiếp (Hình \ref{fig:ui_dashboard}).
-    \item \textbf{Mẫu các ca kiểm thử tiêu biểu từ bộ dữ liệu \nolinkurl{data/eval/retrieval.jsonl}:} Bảng \ref{tab:sample_queries} trích dẫn 6 ca kiểm thử đại diện cho hai bộ \texttt{TS1-Lexical-API} và \texttt{TS2-Conceptual} trên hai miền Next.js và Node.js, minh họa rõ vai trò của từng phân vùng Venn (\texttt{both}, \texttt{semantic\_only}, \texttt{verbatim\_only}).
+    \item \textbf{Giao diện Corpus \& Graph Observatory Dashboard (\texttt{uv run rag-eval ui}):} Cung cấp không gian \textbf{Grounded Q\&A} với giao diện hội thoại tối giản hỗ trợ đa mô hình CLI Agent (Antigravity Gemini 3.8 Flash, Gemini 4 Argon Medium, Claude Code), hiển thị trực tiếp tiến trình \texttt{Agent} gọi các MCP tools theo thời gian thực qua WebSocket (\texttt{/api/qa/ws}), kết xuất câu trả lời định dạng GFM Markdown kèm thẻ đối chiếu văn bản nguyên gốc cho từng dấu trích dẫn \texttt{[\#k]}; cùng không gian \textbf{Structure \& Graph} dạng \textbf{Interactive Mind Map} phân nhánh từ Văn bản $\to$ Chương $\to$ Mục $\to$ Điều với nhãn tiếng Việt chuẩn hóa từ \texttt{ancestor\_titles} và khung đọc điều khoản trực tiếp (Hình \ref{fig:ui_dashboard}).
+    \item \textbf{Mẫu các ca kiểm thử tiêu biểu từ bộ dữ liệu \nolinkurl{data/eval/retrieval.jsonl}:} Bảng \ref{tab:sample_queries} trích dẫn 6 ca kiểm thử đại diện cho hai bộ \texttt{TS1-Lexical-API} và \texttt{TS2-Conceptual} trên hai miền Next.js và Node.js, minh họa rõ vai trò của từng phân vùng Venn (\texttt{both}, \texttt{semantic\_\allowbreak only}, \texttt{verbatim\_\allowbreak only}).
 \end{itemize}
 
 \begin{figure}[H]
@@ -53,12 +53,12 @@
 \setlength{\fboxsep}{0pt}
 \setlength{\fboxrule}{0.4pt}
 \fbox{\includegraphics[width=0.96\textwidth]{figures/ui_grounded_qa.png}}
-\par\vspace{3pt}{\footnotesize (a) Không gian Hỏi đáp có kiểm chứng trích dẫn (\texttt{Grounded Q\&A}) với kết xuất Markdown và tiến trình MCP}
+\par\vspace{3pt}{\footnotesize (a) Không gian \texttt{Grounded Q\&A} hiển thị tiến trình gọi MCP tools, kết xuất Markdown và đối chiếu trích dẫn}
 
 \vspace{10pt}
 
 \fbox{\includegraphics[width=0.96\textwidth]{figures/ui_explorer_graph.png}}
-\par\vspace{3pt}{\footnotesize (b) Sơ đồ tư duy tương tác (\texttt{Interactive Mind Map}) khám phá cấu trúc phân cấp và khung đọc điều khoản}
+\par\vspace{3pt}{\footnotesize (b) Không gian \texttt{Interactive Mind Map} khám phá cấu trúc phân cấp văn bản và khung đọc điều khoản}
 \caption{Giao diện thực tế của hệ thống Corpus \& Graph Observatory Dashboard (\texttt{uv run rag-eval ui})}
 \label{fig:ui_dashboard}
 \end{figure}
