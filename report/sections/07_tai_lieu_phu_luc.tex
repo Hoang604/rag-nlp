@@ -1,27 +1,41 @@
 % ============================================================================
 % TÀI LIỆU THAM KHẢO
 % ============================================================================
-\section*{TÀI LIỆU THAM KHẢO}
-\addcontentsline{toc}{section}{TÀI LIỆU THAM KHẢO}
-
 \begingroup
 \raggedright
-\begin{enumerate}[label={[\arabic*]}, leftmargin=2.2em, itemsep=3pt]
-    \item P. Lewis \textit{et al.}, ``Retrieval-augmented generation for knowledge-intensive NLP tasks,'' in \textit{Proc. Advances in Neural Information Processing Systems (NeurIPS)}, vol. 33, pp. 9459--9474, 2020.
-    \item S. Robertson and H. Zaragoza, ``The probabilistic relevance framework: BM25 and beyond,'' \textit{Foundations and Trends in Information Retrieval}, vol. 3, no. 4, pp. 333--389, 2009.
-    \item V. Karpukhin \textit{et al.}, ``Dense passage retrieval for open-domain question answering,'' in \textit{Proc. Conf. Empirical Methods in Natural Language Processing (EMNLP)}, pp. 6769--6781, 2020.
-    \item Y. Zhang \textit{et al.}, ``Qwen3 Embedding: Advancing text embedding and reranking through foundation models,'' \textit{arXiv preprint arXiv:2506.05176}, 2025.
-    \item A. Kusupati \textit{et al.}, ``Matryoshka representation learning,'' in \textit{Proc. Advances in Neural Information Processing Systems (NeurIPS)}, vol. 35, pp. 30233--30249, 2022.
-    \item G. V. Cormack, C. L. A. Clarke, and S. Buettcher, ``Reciprocal rank fusion outperforms condorcet and individual rank learning methods,'' in \textit{Proc. 32nd Int. ACM SIGIR Conf. Research and Development in Information Retrieval}, pp. 758--759, 2009.
-    \item R. Nogueira and K. Cho, ``Passage re-ranking with BERT,'' \textit{arXiv preprint arXiv:1901.04085}, 2019.
-    \item W. Wang \textit{et al.}, ``MiniLMv2: Multi-head self-attention relation distillation for compressing pretrained transformers,'' in \textit{Findings of the Association for Computational Linguistics: ACL-IJCNLP}, pp. 2140--2151, 2021.
-    \item S. Zhou \textit{et al.}, ``DocPrompting: Generating code by retrieving the docs,'' in \textit{Proc. Int. Conf. Learning Representations (ICLR)}, 2023.
-    \item Z. T. Wang \textit{et al.}, ``CodeRAG-Bench: Can retrieval augment code generation?,'' in \textit{Findings of the Association for Computational Linguistics: NAACL}, 2025.
-    \item Y. Zhang \textit{et al.}, ``cAST: Enhancing code retrieval-augmented generation with structural chunking via abstract syntax tree,'' \textit{arXiv preprint arXiv:2506.15655}, 2025.
-    \item Anthropic, ``Introducing Contextual Retrieval,'' Anthropic Engineering Technical Report, Sep. 2024.
-    \item D. Edge \textit{et al.}, ``From local to global: A graph RAG approach to query-focused summarization,'' \textit{arXiv preprint arXiv:2404.16130}, 2024.
-    \item Anthropic, ``Model Context Protocol (MCP) Specification,'' \url{https://modelcontextprotocol.io}, 2024.
-\end{enumerate}
+\begin{thebibliography}{99}
+\addcontentsline{toc}{section}{TÀI LIỆU THAM KHẢO}
+\setlength{\itemsep}{3pt}
+
+\bibitem{lewis2020rag} P. Lewis \textit{et al.}, ``Retrieval-augmented generation for knowledge-intensive NLP tasks,'' in \textit{Proc. Advances in Neural Information Processing Systems (NeurIPS)}, vol. 33, pp. 9459--9474, 2020.
+
+\bibitem{robertson2009bm25} S. Robertson and H. Zaragoza, ``The probabilistic relevance framework: BM25 and beyond,'' \textit{Foundations and Trends in Information Retrieval}, vol. 3, no. 4, pp. 333--389, 2009.
+
+\bibitem{karpukhin2020dpr} V. Karpukhin \textit{et al.}, ``Dense passage retrieval for open-domain question answering,'' in \textit{Proc. Conf. Empirical Methods in Natural Language Processing (EMNLP)}, pp. 6769--6781, 2020.
+
+\bibitem{zhang2025qwen3} Y. Zhang \textit{et al.}, ``Qwen3 Embedding: Advancing text embedding and reranking through foundation models,'' \textit{arXiv preprint arXiv:2506.05176}, 2025.
+
+\bibitem{kusupati2022mrl} A. Kusupati \textit{et al.}, ``Matryoshka representation learning,'' in \textit{Proc. Advances in Neural Information Processing Systems (NeurIPS)}, vol. 35, pp. 30233--30249, 2022.
+
+\bibitem{cormack2009rrf} G. V. Cormack, C. L. A. Clarke, and S. Buettcher, ``Reciprocal rank fusion outperforms condorcet and individual rank learning methods,'' in \textit{Proc. 32nd Int. ACM SIGIR Conf. Research and Development in Information Retrieval}, pp. 758--759, 2009.
+
+\bibitem{nogueira2019bert} R. Nogueira and K. Cho, ``Passage re-ranking with BERT,'' \textit{arXiv preprint arXiv:1901.04085}, 2019.
+
+\bibitem{wang2021minilm} W. Wang \textit{et al.}, ``MiniLMv2: Multi-head self-attention relation distillation for compressing pretrained transformers,'' in \textit{Findings of the Association for Computational Linguistics: ACL-IJCNLP}, pp. 2140--2151, 2021.
+
+\bibitem{zhou2023docprompting} S. Zhou \textit{et al.}, ``DocPrompting: Generating code by retrieving the docs,'' in \textit{Proc. Int. Conf. Learning Representations (ICLR)}, 2023.
+
+\bibitem{wang2025coderag} Z. T. Wang \textit{et al.}, ``CodeRAG-Bench: Can retrieval augment code generation?,'' in \textit{Findings of the Association for Computational Linguistics: NAACL}, 2025.
+
+\bibitem{zhang2025cast} Y. Zhang \textit{et al.}, ``cAST: Enhancing code retrieval-augmented generation with structural chunking via abstract syntax tree,'' \textit{arXiv preprint arXiv:2506.15655}, 2025.
+
+\bibitem{anthropic2024contextual} Anthropic, ``Introducing Contextual Retrieval,'' Anthropic Engineering Technical Report, Sep. 2024.
+
+\bibitem{edge2024graphrag} D. Edge \textit{et al.}, ``From local to global: A graph RAG approach to query-focused summarization,'' \textit{arXiv preprint arXiv:2404.16130}, 2024.
+
+\bibitem{anthropic2024mcp} Anthropic, ``Model Context Protocol (MCP) Specification,'' \url{https://modelcontextprotocol.io}, 2024.
+
+\end{thebibliography}
 \endgroup
 
 % ============================================================================
@@ -32,7 +46,7 @@
 
 \begin{itemize}
     \item \textbf{Kho mã nguồn mở của dự án:} \url{https://github.com/Hoang604/rag-nlp} cung cấp toàn bộ mã nguồn, PostgreSQL/pgvector database schema, benchmark corpus và hướng dẫn reproduce môi trường qua Docker Compose và trình quản lý gói \texttt{uv}.
-    \item \textbf{Đặc tả API của 6 MCP tools chuẩn [14] (hỗ trợ cả \texttt{stdio} và Warm Streamable HTTP \texttt{POST /api/mcp}):}
+    \item \textbf{Đặc tả API của 6 MCP tools chuẩn \cite{anthropic2024mcp} (hỗ trợ cả \texttt{stdio} và Warm Streamable HTTP \texttt{POST /api/mcp}):}
     \begingroup
     \raggedright
     \begin{enumerate}

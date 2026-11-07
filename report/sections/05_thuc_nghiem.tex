@@ -112,17 +112,17 @@ Các hyperparameters của framework cùng cơ sở lựa chọn tương ứng �
 \toprule
 \textbf{Tham số / Thành phần} & \textbf{Giá trị thiết lập} & \textbf{Cơ sở lựa chọn} \\
 \midrule
-Mô hình Dense Embedding & \texttt{Qwen/Qwen3-Embedding-0.6B} [4] & Hỗ trợ đa ngôn ngữ và tài liệu lập trình, vừa bộ nhớ GPU 4 GB ở chế độ FP16 \\
+Mô hình Dense Embedding & \texttt{Qwen/Qwen3-Embedding-0.6B} \cite{zhang2025qwen3} & Hỗ trợ đa ngôn ngữ và tài liệu lập trình, vừa bộ nhớ GPU 4 GB ở chế độ FP16 \\
 \addlinespace[2pt]
-Số chiều Vector $d$ & 512 chiều, MRL truncation [5] + chuẩn hóa $L_2$ & Giảm 50\% dung lượng lưu trữ so với 1.024 chiều gốc mà vẫn giữ tương đồng Cosine \\
+Số chiều Vector $d$ & 512 chiều, MRL truncation \cite{kusupati2022mrl} + chuẩn hóa $L_2$ & Giảm 50\% dung lượng lưu trữ so với 1.024 chiều gốc mà vẫn giữ tương đồng Cosine \\
 \addlinespace[2pt]
 Vector Index \texttt{pgvector} & HNSW \texttt{vector\_cosine\_ops} (\texttt{m=16, ef\_construction=64}) & Cấu hình mặc định chuẩn của \texttt{pgvector} cân bằng tốc độ dựng chỉ mục và độ phủ trên 5.633 chunks \\
 \addlinespace[2pt]
 Chuỗi tối đa Embedding & $L_{\text{emb}} = 2.048$ tokens, \texttt{left-padding}, batch size = 8--16 (fallback 1) & Bao phủ trọn vẹn P95 độ dài chunk (3.112 ký tự) mà không tràn 4 GB VRAM \\
 \addlinespace[2pt]
-Cross-Encoder Reranker & \texttt{mmarco-mMiniLMv2-L12-H384} [8], $L_{\max}=256$, $\alpha=1,0$, $P=10$ & Mô hình 12 lớp gọn nhẹ giữ độ trễ rerank $< 400$ ms; LRU cache 2.048 cặp giảm tính toán lặp \\
+Cross-Encoder Reranker & \texttt{mmarco-mMiniLMv2-L12-H384} \cite{wang2021minilm}, $L_{\max}=256$, $\alpha=1,0$, $P=10$ & Mô hình 12 lớp gọn nhẹ giữ độ trễ rerank $< 400$ ms; LRU cache 2.048 cặp giảm tính toán lặp \\
 \addlinespace[2pt]
-Hybrid Search \& RRF & $k_{\text{rrf}} = 60$, bể ứng viên $C = \max(6K, 120)$, FTS \texttt{simple} & Hằng số $k_{\text{rrf}}=60$ theo Cormack et al. [6]; từ điển \texttt{simple} bảo toàn nguyên vẹn định danh API \\
+Hybrid Search \& RRF & $k_{\text{rrf}} = 60$, bể ứng viên $C = \max(6K, 120)$, FTS \texttt{simple} & Hằng số $k_{\text{rrf}}=60$ theo Cormack et al. \cite{cormack2009rrf}; từ điển \texttt{simple} bảo toàn nguyên vẹn định danh API \\
 \addlinespace[2pt]
 Trọng số Sparse FTS & Proximity boost = $4,0$, exact match bonus = $+2,0$ & Ưu tiên các phân đoạn chứa cụm từ khóa đứng liền kề và hội đủ toàn bộ token truy vấn \\
 \addlinespace[2pt]
@@ -434,7 +434,7 @@ Từ số liệu thực nghiệm tại Bảng \ref{tab:results_per_testset}--\re
 
 \noindent\textbf{Tổng hợp trả lời các câu hỏi nghiên cứu (CH1--CH3):}
 \begin{itemize}
-    \item \textbf{Trả lời CH1:} Ba bộ \texttt{Parser} cho Next.js MDX, Node.js Markdown và Văn bản Pháp luật Bảo hiểm tiếng Việt đã phân rã toàn bộ 170 tài liệu (171.183 dòng) thành 5.975 \texttt{chunk}, đạt \textbf{100\%} toàn vẹn ánh xạ dòng 1:1 (\texttt{line\_errors = 0}), \textbf{100\%} tiền tố ngữ cảnh hợp lệ (\texttt{ctx\_errors = 0}) và bảo toàn trọn vẹn mọi code block, bảng biểu cũng như cấu trúc Điều -- Khoản -- Điểm (\texttt{KT01}, \texttt{KT02}).
-    \item \textbf{Trả lời CH2:} Kết hợp Dense + Sparse qua RRF trên $\text{text}^{\text{ctx}}_i$ vượt trội có ý nghĩa thống kê so với Sparse FTS đơn lẻ ($p = 0,0156$), nâng \texttt{MRR@10} lên \textbf{79,0\%} và \texttt{Recall@5} lên \textbf{93,0\%}. Việc bổ sung kênh nguyên văn theo \texttt{Venn partitioning} cứu sống các truy vấn ký hiệu đặc thù (\texttt{e021}, \texttt{e083}), nâng tỷ lệ tìm thấy lên \textbf{97,0\%} (và \textbf{100\%} trên 97/97 câu có phạm vi lọc hợp lệ), đồng thời kéo 10 phân đoạn dài bị cửa sổ 256 token của Cross-Encoder hạ bậc về lại hạng 1.
+    \item \textbf{Trả lời CH1:} Thay vì dùng \texttt{generic chunker} cắt mù quáng, ba bộ \texttt{Parser} chuyên biệt cho Next.js MDX, Node.js Markdown và Văn bản Pháp luật Bảo hiểm tiếng Việt lắp qua \texttt{Parser interface} 5 invariants đã phân rã toàn bộ 170 tài liệu (171.183 dòng) thành 5.975 \texttt{chunk}, đạt \textbf{100\%} toàn vẹn tọa độ dòng 1:1 (\texttt{line\_errors = 0}), \textbf{100\%} tiền tố ngữ cảnh hợp lệ (\texttt{ctx\_errors = 0}) và bảo toàn trọn vẹn mọi code block, bảng biểu cũng như cấu trúc Điều -- Khoản -- Điểm (\texttt{KT01}--\texttt{KT04}) để làm nền tảng định vị cho các MCP tools.
+    \item \textbf{Trả lời CH2:} Công cụ \texttt{hybrid\_\allowbreak search} kết hợp Dense + Sparse qua RRF trên $\text{text}^{\text{ctx}}_i$ vượt trội có ý nghĩa thống kê so với Sparse FTS đơn lẻ ($p = 0,0156$), nâng \texttt{MRR@10} lên \textbf{79,0\%} và \texttt{Recall@5} lên \textbf{93,0\%}. Việc hợp nhất thêm kênh regex/trigram theo \texttt{Venn partitioning} cứu sống các truy vấn ký hiệu đặc thù (\texttt{e021}, \texttt{e083}), nâng tỷ lệ tìm thấy điểm neo lên \textbf{97,0\%} (\textbf{100\%} trên 97/97 câu có phạm vi lọc hợp lệ), kéo 10 phân đoạn dài bị cửa sổ 256 token của \texttt{Cross-Encoder} hạ bậc về lại hạng 1, đồng thời cung cấp các \texttt{Provision\allowbreak Group} theo \texttt{reading order} và nhãn \texttt{confidence} $\gamma$ (\texttt{medium}/\texttt{high} trên 72\% truy vấn) để dẫn đường cho \texttt{Coding Agent}.
     \item \textbf{Trả lời CH3:} Thay vì nhồi thụ động kết quả tìm kiếm một chiều vào prompt, \texttt{Coding Agent} chủ động phối hợp 6 MCP tools để mở rộng ngữ cảnh qua \texttt{hierarchical\_\allowbreak navigate}, đọc nguyên văn qua \texttt{get\_\allowbreak raw} và đan liên kết \texttt{Knowledge Graph} qua \texttt{graph\_\allowbreak curate\_\allowbreak edges} (Bảng \ref{tab:mcp_kg_trajectory}); kiến trúc \texttt{Warm Streamable HTTP MCP} (\texttt{POST /api/mcp}) giảm độ trễ lệnh gọi công cụ đầu tiên từ $29.727\text{ ms}$ xuống $695\text{--}768\text{ ms}$ ($\approx 40\times$), trong khi công cụ \texttt{submit\_\allowbreak grounded\_\allowbreak answer} kiểm chứng từng trích dẫn \texttt{(path, \allowbreak start\_line, \allowbreak end\_line)} trên PostgreSQL (\texttt{KT07}), chặn đứng mọi trích dẫn đường dẫn \texttt{ltree} không tồn tại trong kho ngữ liệu.
 \end{itemize}
