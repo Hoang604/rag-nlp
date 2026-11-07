@@ -4,11 +4,10 @@ import { useI18n } from '../../i18n/I18nContext';
 import { Lang, MessageKey } from '../../i18n/messages';
 import { ThemeChoice, useTheme } from '../../hooks/useTheme';
 
-export type TabId = 'answer' | 'search' | 'eval' | 'explorer';
+export type TabId = 'answer' | 'eval' | 'explorer';
 
 const TABS: { id: TabId; label: MessageKey }[] = [
   { id: 'answer', label: 'nav.answer' },
-  { id: 'search', label: 'nav.search' },
   { id: 'eval', label: 'nav.eval' },
   { id: 'explorer', label: 'nav.explorer' },
 ];

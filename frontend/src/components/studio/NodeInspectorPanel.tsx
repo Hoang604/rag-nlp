@@ -1,301 +1,278 @@
-import React, { useState } from 'react';
+import React, { useMemo } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import {
-  Compass,
+  ChevronRight,
   Copy,
-  FileCode,
   FileSpreadsheet,
   FileText,
   Share2,
-  Sliders,
   X,
 } from 'lucide-react';
 import { useToast } from '../toast/ToastContext';
 import { GraphVisualizerEdge } from '../../types/api';
 import { DocumentTreeNode } from '../../types/tree';
-import { getNodeTypeColor } from '../../utils/ltree';
-import { GraphTraversalModal } from '../graph/GraphTraversalModal';
+import { naturalPathCompare } from '../../utils/sorting';
 
 interface NodeInspectorPanelProps {
+  rootNode: DocumentTreeNode | null;
   selectedNode: DocumentTreeNode | null;
-  onClose?: () => void;
-  onSelectPath?: (path: string) => void;
+  onClose: () => void;
+  onSelectPath: (path: string) => void;
   edges: GraphVisualizerEdge[];
-  docSlug?: string;
+}
+
+function cleanTitle(label: string): string {
+  return label.replace(/^#+\s*/, '').trim();
+}
+
+function stripDuplicateLeadingHeading(text: string, label: string): string {
+  const trimmed = text.trim();
+  const lines = trimmed.split('\n');
+  if (lines.length === 0) return trimmed;
+  const firstLineClean = lines[0].replace(/^#+\s*/, '').trim();
+  const labelClean = cleanTitle(label);
+  if (
+    firstLineClean &&
+    labelClean &&
+    firstLineClean.toLowerCase() === labelClean.toLowerCase()
+  ) {
+    return lines.slice(1).join('\n').trim();
+  }
+  return trimmed;
 }
 
 export const NodeInspectorPanel: React.FC<NodeInspectorPanelProps> = ({
+  rootNode,
   selectedNode,
   onClose,
   onSelectPath,
   edges,
-  docSlug,
 }) => {
   const { success } = useToast();
-  const [isTraversalOpen, setIsTraversalOpen] = useState(false);
 
-  if (!selectedNode) {
-    return (
-      <div className="flex h-full w-full flex-col items-center justify-center p-6 text-center text-xs text-slate-500 border-l border-slate-800 bg-slate-950">
-        <Sliders className="h-8 w-8 text-slate-600 mb-2" />
-        <p className="font-semibold text-slate-400">Chưa chọn chunk</p>
-        <p className="mt-1 text-[11px]">
-          Bấm vào bất kỳ chunk nào ở danh sách hoặc toàn văn để xem chi tiết
-        </p>
-      </div>
-    );
-  }
+  // Build ancestor breadcrumb trail from rootNode down to selectedNode
+  const breadcrumbs = useMemo(() => {
+    if (!rootNode || !selectedNode) return [] as DocumentTreeNode[];
+    const trail: DocumentTreeNode[] = [];
 
-  const colors = getNodeTypeColor(selectedNode.node_type);
+    function dfs(curr: DocumentTreeNode): boolean {
+      trail.push(curr);
+      if (curr.path === selectedNode?.path) return true;
+      if (curr.children) {
+        for (const child of curr.children) {
+          if (dfs(child)) return true;
+        }
+      }
+      trail.pop();
+      return false;
+    }
 
-  // Find all relational edges involving this node
+    dfs(rootNode);
+    return trail;
+  }, [rootNode, selectedNode]);
+
+  if (!selectedNode) return null;
+
   const relatedEdges = edges.filter(
     (e) =>
       e.source_path === selectedNode.path || e.target_path === selectedNode.path
   );
 
+  const sortedChildren = selectedNode.children
+    ? [...selectedNode.children].sort((a, b) => naturalPathCompare(a.path, b.path))
+    : [];
+
+  const bodyMarkdown = selectedNode.verbatim_text
+    ? stripDuplicateLeadingHeading(selectedNode.verbatim_text, selectedNode.label)
+    : '';
+
   const copyToClipboard = (text: string, label: string) => {
     void navigator.clipboard.writeText(text);
-    success('Đã sao chép', `Đã sao chép ${label} vào clipboard.`);
+    success('Đã sao chép', `Đã sao chép ${label} vào bộ nhớ tạm.`);
   };
 
   return (
-    <div className="flex h-full w-full flex-col border-l border-slate-800 bg-slate-950 overflow-y-auto">
-      {/* Top Header */}
-      <div className="flex items-center justify-between border-b border-slate-800 bg-slate-900/80 px-4 py-3">
-        <div className="flex items-center gap-2">
-          <Sliders className="h-4 w-4 text-brand-400" />
-          <span className="text-xs font-bold uppercase tracking-wider text-slate-200">
-            Inspector Chunk
-          </span>
-        </div>
-
-        {onClose && (
-          <button
-            onClick={onClose}
-            className="rounded p-1 text-slate-400 hover:bg-slate-800 hover:text-white"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        )}
-      </div>
-
-      {/* Main Inspector Body */}
-      <div className="p-4 space-y-5 text-xs">
-        {/* Title & Badge */}
-        <div>
-          <div className="flex items-center gap-2 mb-1.5 flex-wrap">
-            <span
-              className={`rounded border px-2 py-0.5 text-[10px] font-bold uppercase ${colors.badge}`}
+    <aside
+      aria-label="Nội dung chi tiết mục đang chọn"
+      className="flex h-full w-full flex-col border-l border-slate-800 bg-slate-950 overflow-hidden"
+    >
+      {/* Clean Header with Breadcrumbs & Close Action */}
+      <div className="flex items-start justify-between gap-3 border-b border-slate-800 px-5 py-3.5">
+        <div className="min-w-0 flex-1">
+          {breadcrumbs.length > 1 && (
+            <nav
+              aria-label="Đường dẫn phân cấp"
+              className="mb-1 flex flex-wrap items-center gap-1 text-xs text-slate-400"
             >
-              {selectedNode.node_type}
-            </span>
-            {Boolean(selectedNode.metadata?.is_table) && (
-              <span className="rounded border border-indigo-700 bg-indigo-950/80 px-1.5 py-0.5 text-[10px] font-bold uppercase text-indigo-300">
-                BẢNG BIỂU
+              {breadcrumbs.slice(0, -1).map((crumb, idx) => (
+                <React.Fragment key={crumb.path}>
+                  {idx > 0 && <ChevronRight className="h-3 w-3 shrink-0 text-slate-500" />}
+                  <button
+                    type="button"
+                    onClick={() => onSelectPath(crumb.path)}
+                    className="max-w-[180px] truncate rounded px-1 py-0.5 text-slate-400 hover:bg-slate-900 hover:text-slate-100 transition-colors"
+                  >
+                    {cleanTitle(crumb.label)}
+                  </button>
+                </React.Fragment>
+              ))}
+            </nav>
+          )}
+
+          <h2 className="text-base font-semibold leading-snug text-slate-100">
+            {cleanTitle(selectedNode.label)}
+          </h2>
+
+          <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-slate-400">
+            {selectedNode.start_line > 0 && (
+              <span className="font-mono tabular-nums">
+                Dòng {selectedNode.start_line}–{selectedNode.end_line}
               </span>
             )}
-            <span className="font-bold text-sm text-slate-100">
-              {selectedNode.label}
-            </span>
-          </div>
-
-          <div className="flex items-center justify-between rounded-lg bg-slate-900/80 p-2 border border-slate-800">
-            <span className="font-mono text-[11px] text-brand-300 font-semibold truncate">
-              {selectedNode.path}
-            </span>
-            <button
-              onClick={() => copyToClipboard(selectedNode.path, 'LTREE Path')}
-              className="rounded p-1 text-slate-400 hover:bg-slate-800 hover:text-white"
-              title="Sao chép path"
-            >
-              <Copy className="h-3.5 w-3.5" />
-            </button>
-          </div>
-        </div>
-
-        {/* Verbatim Text Section */}
-        {selectedNode.verbatim_text && (
-          <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
-                Nội Dung Nguyên Văn
-              </span>
-              <button
-                onClick={() =>
-                  copyToClipboard(selectedNode.verbatim_text, 'Nội dung nguyên văn')
-                }
-                className="text-[10px] text-brand-400 hover:underline flex items-center gap-1"
-              >
-                <Copy className="h-3 w-3" />
-                <span>Sao chép</span>
-              </button>
-            </div>
-            <div className="rounded-lg bg-slate-950 p-3 border border-slate-800 font-mono text-slate-200 leading-relaxed whitespace-pre-wrap max-h-48 overflow-y-auto">
-              {selectedNode.verbatim_text}
-            </div>
-          </div>
-        )}
-
-        {/* Contextualized Text */}
-        {selectedNode.contextualized_text && (
-          <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <span className="text-[11px] font-semibold text-brand-400 uppercase tracking-wider flex items-center gap-1">
-                <FileText className="h-3.5 w-3.5" />
-                <span>Văn Cảnh Ngữ Cảnh Tổng Hợp</span>
-              </span>
-              <button
-                onClick={() =>
-                  copyToClipboard(selectedNode.contextualized_text, 'Văn cảnh ngữ cảnh')
-                }
-                className="text-[10px] text-brand-400 hover:underline flex items-center gap-1"
-              >
-                <Copy className="h-3 w-3" />
-                <span>Sao chép</span>
-              </button>
-            </div>
-            <div className="rounded-lg bg-slate-950 p-3 border border-slate-800 font-mono text-slate-300 leading-relaxed whitespace-pre-wrap max-h-48 overflow-y-auto">
-              {selectedNode.contextualized_text}
-            </div>
-          </div>
-        )}
-
-        {/* Table Block Details */}
-        {Boolean(selectedNode.metadata?.is_table) && (
-          <div className="rounded-lg bg-indigo-950/40 p-3 border border-indigo-800/60 space-y-2">
-            <div className="flex items-center gap-2 text-indigo-300 font-semibold text-xs">
-              <FileSpreadsheet className="h-4 w-4" />
-              <span>Khối Bảng Biểu Nguyên Vẹn (Table Block)</span>
-            </div>
-            {Boolean(selectedNode.metadata?.table_summary) && (
-              <p className="text-[11px] text-slate-300 italic">
-                {String(selectedNode.metadata.table_summary)}
-              </p>
-            )}
-            <div className="flex items-center gap-3 text-[10px] font-mono text-indigo-200">
-              {selectedNode.metadata?.row_count !== undefined && (
-                <span>Số hàng: {String(selectedNode.metadata.row_count)}</span>
-              )}
-              {selectedNode.metadata?.col_count !== undefined && (
-                <span>Số cột: {String(selectedNode.metadata.col_count)}</span>
-              )}
-            </div>
-            {Array.isArray(selectedNode.metadata?.headers) && selectedNode.metadata.headers.length > 0 && (
-              <div className="text-[10px] text-slate-400">
-                <span className="font-semibold text-slate-300">Cột: </span>
-                <span>{(selectedNode.metadata.headers as string[]).join(', ')}</span>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Line Span & Node Type Section */}
-        <div className="grid grid-cols-2 gap-2">
-          <div className="rounded-lg bg-slate-900/60 p-2.5 border border-slate-800">
-            <span className="text-[10px] text-slate-500 font-semibold block mb-0.5">
-              Vị trí dòng nguồn:
-            </span>
-            <span className="font-mono font-bold text-slate-200">
-              Dòng {selectedNode.start_line} - {selectedNode.end_line}
-            </span>
-          </div>
-
-          <div className="rounded-lg bg-slate-900/60 p-2.5 border border-slate-800">
-            <span className="text-[10px] text-slate-500 font-semibold block mb-0.5">
-              Nút AST:
-            </span>
-            <span className="font-mono font-bold text-slate-200">
-              {selectedNode.node_type}
-            </span>
-          </div>
-        </div>
-
-        {/* Relational Knowledge Graph Connections */}
-        <div>
-          <div className="flex items-center justify-between mb-2">
-            <div className="flex items-center gap-1.5">
-              <Share2 className="h-3.5 w-3.5 text-blue-400" />
-              <span className="text-[11px] font-semibold text-slate-300 uppercase tracking-wider">
-                Quan Hệ Đồ Thị ({relatedEdges.length})
-              </span>
-            </div>
+            <span aria-hidden="true">·</span>
             <button
               type="button"
-              onClick={() => setIsTraversalOpen(true)}
-              className="text-[10px] font-semibold text-cyan-400 hover:underline flex items-center gap-0.5"
-              title="Duyệt đồ thị đa tầng BFS"
+              onClick={() => copyToClipboard(selectedNode.path, 'đường dẫn mục')}
+              className="inline-flex max-w-full items-center gap-1 rounded px-1.5 py-0.5 font-mono text-[11px] text-slate-400 hover:bg-slate-900 hover:text-slate-200 transition-colors"
+              title="Sao chép mã đường dẫn LTree"
             >
-              <Compass className="h-3 w-3" />
-              <span>Duyệt đa tầng</span>
+              <span className="truncate">{selectedNode.path}</span>
+              <Copy className="h-3 w-3 shrink-0" />
             </button>
           </div>
-
-          {relatedEdges.length === 0 ? (
-            <div className="rounded-lg bg-slate-900/40 p-3 text-center text-[11px] text-slate-500 border border-slate-800/80">
-              Chưa có liên kết hoặc quan hệ nào gắn với chunk này.
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {relatedEdges.map((e, idx) => (
-                <div
-                  key={idx}
-                  className="rounded-lg bg-slate-900/80 p-2.5 border border-slate-800 flex flex-col gap-1"
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="rounded bg-blue-950 px-1.5 py-0.5 text-[9px] font-bold text-blue-300 border border-blue-800">
-                      {e.relation_type}
-                    </span>
-                    <span className="text-[10px] text-slate-500">
-                      {e.source_path === selectedNode.path ? 'Xuất phát (Ra)' : 'Đích đến (Vào)'}
-                    </span>
-                  </div>
-
-                  <div
-                    onClick={() => {
-                      const target = e.source_path === selectedNode.path ? e.target_path : e.source_path;
-                      if (onSelectPath && target) onSelectPath(target);
-                    }}
-                    className={`font-mono text-[11px] truncate transition ${
-                      onSelectPath
-                        ? 'cursor-pointer text-blue-400 hover:text-blue-200 hover:underline'
-                        : 'text-slate-200'
-                    }`}
-                    title="Bấm để chuyển tới chunk này"
-                  >
-                    {e.source_path === selectedNode.path
-                      ? `→ ${e.target_path}`
-                      : `← ${e.source_path}`}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
         </div>
 
-        {/* Metadata JSON */}
-        {selectedNode.metadata && Object.keys(selectedNode.metadata).length > 0 && (
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Đóng khung đọc chi tiết"
+          className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-900 hover:text-slate-100 transition-colors"
+          title="Đóng khung đọc"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+
+      {/* Scrollable Reading Canvas */}
+      <div className="flex-1 overflow-y-auto overscroll-contain px-5 py-4 space-y-5">
+        {/* Main Provision Content */}
+        {bodyMarkdown ? (
           <div>
-            <div className="flex items-center gap-1.5 mb-1.5 text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
-              <FileCode className="h-3.5 w-3.5" />
-              <span>Metadata Payloads</span>
+            <div className="mb-2 flex items-center justify-end">
+              <button
+                type="button"
+                onClick={() =>
+                  copyToClipboard(selectedNode.verbatim_text, 'nội dung điều khoản')
+                }
+                className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-slate-400 hover:bg-slate-900 hover:text-slate-100 transition-colors"
+              >
+                <Copy className="h-3 w-3" />
+                <span>Sao chép toàn văn</span>
+              </button>
             </div>
-            <pre className="rounded-lg bg-slate-950 p-3 border border-slate-800 font-mono text-[10px] text-slate-300 overflow-x-auto leading-relaxed">
-              {JSON.stringify(selectedNode.metadata, null, 2)}
-            </pre>
+            <div className="answer-markdown text-sm leading-relaxed text-slate-100">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                {bodyMarkdown}
+              </ReactMarkdown>
+            </div>
+          </div>
+        ) : (
+          !sortedChildren.length && (
+            <p className="text-sm text-slate-400">
+              Mục này là nút phân cấp trung gian, không có đoạn văn bản riêng.
+            </p>
+          )
+        )}
+
+        {/* Child Provisions List (for Chapters / Sections / Articles with sub-items) */}
+        {sortedChildren.length > 0 && (
+          <div>
+            <h3 className="mb-2.5 text-xs font-semibold text-slate-400">
+              Các mục trực thuộc ({sortedChildren.length})
+            </h3>
+            <div className="divide-y divide-slate-800/80 rounded-xl border border-slate-800 bg-slate-900/40">
+              {sortedChildren.map((child) => {
+                const isTable =
+                  Boolean(child.metadata?.is_table) || child.node_type === 'TABLE';
+                const preview = child.verbatim_text
+                  ? stripDuplicateLeadingHeading(child.verbatim_text, child.label)
+                  : '';
+                return (
+                  <button
+                    key={child.path}
+                    type="button"
+                    onClick={() => onSelectPath(child.path)}
+                    className="group flex w-full items-start justify-between gap-3 px-3.5 py-2.5 text-left hover:bg-slate-900/90 transition-colors first:rounded-t-xl last:rounded-b-xl"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        {isTable ? (
+                          <FileSpreadsheet className="h-3.5 w-3.5 shrink-0 text-emerald-400" />
+                        ) : (
+                          <FileText className="h-3.5 w-3.5 shrink-0 text-slate-400 group-hover:text-brand-400" />
+                        )}
+                        <span className="truncate text-xs font-semibold text-slate-100 group-hover:text-brand-400">
+                          {cleanTitle(child.label)}
+                        </span>
+                      </div>
+                      {preview && (
+                        <p className="mt-1 line-clamp-2 pl-5.5 text-xs leading-relaxed text-slate-400">
+                          {preview}
+                        </p>
+                      )}
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1.5 pt-0.5 text-[11px] text-slate-400">
+                      {child.children && child.children.length > 0 && (
+                        <span className="rounded-full bg-slate-800 px-2 py-0.5 font-mono text-[10px] tabular-nums">
+                          {child.children.length}
+                        </span>
+                      )}
+                      <ChevronRight className="h-3.5 w-3.5 text-slate-500 group-hover:translate-x-0.5 transition-transform" />
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Cross-reference Graph Links (only rendered when edges exist) */}
+        {relatedEdges.length > 0 && (
+          <div className="pt-2 border-t border-slate-800">
+            <h3 className="mb-2.5 flex items-center gap-1.5 text-xs font-semibold text-slate-300">
+              <Share2 className="h-3.5 w-3.5 text-brand-400" />
+              <span>Liên kết tham chiếu ({relatedEdges.length})</span>
+            </h3>
+            <div className="space-y-2">
+              {relatedEdges.map((e, idx) => {
+                const isOutgoing = e.source_path === selectedNode.path;
+                const counterpartPath = isOutgoing ? e.target_path : e.source_path;
+                return (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => {
+                      if (counterpartPath) onSelectPath(counterpartPath);
+                    }}
+                    className="flex w-full items-center justify-between gap-2 rounded-xl border border-slate-800 bg-slate-900/60 px-3 py-2 text-left text-xs hover:border-brand-500/50 hover:bg-slate-900 transition-colors"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <span className="font-mono text-[10px] font-semibold text-brand-400">
+                        {e.relation_type}
+                      </span>
+                      <div className="mt-0.5 truncate font-mono text-[11px] text-slate-200">
+                        {isOutgoing ? `→ ${counterpartPath}` : `← ${counterpartPath}`}
+                      </div>
+                    </div>
+                    <ChevronRight className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                  </button>
+                );
+              })}
+            </div>
           </div>
         )}
       </div>
-
-      {/* Multi-Hop Traversal Modal */}
-      {docSlug && selectedNode && (
-        <GraphTraversalModal
-          isOpen={isTraversalOpen}
-          onClose={() => setIsTraversalOpen(false)}
-          docSlug={docSlug}
-          initialSourcePath={selectedNode.path}
-          onSelectNode={onSelectPath}
-        />
-      )}
-    </div>
+    </aside>
   );
 };

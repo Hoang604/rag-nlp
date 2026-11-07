@@ -176,7 +176,12 @@ def compute_chunk_embeddings(
                         convert_to_numpy=True,
                     )
                 except (torch.cuda.OutOfMemoryError, RuntimeError) as oom_exc:
-                    if "out of memory" in str(oom_exc).lower():
+                    oom_msg = str(oom_exc).lower()
+                    if (
+                        "out of memory" in oom_msg
+                        or "cudacachingallocator" in oom_msg
+                        or "nvmlinit" in oom_msg
+                    ):
                         torch.cuda.empty_cache()
                         logger.warning(
                             "CUDA OOM detected on batch size %d; falling back to item-by-item encoding.",
@@ -193,7 +198,12 @@ def compute_chunk_embeddings(
                                     convert_to_numpy=True,
                                 )
                             except (torch.cuda.OutOfMemoryError, RuntimeError) as single_oom:
-                                if "out of memory" in str(single_oom).lower():
+                                single_msg = str(single_oom).lower()
+                                if (
+                                    "out of memory" in single_msg
+                                    or "cudacachingallocator" in single_msg
+                                    or "nvmlinit" in single_msg
+                                ):
                                     torch.cuda.empty_cache()
                                     logger.warning(
                                         "Chunk (%d chars) exceeds GPU VRAM at batch_size=1; encoding on CPU.",

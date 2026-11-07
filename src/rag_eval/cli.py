@@ -249,10 +249,7 @@ def embed_chunks(
 ) -> None:
     """Computes and updates dense vector embeddings for chunks missing embeddings in PostgreSQL."""
     import asyncio
-    import os
     import time
-
-    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
     from rich.progress import (
         BarColumn,

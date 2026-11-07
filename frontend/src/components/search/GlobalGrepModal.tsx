@@ -135,7 +135,7 @@ export const GlobalGrepModal: React.FC<GlobalGrepModalProps> = ({
 
           <button
             onClick={onClose}
-            className="rounded p-1 text-slate-400 hover:bg-slate-800 hover:text-white"
+            className="rounded p-1 text-slate-400 hover:bg-slate-800 hover:text-slate-50"
           >
             <X className="h-4 w-4" />
           </button>

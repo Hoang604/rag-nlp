@@ -234,7 +234,7 @@ class AnswerRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     question: str = Field(..., min_length=1, max_length=2000)
-    provider: str = Field(default="agy", description="agy | claude | codex")
+    provider: str = Field(default="agy", description="agy | agy-argon | claude | codex")
     agent_mode: bool = Field(
         default=True,
         description="True để chạy Agent MCP với submit_grounded_answer; False để chạy Retrieve + Compose",

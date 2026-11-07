@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { AppHeader, TabId } from './components/layout/AppHeader';
 import { LlmAnswerPanel } from './components/answer/LlmAnswerPanel';
-import { DryRunSearchSimulator } from './components/search/DryRunSearchSimulator';
 import { EvalPanel } from './components/eval/EvalPanel';
 import { CorpusExplorerPanel } from './components/explorer/CorpusExplorerPanel';
 import { GlobalGrepModal } from './components/search/GlobalGrepModal';
@@ -52,13 +51,6 @@ const AppContent: React.FC = () => {
         {activeTab === 'answer' && (
           <LlmAnswerPanel
             documents={documents}
-            onOpenInExplorer={handleOpenInExplorer}
-          />
-        )}
-
-        {activeTab === 'search' && (
-          <DryRunSearchSimulator
-            activeDocSlug={activeDocSlug}
             onOpenInExplorer={handleOpenInExplorer}
           />
         )}

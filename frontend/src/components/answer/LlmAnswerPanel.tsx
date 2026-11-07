@@ -1,5 +1,20 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { ChevronRight, Radio, User } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ArrowUpLeft,
+  BookOpen,
+  Building2,
+  Car,
+  FileCheck,
+  Flame,
+  HeartHandshake,
+  Landmark,
+  Radio,
+  RotateCcw,
+  Scale,
+  ShieldAlert,
+  TrendingUp,
+  Wallet,
+} from 'lucide-react';
 import { api } from '../../services/api';
 import {
   AnswerCitation,
@@ -14,26 +29,70 @@ import { GroundedAnswerSection } from './GroundedAnswerSection';
 import { QuestionComposer } from './QuestionComposer';
 import { ToolTraceTimeline } from './ToolTraceTimeline';
 import { summarizeArgs, ToolTraceItem } from './toolTraceUtils';
+import {
+  BAOHIEM_DEMO_QUESTIONS,
+  DemoScenarioQuestion,
+} from './baohiemDemoQuestions';
 
 interface LlmAnswerPanelProps {
   documents: CorpusDocument[];
   onOpenInExplorer: (docSlug: string, path: string) => void;
 }
 
-const DEFAULT_SAMPLE_QUESTIONS = [
-  'Tóm tắt nội dung và cấu trúc chính của tài liệu đầu tiên trong kho dữ liệu?',
-  'Các khái niệm hoặc quy tắc quan trọng nào được định nghĩa kèm ví dụ minh họa?',
-];
+const SCENARIO_ICONS = [
+  Landmark,
+  HeartHandshake,
+  Scale,
+  Flame,
+  ShieldAlert,
+  FileCheck,
+  Building2,
+  Car,
+  TrendingUp,
+  Wallet,
+] as const;
+
+function readInitialScenarioFromUrl(): DemoScenarioQuestion | null {
+  if (typeof window === 'undefined') return null;
+  const params = new URLSearchParams(window.location.search);
+  const scenarioId = params.get('scenario');
+  if (!scenarioId) return null;
+  return BAOHIEM_DEMO_QUESTIONS.find((q) => q.id === scenarioId) ?? null;
+}
+
+function syncScenarioToUrl(scenarioId: string | null): void {
+  if (typeof window === 'undefined') return;
+  const url = new URL(window.location.href);
+  if (scenarioId) {
+    url.searchParams.set('scenario', scenarioId);
+  } else {
+    url.searchParams.delete('scenario');
+  }
+  window.history.replaceState({}, '', url.toString());
+}
 
 export const LlmAnswerPanel: React.FC<LlmAnswerPanelProps> = ({
   documents,
   onOpenInExplorer,
 }) => {
   const { t } = useI18n();
-  const [question, setQuestion] = useState('');
+  const initialScenario = useMemo(() => readInitialScenarioFromUrl(), []);
+
+  const [question, setQuestion] = useState<string>(
+    initialScenario?.question ?? ''
+  );
+  const [activeScenarioId, setActiveScenarioId] = useState<string | null>(
+    initialScenario?.id ?? null
+  );
   const [submittedQuestion, setSubmittedQuestion] = useState<string>('');
+  const [validationError, setValidationError] = useState<string | null>(null);
   const [providers, setProviders] = useState<ProviderStatus[]>([
     { id: 'agy', label: 'Antigravity (Gemini 3.8 Flash)', available: true },
+    {
+      id: 'agy-argon',
+      label: 'Antigravity (Gemini 4 Argon Medium)',
+      available: true,
+    },
     { id: 'claude', label: 'Claude Code', available: true },
     { id: 'codex', label: 'Codex', available: false },
   ]);
@@ -46,7 +105,6 @@ export const LlmAnswerPanel: React.FC<LlmAnswerPanelProps> = ({
 
   const [wsConnected, setWsConnected] = useState(false);
   const [toolTraces, setToolTraces] = useState<ToolTraceItem[]>([]);
-  const [sampleQuestions, setSampleQuestions] = useState<string[]>(DEFAULT_SAMPLE_QUESTIONS);
 
   const activeSessionRef = useRef<string | null>(null);
   const questionRef = useRef<string>(submittedQuestion || question);
@@ -59,6 +117,15 @@ export const LlmAnswerPanel: React.FC<LlmAnswerPanelProps> = ({
   useEffect(() => {
     providerRef.current = provider;
   }, [provider]);
+
+  useEffect(() => {
+    if (!question.trim()) return;
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [question]);
 
   useEffect(() => {
     api
@@ -75,24 +142,8 @@ export const LlmAnswerPanel: React.FC<LlmAnswerPanelProps> = ({
       .catch(() => {
         // Keep default providers list
       });
-
-    api
-      .getEvalCases()
-      .then((cases) => {
-        const picked = cases
-          .map((c) => c.question.trim())
-          .filter(Boolean)
-          .slice(0, 3);
-        if (picked.length > 0) {
-          setSampleQuestions(picked);
-        }
-      })
-      .catch(() => {
-        // Keep default sample questions
-      });
   }, []);
 
-  // Connect to /api/qa/ws for real-time webhook -> WebSocket events
   useEffect(() => {
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${proto}//${window.location.host}/api/qa/ws`;
@@ -215,8 +266,12 @@ export const LlmAnswerPanel: React.FC<LlmAnswerPanelProps> = ({
             abstained: Boolean(sub.abstained),
             citations: sub.citations as AnswerCitation[],
             retrieval_ms: prev?.retrieval_ms || 0,
-            llm_ms: prev?.llm_ms || (typeof data.elapsed_ms === 'number' ? data.elapsed_ms : 0),
-            total_ms: prev?.total_ms || (typeof data.elapsed_ms === 'number' ? data.elapsed_ms : 0),
+            llm_ms:
+              prev?.llm_ms ||
+              (typeof data.elapsed_ms === 'number' ? data.elapsed_ms : 0),
+            total_ms:
+              prev?.total_ms ||
+              (typeof data.elapsed_ms === 'number' ? data.elapsed_ms : 0),
           }));
         }
       } else if (data.event === 'qa_completed' && data.payload) {
@@ -234,18 +289,47 @@ export const LlmAnswerPanel: React.FC<LlmAnswerPanelProps> = ({
     };
   }, []);
 
-  const canUseAgentMode = provider === 'agy' || provider === 'claude';
+  const canUseAgentMode =
+    provider === 'agy' || provider === 'agy-argon' || provider === 'claude';
   const effectiveAgentMode = canUseAgentMode ? agentMode : false;
 
-  // Whether the user has started a conversation (switches composer from centered hero to bottom dock)
   const hasConversation = Boolean(
     loading || response || error || toolTraces.length > 0 || submittedQuestion
   );
 
-  const handleSubmit = async (customQuestion?: string) => {
-    const q = (customQuestion ?? question).trim();
-    if (!q || loading) return;
+  const handleQuestionChange = (val: string) => {
+    setQuestion(val);
+    if (validationError && val.trim()) {
+      setValidationError(null);
+    }
+    const matchedScenario = BAOHIEM_DEMO_QUESTIONS.find(
+      (item) => item.question === val.trim()
+    );
+    const nextId = matchedScenario?.id ?? null;
+    setActiveScenarioId(nextId);
+    syncScenarioToUrl(nextId);
+  };
 
+  const handleSubmit = async (
+    customQuestion?: string,
+    scenarioId?: string | null
+  ) => {
+    if (loading) return;
+    const q = (customQuestion ?? question).trim();
+    if (!q) {
+      setValidationError(t('answer.validation.empty'));
+      const el = document.querySelector<HTMLTextAreaElement>(
+        '[data-testid="qa-question-input"]'
+      );
+      el?.focus();
+      return;
+    }
+
+    setValidationError(null);
+    if (scenarioId !== undefined) {
+      setActiveScenarioId(scenarioId);
+      syncScenarioToUrl(scenarioId);
+    }
     setSubmittedQuestion(q);
     setQuestion('');
 
@@ -267,10 +351,37 @@ export const LlmAnswerPanel: React.FC<LlmAnswerPanelProps> = ({
       });
       setResponse(res);
     } catch (err) {
+      setQuestion(q);
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleSelectScenario = (
+    scenario: DemoScenarioQuestion,
+    runImmediately: boolean
+  ) => {
+    setValidationError(null);
+    setActiveScenarioId(scenario.id);
+    syncScenarioToUrl(scenario.id);
+    if (runImmediately) {
+      void handleSubmit(scenario.question, scenario.id);
+    } else {
+      setQuestion(scenario.question);
+      const el = document.querySelector<HTMLTextAreaElement>(
+        '[data-testid="qa-question-input"]'
+      );
+      el?.focus();
+    }
+  };
+
+  const handleReturnToScenarioList = () => {
+    if (loading) return;
+    setSubmittedQuestion('');
+    setResponse(null);
+    setError(null);
+    setToolTraces([]);
   };
 
   const toggleDocSlug = (slug: string) => {
@@ -282,11 +393,25 @@ export const LlmAnswerPanel: React.FC<LlmAnswerPanelProps> = ({
   const providerLabel =
     providers.find((p) => p.id === provider)?.label || provider;
 
+  const liveStatusText = useMemo(() => {
+    if (loading) {
+      return `Đang xử lý câu hỏi qua ${providerLabel} (${toolTraces.length} lượt gọi công cụ MCP).`;
+    }
+    if (error) {
+      return `Truy vấn gặp lỗi: ${error}`;
+    }
+    if (response) {
+      return `Đã hoàn tất câu trả lời với ${response.citations.length} nguồn trích dẫn đã xác thực.`;
+    }
+    return '';
+  }, [loading, error, response, providerLabel, toolTraces.length]);
+
   const composerElement = (dockedAtBottom: boolean) => (
     <QuestionComposer
       question={question}
-      onQuestionChange={setQuestion}
+      onQuestionChange={handleQuestionChange}
       onSubmit={() => void handleSubmit()}
+      validationError={validationError}
       loading={loading}
       providers={providers}
       provider={provider}
@@ -302,123 +427,168 @@ export const LlmAnswerPanel: React.FC<LlmAnswerPanelProps> = ({
     />
   );
 
-  // STATE 1: Idle Centered Hero (Before any message is sent, like ChatGPT initial screen)
+  // STATE 1: Minimalist Centered Chat Box + Single-Line Vertical List of 10 Insurance Scenarios
   if (!hasConversation) {
     return (
-      <div className="flex h-full w-full flex-col justify-center overflow-y-auto px-5 py-8 sm:px-8">
-        <div className="mx-auto w-full max-w-4xl space-y-6">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h1 className="text-xl font-semibold tracking-tight text-slate-100">
-                {t('answer.title')}
-              </h1>
-              <p className="mt-1 text-xs text-slate-400">{t('answer.subtitle')}</p>
-            </div>
+      <div className="flex h-full w-full flex-col overflow-y-auto px-4 py-8 sm:px-6">
+        <div role="status" aria-live="polite" className="sr-only">
+          {liveStatusText}
+        </div>
 
-            <span
-              data-testid="qa-ws-status"
-              className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium ${
-                wsConnected
-                  ? 'bg-emerald-950/90 text-emerald-300 border border-emerald-800'
-                  : 'bg-slate-800 text-slate-400'
-              }`}
-            >
-              <Radio className="h-3 w-3" />
-              {wsConnected ? t('answer.live.connected') : t('answer.live.disconnected')}
-            </span>
-          </div>
-
+        <div className="my-auto mx-auto w-full max-w-[42rem] py-6">
           {composerElement(false)}
 
-          <div className="space-y-2">
-            <div className="text-[11px] font-medium uppercase tracking-wider text-slate-400">
-              {t('answer.samples.title')} — bấm vào câu bất kỳ để chạy thử ngay:
-            </div>
-            <div className="space-y-2">
-              {sampleQuestions.map((sq, idx) => (
-                <button
-                  key={idx}
-                  type="button"
-                  data-testid={`qa-sample-${idx}`}
-                  onClick={() => void handleSubmit(sq)}
-                  disabled={loading}
-                  className="group flex w-full items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-900/40 px-4 py-3 text-left text-sm text-slate-200 hover:border-brand-500/60 hover:bg-slate-900 transition"
+          {/* Clean Single-Line List of 10 Suggested Scenarios directly beneath Composer */}
+          <section
+            aria-label={t('answer.scenarios.heading')}
+            data-testid="qa-scenarios-list"
+            className="mt-3.5 space-y-0.5 px-2"
+          >
+            {BAOHIEM_DEMO_QUESTIONS.map((item, idx) => {
+              const Icon = SCENARIO_ICONS[idx % SCENARIO_ICONS.length];
+              const isSelected = activeScenarioId === item.id;
+
+              return (
+                <div
+                  key={item.id}
+                  data-testid={`qa-sample-card-${item.id}`}
+                  className={`group flex items-center justify-between gap-2 rounded-xl px-2.5 py-1.5 transition-colors duration-150 ease-out ${
+                    isSelected
+                      ? 'bg-slate-900/90 text-slate-100'
+                      : 'hover:bg-slate-900/60'
+                  }`}
                 >
-                  <span>{sq}</span>
-                  <ChevronRight className="h-4 w-4 shrink-0 text-slate-500 transition-transform group-hover:translate-x-0.5 group-hover:text-brand-400" />
-                </button>
-              ))}
-            </div>
-          </div>
+                  <button
+                    type="button"
+                    data-testid={`qa-sample-${idx}`}
+                    aria-disabled={loading}
+                    onClick={() => handleSelectScenario(item, true)}
+                    className="flex min-w-0 flex-1 items-center gap-3 text-start text-[13px] leading-normal text-slate-300 group-hover:text-slate-100 focus:outline-none"
+                  >
+                    <Icon
+                      className="h-4 w-4 shrink-0 text-slate-400 group-hover:text-slate-200 transition-colors duration-150"
+                      aria-hidden="true"
+                    />
+                    <span className="truncate">{item.title}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    data-testid={`qa-sample-fill-${idx}`}
+                    aria-label={`${t('answer.scenarios.fillInput')}: ${item.title}`}
+                    title={t('answer.scenarios.fillInput')}
+                    onClick={() => handleSelectScenario(item, false)}
+                    className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-slate-400 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 hover:bg-slate-800 hover:text-slate-100 transition-opacity duration-150 ease-out focus:outline-none"
+                  >
+                    <ArrowUpLeft className="h-3.5 w-3.5" aria-hidden="true" />
+                  </button>
+                </div>
+              );
+            })}
+          </section>
         </div>
       </div>
     );
   }
 
-  // STATE 2: Active Conversation with Scrollable Feed + Bottom-Docked Composer Bar (like ChatGPT)
+  // STATE 2: Active Conversation with Centered Thread + Bottom-Docked Minimalist Composer
   return (
     <div className="flex h-full w-full flex-col overflow-hidden">
+      <div role="status" aria-live="polite" className="sr-only">
+        {liveStatusText}
+      </div>
+
       {/* Top Scrollable Conversation Area */}
-      <div className="flex-1 overflow-y-auto px-5 py-6 sm:px-8">
-        <div className="mx-auto max-w-5xl space-y-5 pb-4">
+      <div className="flex-1 overflow-y-auto px-4 py-6 sm:px-6">
+        <div className="mx-auto max-w-3xl space-y-5 pb-8">
           {/* Compact Top Status Bar */}
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-xs font-medium text-slate-400">
-              {t('answer.title')}
-            </span>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <button
+              type="button"
+              data-testid="qa-return-scenarios-btn"
+              aria-disabled={loading}
+              onClick={handleReturnToScenarioList}
+              className="inline-flex min-h-8 items-center gap-1.5 rounded-full border border-slate-800 bg-composer-surface px-3 py-1 text-xs font-medium text-slate-200 hover:border-slate-600 aria-disabled:opacity-50 transition-colors duration-150 ease-out focus:outline-none"
+            >
+              <BookOpen
+                className="h-3.5 w-3.5 shrink-0 text-brand-400"
+                aria-hidden="true"
+              />
+              <span>{t('answer.scenarios.backToList')}</span>
+            </button>
+
             <span
               data-testid="qa-ws-status"
-              className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[11px] font-medium ${
+              className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium whitespace-nowrap ${
                 wsConnected
                   ? 'bg-emerald-950/90 text-emerald-300 border border-emerald-800'
-                  : 'bg-slate-800 text-slate-400'
+                  : 'bg-slate-800 text-slate-400 border border-slate-700'
               }`}
             >
-              <Radio className="h-3 w-3" />
-              {wsConnected ? t('answer.live.connected') : t('answer.live.disconnected')}
+              <Radio className="h-3 w-3 shrink-0" aria-hidden="true" />
+              <span>
+                {wsConnected
+                  ? t('answer.live.connected')
+                  : t('answer.live.disconnected')}
+              </span>
             </span>
           </div>
 
-          {/* User Question Bubble */}
+          {/* User Question Pill (borderless, clean like reference) */}
           {(submittedQuestion || response?.question) && (
             <div className="flex justify-end">
-              <div className="inline-flex max-w-3xl items-start gap-2.5 rounded-2xl border border-slate-800 bg-slate-900/90 px-4 py-3 text-sm leading-relaxed text-slate-100 shadow-sm">
-                <User className="mt-0.5 h-4 w-4 shrink-0 text-brand-400" />
-                <span>{submittedQuestion || response?.question}</span>
+              <div className="max-w-xl rounded-2xl bg-slate-900/90 px-4 py-2.5 text-sm leading-relaxed text-slate-100 whitespace-pre-line text-start">
+                {submittedQuestion || response?.question}
               </div>
             </div>
           )}
 
-          {/* MCP Tool Progress: Single-Tool Sliding Ticker when Collapsed, Full Structured Timeline when Expanded */}
-          <ToolTraceTimeline
-            loading={loading}
-            providerLabel={providerLabel}
-            toolTraces={toolTraces}
-            onOpenExplorer={onOpenInExplorer}
-          />
-
-          {error && (
-            <div
-              data-testid="qa-error-banner"
-              className="rounded-xl border border-rose-800 bg-rose-950/50 p-4 text-xs text-rose-200"
-            >
-              {error}
-            </div>
-          )}
-
-          {/* Grounded Answer & Validated Citations */}
-          {response && (
-            <GroundedAnswerSection
-              response={response}
+          {/* Assistant Turn: Borderless Tool Trace + Markdown Answer */}
+          <div className="space-y-2.5">
+            <ToolTraceTimeline
+              loading={loading}
+              providerLabel={providerLabel}
+              toolTraces={toolTraces}
               onOpenExplorer={onOpenInExplorer}
             />
-          )}
+
+            {error && (
+              <div
+                role="alert"
+                data-testid="qa-error-banner"
+                className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-rose-800 bg-rose-950/50 p-4 text-xs text-rose-200"
+              >
+                <span className="min-w-0 flex-1 leading-relaxed">{error}</span>
+                <button
+                  type="button"
+                  data-testid="qa-retry-btn"
+                  onClick={() =>
+                    void handleSubmit(
+                      submittedQuestion || question,
+                      activeScenarioId
+                    )
+                  }
+                  className="inline-flex min-h-9 shrink-0 items-center gap-1.5 rounded-lg border border-rose-700 bg-rose-900/60 px-3 py-1.5 text-xs font-semibold text-rose-100 hover:bg-rose-900 transition-colors duration-150 ease-out focus:outline-none"
+                >
+                  <RotateCcw className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                  <span>{t('answer.retry')}</span>
+                </button>
+              </div>
+            )}
+
+            {response && (
+              <GroundedAnswerSection
+                response={response}
+                onOpenExplorer={onOpenInExplorer}
+              />
+            )}
+          </div>
         </div>
       </div>
 
-      {/* Bottom-Docked Composer Bar (ChatGPT Style) */}
-      <div className="shrink-0 border-t border-slate-800/80 bg-slate-950/95 px-5 py-3.5 sm:px-8">
-        <div className="mx-auto max-w-5xl">{composerElement(true)}</div>
+      {/* Bottom-Docked Composer Bar */}
+      <div className="shrink-0 bg-slate-950/95 px-4 pb-4 pt-2 sm:px-6">
+        <div className="mx-auto max-w-3xl">{composerElement(true)}</div>
       </div>
     </div>
   );

@@ -98,6 +98,37 @@ def test_tree_hierarchy_builder_ast_node_types_and_labels() -> None:
     headings = [n.label for n in all_nodes if "Alpha" in n.label]
     assert len(headings) >= 1
 
+    # Verify dotted doc_slug does not spawn bogus namespace node and resolves ancestor_titles
+    dotted_chunks = [
+        ChunkEntity(
+            id=uuid.uuid4(),
+            document_id=doc_id,
+            path="baohiem.luat_08.chuong_i.dieu_1",
+            verbatim_text="#### Điều 1. Phạm vi điều chỉnh\nNội dung điều 1.",
+            contextualized_text="[Luật 08 > Chương I. QUY ĐỊNH CHUNG > Điều 1. Phạm vi điều chỉnh]",
+            start_line=17,
+            end_line=28,
+            metadata={
+                "node_type": "SECTION",
+                "title": "Điều 1. Phạm vi điều chỉnh",
+                "ancestor_titles": [
+                    "Luật Kinh doanh bảo hiểm",
+                    "Chương I. NHỮNG QUY ĐỊNH CHUNG",
+                    "Điều 1. Phạm vi điều chỉnh",
+                ],
+            },
+        )
+    ]
+    dotted_tree = builder.build_tree(
+        doc_slug="baohiem.luat_08",
+        title="Luật Kinh doanh bảo hiểm",
+        chunks=dotted_chunks,
+    )
+    assert [c.path for c in dotted_tree.root.children] == ["baohiem.luat_08.chuong_i"]
+    assert dotted_tree.root.children[0].label == "Chương I. NHỮNG QUY ĐỊNH CHUNG"
+    assert dotted_tree.root.children[0].start_line == 17
+    assert dotted_tree.root.children[0].end_line == 28
+
 
 
 @pytest.mark.asyncio

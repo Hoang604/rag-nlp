@@ -139,7 +139,7 @@ export interface GraphTraversalStep {
   rationale?: string | null;
 }
 
-export type ProviderId = 'agy' | 'claude' | 'codex';
+export type ProviderId = 'agy' | 'agy-argon' | 'claude' | 'codex';
 
 export interface ProviderStatus {
   id: ProviderId;

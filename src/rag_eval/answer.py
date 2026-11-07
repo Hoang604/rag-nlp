@@ -24,15 +24,26 @@ from rag_eval.mcp.tools.answer import (
 )
 from rag_eval.retrieval.engine import RetrievalEngine
 
-Provider = Literal["agy", "claude", "codex"]
-PROVIDERS: tuple[Provider, ...] = ("agy", "claude", "codex")
-AGENT_PROVIDERS: tuple[Provider, ...] = ("agy", "claude")
+Provider = Literal["agy", "agy-argon", "claude", "codex"]
+PROVIDERS: tuple[Provider, ...] = ("agy", "agy-argon", "claude", "codex")
+AGENT_PROVIDERS: tuple[Provider, ...] = ("agy", "agy-argon", "claude")
 PROVIDER_LABELS: dict[Provider, str] = {
     "agy": "Antigravity (Gemini 3.8 Flash)",
+    "agy-argon": "Antigravity (Gemini 4 Argon Medium)",
     "claude": "Claude Code",
     "codex": "Codex",
 }
+PROVIDER_BINARIES: dict[Provider, str] = {
+    "agy": "agy",
+    "agy-argon": "agy",
+    "claude": "claude",
+    "codex": "codex",
+}
 AGY_MODEL = "gemini-3.8-flash-high"
+AGY_MODELS: dict[Provider, str] = {
+    "agy": AGY_MODEL,
+    "agy-argon": "gemini-4-argon-medium",
+}
 AGY_AGENT_NAME = "corpus-assistant"
 MCP_SERVER_NAME = "docs"
 MCP_ALLOWED_TOOLS = (
@@ -72,14 +83,18 @@ class ComposedAnswer:
 
 
 def available_providers() -> list[tuple[Provider, str, bool]]:
-    return [(p, PROVIDER_LABELS[p], shutil.which(p) is not None) for p in PROVIDERS]
+    return [
+        (p, PROVIDER_LABELS[p], shutil.which(PROVIDER_BINARIES[p]) is not None)
+        for p in PROVIDERS
+    ]
 
 
 def _resolve_executable(provider: Provider) -> str:
-    exe = shutil.which(provider)
+    binary = PROVIDER_BINARIES[provider]
+    exe = shutil.which(binary)
     if exe is None:
         raise RuntimeError(
-            f"Không tìm thấy lệnh `{provider}` trong PATH. "
+            f"Không tìm thấy lệnh `{binary}` trong PATH. "
             f"Cài đặt {PROVIDER_LABELS[provider]} CLI trước khi gọi."
         )
     return exe
@@ -224,7 +239,8 @@ def _agent_command(
             "10",
             prompt,
         ]
-    if provider == "agy":
+    if provider in ("agy", "agy-argon"):
+        agy_model = AGY_MODELS[provider]
         agents_dir = workdir / ".agents" / "agents"
         agents_dir.mkdir(parents=True, exist_ok=True)
         src_agent = _REPO_ROOT / ".agents" / "agents" / f"{AGY_AGENT_NAME}.md"
@@ -266,7 +282,7 @@ def _agent_command(
             "--agent",
             AGY_AGENT_NAME,
             "--model",
-            AGY_MODEL,
+            agy_model,
             "--disable-slash-commands",
             "--output-format",
             "json",
@@ -399,13 +415,13 @@ async def _run_cli_compose(
                 "-",
             ]
             stdin_bytes = prompt.encode("utf-8")
-        elif provider == "agy":
+        elif provider in ("agy", "agy-argon"):
             cmd = [
                 executable,
                 "--mode",
                 "ask",
                 "--model",
-                AGY_MODEL,
+                AGY_MODELS[provider],
                 "--disable-mcps",
                 "--disable-slash-commands",
                 "--output-format",
@@ -454,7 +470,7 @@ async def _run_cli_compose(
     if process.returncode != 0:
         detail = err or out or f"exit code {process.returncode}"
         raise RuntimeError(f"`{provider}` thất bại: {detail[:500]}")
-    if provider == "agy":
+    if provider in ("agy", "agy-argon"):
         return _unwrap_agy_envelope(out)
     return out
 
@@ -502,7 +518,7 @@ def _extract_json_object(raw: str) -> dict[str, object] | None:
 
 
 def _extract_agent_payload(provider: Provider, raw: str) -> dict[str, object] | None:
-    if provider == "agy":
+    if provider in ("agy", "agy-argon"):
         return _extract_json_object(_unwrap_agy_envelope(raw))
     lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
     for ln in reversed(lines):

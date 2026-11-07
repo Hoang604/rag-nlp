@@ -8,7 +8,11 @@ import asyncpg
 
 from rag_eval.db.repositories import CorpusRepository
 from rag_eval.ingestion.loader import DEFAULT_EMBEDDING_MODEL, PostgresBulkLoader
-from rag_eval.ingestion.parsers import NextJSMDXParser, NodeJSMarkdownParser
+from rag_eval.ingestion.parsers import (
+    BaoHiemMarkdownParser,
+    NextJSMDXParser,
+    NodeJSMarkdownParser,
+)
 from rag_eval.ingestion.registry import CodingParserRegistry, UnsupportedFrameworkError
 from rag_eval.schemas import (
     ChunkEntity,
@@ -46,6 +50,7 @@ class DirectIngestionCoordinator:
         # Ensure default framework parsers are registered
         CodingParserRegistry.register(NodeJSMarkdownParser())
         CodingParserRegistry.register(NextJSMDXParser())
+        CodingParserRegistry.register(BaoHiemMarkdownParser())
 
     async def _ingest_draft(
         self,

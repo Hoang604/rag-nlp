@@ -104,8 +104,13 @@ class NextJSMDXParser(BaseCodingParser):
             return False
 
         parts_lower = {p.lower() for p in Path(file_path).parts}
+        if "baohiem" in parts_lower or "bao_hiem" in parts_lower or "nodejs" in parts_lower or "node_docs" in parts_lower:
+            return False
         if "nextjs" in parts_lower or "next_docs" in parts_lower:
             return True
+
+        if suffix == ".md" and raw_text and re.search(r"\A---\s*\n(?:[^\n]*\n)*?doc_code\s*:", raw_text):
+            return False
 
         return bool(raw_text and NEXTJS_CONTENT_MARKER_REGEX.search(raw_text))
 

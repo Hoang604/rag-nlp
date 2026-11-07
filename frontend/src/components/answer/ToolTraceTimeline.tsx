@@ -3,11 +3,9 @@ import {
   AlertCircle,
   CheckCircle2,
   ChevronDown,
-  ChevronLeft,
   ChevronRight,
   Code2,
   Loader2,
-  Terminal,
 } from 'lucide-react';
 import { StructuredToolOutput } from './StructuredToolOutput';
 import { summarizeResultBadge, ToolTraceItem } from './toolTraceUtils';
@@ -19,38 +17,40 @@ interface ToolTraceTimelineProps {
   onOpenExplorer: (docSlug: string, path: string) => void;
 }
 
+function formatArgValue(v: unknown): string {
+  if (typeof v === 'string') {
+    return v.length > 56 ? `"${v.slice(0, 56)}…"` : `"${v}"`;
+  }
+  if (Array.isArray(v)) {
+    if (v.length === 0) return '[]';
+    const items = v.map((item) => String(item));
+    if (items.length <= 2) {
+      return items.join(', ');
+    }
+    return `${items[0]}, +${items.length - 1}`;
+  }
+  return JSON.stringify(v);
+}
+
 export const ToolTraceTimeline: React.FC<ToolTraceTimelineProps> = ({
   loading,
   providerLabel,
   toolTraces,
   onOpenExplorer,
 }) => {
-  // Default collapsed so the user sees a single sliding tool ticker line while running
   const [tracePanelOpen, setTracePanelOpen] = useState(false);
-  const [collapsedSlideIdx, setCollapsedSlideIdx] = useState<number>(0);
-  const [expandedTraces, setExpandedTraces] = useState<Record<string, boolean>>({});
+  const [expandedTraces, setExpandedTraces] = useState<Record<string, boolean>>(
+    {}
+  );
   const [rawJsonMode, setRawJsonMode] = useState<Record<string, boolean>>({});
 
-  // Automatically slide the collapsed single-tool ticker to the latest/running tool as N tools execute
   useEffect(() => {
-    if (toolTraces.length > 0) {
-      const runningIdx = toolTraces.findIndex((item) => item.status === 'running');
-      setCollapsedSlideIdx(runningIdx >= 0 ? runningIdx : toolTraces.length - 1);
-    } else {
-      setCollapsedSlideIdx(0);
+    if (toolTraces.length === 0) {
       setExpandedTraces({});
       setRawJsonMode({});
       setTracePanelOpen(false);
     }
-  }, [toolTraces]);
-
-  const totalToolElapsedMs = useMemo(
-    () =>
-      Math.round(
-        toolTraces.reduce((acc, item) => acc + (item.elapsedMs ?? 0), 0) * 10
-      ) / 10,
-    [toolTraces]
-  );
+  }, [toolTraces.length]);
 
   const anyStepExpanded = useMemo(
     () => toolTraces.some((tItem) => Boolean(expandedTraces[tItem.id])),
@@ -73,349 +73,224 @@ export const ToolTraceTimeline: React.FC<ToolTraceTimelineProps> = ({
     return null;
   }
 
-  const safeSlideIdx =
-    toolTraces.length > 0
-      ? Math.min(Math.max(0, collapsedSlideIdx), toolTraces.length - 1)
-      : 0;
-  const activeCollapsedTrace = toolTraces[safeSlideIdx] ?? null;
-  const activeBadge = activeCollapsedTrace
-    ? summarizeResultBadge(activeCollapsedTrace.tool, activeCollapsedTrace.result)
-    : null;
+  const runningTrace =
+    toolTraces.find((item) => item.status === 'running') ??
+    toolTraces[toolTraces.length - 1] ??
+    null;
 
   return (
-    <div
-      data-testid="qa-live-feed"
-      className="rounded-xl border border-slate-800 bg-slate-900/50 overflow-hidden transition-all"
-    >
-      {!tracePanelOpen ? (
-        /* COLLAPSED MODE: Shows ONLY ONE tool at a time (sliding through 1..N) */
-        <div className="flex items-center justify-between gap-3 px-3.5 py-2.5">
+    <div data-testid="qa-live-feed" className="space-y-2">
+      {/* Minimalist borderless trigger line */}
+      <div className="flex flex-wrap items-center gap-3">
+        <button
+          type="button"
+          onClick={() => setTracePanelOpen((v) => !v)}
+          className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-400 hover:text-slate-100 transition-colors duration-150 focus:outline-none"
+        >
+          {loading ? (
+            <>
+              <Loader2
+                className="h-3.5 w-3.5 shrink-0 animate-spin text-brand-500"
+                aria-hidden="true"
+              />
+              <span>
+                {runningTrace
+                  ? `Đang thực hiện bước ${toolTraces.length} (${runningTrace.tool})…`
+                  : `Đang xử lý qua ${providerLabel}…`}
+              </span>
+            </>
+          ) : (
+            <span>Đã thực hiện {toolTraces.length} bước xử lý</span>
+          )}
+          {tracePanelOpen ? (
+            <ChevronDown className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          ) : (
+            <ChevronRight className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          )}
+        </button>
+
+        {tracePanelOpen && toolTraces.length > 0 && (
           <button
             type="button"
-            onClick={() => setTracePanelOpen(true)}
-            className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+            onClick={toggleAllSteps}
+            className="text-xs font-medium text-slate-400 hover:text-slate-100 underline-offset-2 hover:underline focus:outline-none"
           >
-            <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
-
-            {activeCollapsedTrace ? (
-              <div
-                key={activeCollapsedTrace.id}
-                data-testid={`qa-tool-trace-${activeCollapsedTrace.tool}`}
-                className="flex min-w-0 flex-1 items-center gap-2 transition-all duration-200"
-              >
-                {activeCollapsedTrace.status === 'running' && (
-                  <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-brand-400" />
-                )}
-                {activeCollapsedTrace.status === 'done' && (
-                  <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-400" />
-                )}
-                {activeCollapsedTrace.status === 'error' && (
-                  <AlertCircle className="h-3.5 w-3.5 shrink-0 text-rose-400" />
-                )}
-
-                <span className="shrink-0 rounded bg-slate-800/90 px-1.5 py-0.5 font-mono text-[10px] font-medium text-slate-300">
-                  Bước {safeSlideIdx + 1}/{toolTraces.length}
-                </span>
-
-                <span className="shrink-0 rounded bg-slate-950 px-2 py-0.5 font-mono text-xs font-semibold text-brand-300 border border-slate-800">
-                  {activeCollapsedTrace.tool}
-                </span>
-
-                {activeCollapsedTrace.argsSummary && (
-                  <span className="truncate font-mono text-xs text-slate-300">
-                    {activeCollapsedTrace.argsSummary}
-                  </span>
-                )}
-
-                {activeBadge && (
-                  <span className="hidden sm:inline-flex shrink-0 rounded bg-slate-950 px-2 py-0.5 font-mono text-[10px] text-emerald-300 border border-slate-800">
-                    {activeBadge}
-                  </span>
-                )}
-              </div>
-            ) : (
-              <div className="flex items-center gap-2 text-xs text-slate-300">
-                <Loader2 className="h-3.5 w-3.5 animate-spin text-brand-400" />
-                <span>Đang điều tra kho tài liệu qua {providerLabel}...</span>
-              </div>
-            )}
+            {anyStepExpanded ? 'Thu gọn chi tiết' : 'Bung hết chi tiết'}
           </button>
+        )}
+      </div>
 
-          {/* Right Controls: Slide Stepper (when N > 1) + Elapsed + Expand Button */}
-          <div className="flex shrink-0 items-center gap-2">
-            {toolTraces.length > 1 && (
-              <div className="inline-flex items-center rounded-lg border border-slate-800 bg-slate-950 p-0.5">
-                <button
-                  type="button"
-                  onClick={() => setCollapsedSlideIdx((idx) => Math.max(0, idx - 1))}
-                  disabled={safeSlideIdx <= 0}
-                  title="Tool trước"
-                  className="rounded p-1 text-slate-400 hover:bg-slate-800 hover:text-slate-200 disabled:opacity-30"
-                >
-                  <ChevronLeft className="h-3 w-3" />
-                </button>
-                <span className="px-1.5 font-mono text-[10px] text-slate-400">
-                  {safeSlideIdx + 1}/{toolTraces.length}
-                </span>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setCollapsedSlideIdx((idx) =>
-                      Math.min(toolTraces.length - 1, idx + 1)
-                    )
-                  }
-                  disabled={safeSlideIdx >= toolTraces.length - 1}
-                  title="Tool tiếp theo"
-                  className="rounded p-1 text-slate-400 hover:bg-slate-800 hover:text-slate-200 disabled:opacity-30"
-                >
-                  <ChevronRight className="h-3 w-3" />
-                </button>
-              </div>
-            )}
-
-            {activeCollapsedTrace?.status === 'running' ? (
-              <span className="font-mono text-[11px] text-brand-400">đang chạy...</span>
-            ) : (
-              totalToolElapsedMs > 0 && (
-                <span className="font-mono text-[11px] text-slate-400">
-                  {totalToolElapsedMs}ms
-                </span>
-              )
-            )}
-
-            <button
-              type="button"
-              onClick={() => setTracePanelOpen(true)}
-              className="rounded border border-slate-800 bg-slate-950 px-2 py-1 text-[11px] font-medium text-slate-300 hover:border-brand-500 hover:text-brand-300 transition"
-            >
-              Mở rộng ({toolTraces.length}) ▾
-            </button>
-          </div>
-        </div>
-      ) : (
-        /* EXPANDED MODE: Full Timeline Accordion with Structured Output Blocks */
-        <>
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800/80 bg-slate-900/90 px-4 py-2.5">
-            <button
-              type="button"
-              onClick={() => setTracePanelOpen(false)}
-              className="flex items-center gap-2 text-left text-xs font-semibold text-slate-200 hover:text-white"
-            >
-              <ChevronDown className="h-4 w-4 text-slate-400" />
-              {loading ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin text-brand-400" />
-              ) : (
-                <Terminal className="h-3.5 w-3.5 text-brand-400" />
-              )}
-              <span>Tiến trình tra cứu công cụ MCP</span>
-              <span className="rounded-full bg-slate-800 px-2 py-0.5 font-mono text-[11px] font-medium text-slate-300">
-                {toolTraces.length} bước
-              </span>
-              {totalToolElapsedMs > 0 && (
-                <span className="font-mono text-[11px] font-normal text-slate-400">
-                  · {totalToolElapsedMs}ms
-                </span>
-              )}
-            </button>
-
-            <div className="flex items-center gap-2">
-              {toolTraces.length > 0 && (
-                <button
-                  type="button"
-                  onClick={toggleAllSteps}
-                  className="rounded border border-slate-700/80 bg-slate-950 px-2 py-1 text-[11px] font-medium text-slate-300 hover:border-slate-600 hover:text-white transition"
-                >
-                  {anyStepExpanded ? 'Thu gọn các bước' : 'Bung hết chi tiết'}
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={() => setTracePanelOpen(false)}
-                className="rounded border border-slate-800 bg-slate-950 px-2 py-1 text-[11px] font-medium text-slate-400 hover:text-slate-200"
-              >
-                Thu gọn ▴
-              </button>
+      {/* Expanded Step List along a subtle vertical guide line */}
+      {tracePanelOpen && (
+        <div className="ms-1.5 border-s border-slate-800 ps-3.5 space-y-2">
+          {toolTraces.length === 0 ? (
+            <div className="py-1 text-xs text-slate-400">
+              Đang khởi tạo lệnh gọi công cụ MCP đầu tiên…
             </div>
-          </div>
+          ) : (
+            toolTraces.map((item, stepIdx) => {
+              const isExpanded = Boolean(expandedTraces[item.id]);
+              const showRaw = Boolean(rawJsonMode[item.id]);
+              const resultBadge = summarizeResultBadge(item.tool, item.result);
+              const argEntries = item.args
+                ? Object.entries(item.args).filter(
+                    ([, v]) =>
+                      v !== null && v !== undefined && v !== '' && v !== false
+                  )
+                : [];
 
-          <div className="p-3.5 space-y-2">
-            {toolTraces.length === 0 ? (
-              <div className="flex items-center gap-2 py-2 px-1 text-xs text-slate-400">
-                <Loader2 className="h-3.5 w-3.5 animate-spin text-brand-400" />
-                <span>
-                  Agent đang phân tích câu hỏi và khởi tạo lệnh gọi công cụ MCP đầu tiên...
-                </span>
-              </div>
-            ) : (
-              toolTraces.map((item, stepIdx) => {
-                const isExpanded = Boolean(expandedTraces[item.id]);
-                const showRaw = Boolean(rawJsonMode[item.id]);
-                const resultBadge = summarizeResultBadge(item.tool, item.result);
-                const argEntries = item.args
-                  ? Object.entries(item.args).filter(
-                      ([, v]) => v !== null && v !== undefined && v !== '' && v !== false
-                    )
-                  : [];
-
-                return (
-                  <div
-                    key={item.id}
-                    data-testid={`qa-tool-trace-${item.tool}`}
-                    className="rounded-lg border border-slate-800 bg-slate-950/90 transition hover:border-slate-700/90"
+              return (
+                <div
+                  key={item.id}
+                  data-testid={`qa-tool-trace-${item.tool}`}
+                  className="space-y-1.5"
+                >
+                  <button
+                    type="button"
+                    data-testid={`qa-tool-trace-toggle-${item.tool}`}
+                    onClick={() =>
+                      setExpandedTraces((prev) => ({
+                        ...prev,
+                        [item.id]: !prev[item.id],
+                      }))
+                    }
+                    className="flex w-full items-center justify-between gap-2 rounded-lg py-1 text-start text-xs text-slate-300 hover:text-slate-50 transition-colors duration-150 focus:outline-none"
                   >
-                    <button
-                      type="button"
-                      data-testid={`qa-tool-trace-toggle-${item.tool}`}
-                      onClick={() =>
-                        setExpandedTraces((prev) => ({
-                          ...prev,
-                          [item.id]: !prev[item.id],
-                        }))
-                      }
-                      className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left"
+                    <div className="flex min-w-0 flex-1 items-center gap-2">
+                      {isExpanded ? (
+                        <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                      ) : (
+                        <ChevronRight className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                      )}
+                      <span className="font-mono text-xs text-slate-400 tabular-nums">
+                        {stepIdx + 1}.
+                      </span>
+                      {item.status === 'running' && (
+                        <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-brand-500" />
+                      )}
+                      {item.status === 'done' && (
+                        <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+                      )}
+                      {item.status === 'error' && (
+                        <AlertCircle className="h-3.5 w-3.5 shrink-0 text-rose-500" />
+                      )}
+                      <span className="shrink-0 rounded bg-slate-900 px-1.5 py-0.5 font-mono text-xs font-medium text-slate-100">
+                        {item.tool}
+                      </span>
+                      {item.argsSummary && (
+                        <span className="truncate font-mono text-xs text-slate-400">
+                          {item.argsSummary}
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="flex shrink-0 items-center gap-2">
+                      {resultBadge && (
+                        <span className="font-mono text-xs text-brand-400">
+                          {resultBadge}
+                        </span>
+                      )}
+                      {item.elapsedMs !== undefined && (
+                        <span className="font-mono text-xs text-slate-400 tabular-nums">
+                          {item.elapsedMs}ms
+                        </span>
+                      )}
+                    </div>
+                  </button>
+
+                  {isExpanded && (
+                    <div
+                      data-testid={`qa-tool-trace-details-${item.tool}`}
+                      className="bg-composer-surface rounded-2xl border border-slate-800/80 p-3.5 space-y-3 overflow-hidden"
                     >
-                      <div className="flex min-w-0 flex-1 items-center gap-2">
-                        {isExpanded ? (
-                          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-400" />
-                        ) : (
-                          <ChevronRight className="h-3.5 w-3.5 shrink-0 text-slate-400" />
-                        )}
-                        <span className="font-mono text-[10px] text-slate-500">
-                          {stepIdx + 1}.
-                        </span>
-                        {item.status === 'running' && (
-                          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-brand-400" />
-                        )}
-                        {item.status === 'done' && (
-                          <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-400" />
-                        )}
-                        {item.status === 'error' && (
-                          <AlertCircle className="h-3.5 w-3.5 shrink-0 text-rose-400" />
-                        )}
-                        <span className="shrink-0 rounded bg-slate-900 px-1.5 py-0.5 font-mono text-xs font-semibold text-slate-100 border border-slate-800">
-                          {item.tool}
-                        </span>
-                        {item.argsSummary && (
-                          <span className="truncate font-mono text-[11px] text-slate-400">
-                            {item.argsSummary}
-                          </span>
-                        )}
-                      </div>
-
-                      <div className="flex shrink-0 items-center gap-2">
-                        {resultBadge && (
-                          <span className="rounded bg-slate-900 px-2 py-0.5 font-mono text-[10px] font-medium text-brand-300 border border-slate-800">
-                            {resultBadge}
-                          </span>
-                        )}
-                        {item.status === 'running' ? (
-                          <span className="font-mono text-[11px] text-brand-400">
-                            đang chạy...
-                          </span>
-                        ) : (
-                          item.elapsedMs !== undefined && (
-                            <span className="font-mono text-[11px] text-slate-400">
-                              {item.elapsedMs}ms
+                      <div className="flex items-start justify-between gap-3 border-b border-slate-800/70 pb-2.5">
+                        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
+                          {argEntries.length === 0 ? (
+                            <span className="font-mono text-xs text-slate-400">
+                              Tham số mặc định
                             </span>
-                          )
-                        )}
-                      </div>
-                    </button>
-
-                    {isExpanded && (
-                      <div
-                        data-testid={`qa-tool-trace-details-${item.tool}`}
-                        className="border-t border-slate-800/80 px-3.5 py-3 space-y-3 bg-slate-900/20"
-                      >
-                        <div className="flex flex-wrap items-start justify-between gap-2">
-                          <div className="flex flex-wrap items-center gap-1.5">
-                            <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 mr-1">
-                              Tham số:
-                            </span>
-                            {argEntries.length === 0 ? (
-                              <span className="font-mono text-[11px] text-slate-500">
-                                (mặc định)
-                              </span>
-                            ) : (
-                              argEntries.map(([k, v]) => (
-                                <span
-                                  key={k}
-                                  className="inline-flex items-center gap-1 rounded border border-slate-800 bg-slate-900 px-2 py-0.5 font-mono text-[11px] text-slate-300"
-                                >
-                                  <span className="text-slate-400">{k}:</span>
-                                  <span className="text-slate-100">
-                                    {typeof v === 'string'
-                                      ? v.length > 70
-                                        ? `"${v.slice(0, 70)}..."`
-                                        : `"${v}"`
-                                      : JSON.stringify(v)}
-                                  </span>
+                          ) : (
+                            argEntries.map(([k, v]) => (
+                              <span
+                                key={k}
+                                className="inline-flex max-w-full items-center gap-1 rounded-md bg-slate-900 px-2 py-0.5 font-mono text-xs text-slate-300"
+                              >
+                                <span className="shrink-0 text-slate-400">
+                                  {k}:
                                 </span>
-                              ))
-                            )}
-                          </div>
-
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setRawJsonMode((prev) => ({
-                                ...prev,
-                                [item.id]: !prev[item.id],
-                              }))
-                            }
-                            className={`inline-flex shrink-0 items-center gap-1 rounded border px-2 py-0.5 font-mono text-[10px] font-medium transition ${
-                              showRaw
-                                ? 'border-brand-500 bg-brand-950 text-brand-300'
-                                : 'border-slate-700 bg-slate-900 text-slate-400 hover:text-slate-200'
-                            }`}
-                          >
-                            <Code2 className="h-3 w-3" />
-                            <span>{showRaw ? 'Xem dạng Block' : 'Raw JSON'}</span>
-                          </button>
+                                <span className="truncate text-slate-100">
+                                  {formatArgValue(v)}
+                                </span>
+                              </span>
+                            ))
+                          )}
                         </div>
 
-                        {item.status === 'running' ? (
-                          <div className="flex items-center gap-2 rounded border border-slate-800 bg-slate-900/40 p-3 text-xs text-slate-400">
-                            <Loader2 className="h-3.5 w-3.5 animate-spin text-brand-400" />
-                            <span>Đang thực thi công cụ và chờ kết quả trả về...</span>
-                          </div>
-                        ) : item.error ? (
-                          <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-words rounded border border-rose-900/80 bg-rose-950/40 p-2.5 font-mono text-[11px] leading-relaxed text-rose-300">
-                            {item.error}
-                          </pre>
-                        ) : showRaw ? (
-                          <div className="space-y-2">
-                            <div>
-                              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-                                Input JSON
-                              </div>
-                              <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded border border-slate-800 bg-slate-950 p-2 font-mono text-[11px] text-slate-200">
-                                {JSON.stringify(item.args ?? {}, null, 2)}
-                              </pre>
-                            </div>
-                            <div>
-                              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-                                Output JSON
-                              </div>
-                              <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded border border-slate-800 bg-slate-950 p-2 font-mono text-[11px] text-slate-200">
-                                {JSON.stringify(item.result ?? {}, null, 2)}
-                              </pre>
-                            </div>
-                          </div>
-                        ) : (
-                          <StructuredToolOutput
-                            item={item}
-                            onOpenExplorer={onOpenExplorer}
-                          />
-                        )}
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setRawJsonMode((prev) => ({
+                              ...prev,
+                              [item.id]: !prev[item.id],
+                            }))
+                          }
+                          className={`inline-flex shrink-0 items-center gap-1 rounded-lg border px-2 py-1 font-mono text-xs font-medium transition-colors duration-150 ease-out focus:outline-none ${
+                            showRaw
+                              ? 'border-brand-500 bg-brand-950 text-brand-300'
+                              : 'border-slate-800 bg-slate-900 text-slate-300 hover:text-slate-50'
+                          }`}
+                        >
+                          <Code2 className="h-3 w-3" aria-hidden="true" />
+                          <span>{showRaw ? 'Dạng rút gọn' : 'JSON'}</span>
+                        </button>
                       </div>
-                    )}
-                  </div>
-                );
-              })
-            )}
-          </div>
-        </>
+
+                      {item.status === 'running' ? (
+                        <div className="flex items-center gap-2 py-2 text-xs text-slate-400">
+                          <Loader2
+                            className="h-3.5 w-3.5 animate-spin text-brand-500"
+                            aria-hidden="true"
+                          />
+                          <span>
+                            Đang thực thi công cụ và chờ kết quả trả về…
+                          </span>
+                        </div>
+                      ) : item.error ? (
+                        <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-words rounded-xl bg-rose-950/40 p-3 font-mono text-xs leading-relaxed text-rose-300">
+                          {item.error}
+                        </pre>
+                      ) : showRaw ? (
+                        <div className="space-y-2.5">
+                          <div>
+                            <div className="mb-1 text-xs font-medium text-slate-400">
+                              Tham số đầu vào (JSON)
+                            </div>
+                            <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-xl bg-slate-950 p-2.5 font-mono text-xs text-slate-200">
+                              {JSON.stringify(item.args ?? {}, null, 2)}
+                            </pre>
+                          </div>
+                          <div>
+                            <div className="mb-1 text-xs font-medium text-slate-400">
+                              Kết quả trả về (JSON)
+                            </div>
+                            <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-xl bg-slate-950 p-2.5 font-mono text-xs text-slate-200">
+                              {JSON.stringify(item.result ?? {}, null, 2)}
+                            </pre>
+                          </div>
+                        </div>
+                      ) : (
+                        <StructuredToolOutput
+                          item={item}
+                          onOpenExplorer={onOpenExplorer}
+                        />
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
       )}
     </div>
   );
