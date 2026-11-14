@@ -1,0 +1,301 @@
+@import '@fontsource/be-vietnam-pro/400.css';
+@import '@fontsource/be-vietnam-pro/500.css';
+@import '@fontsource/be-vietnam-pro/600.css';
+@import '@fontsource/be-vietnam-pro/700.css';
+
+/* Bundle full variable TTF because @fontsource/cascadia-mono omits arrow/math glyphs (→, ↔, ≤, ≥, ≠) */
+@font-face {
+  font-family: 'Cascadia Mono';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 200 700;
+  src: url('./fonts/CascadiaMono.ttf') format('truetype');
+}
+
+:root {
+  color-scheme: light;
+
+  /* Tier 1: Primitive palette ramps (never referenced directly inside components) */
+  --p-slate-950: #0b1220;
+  --p-slate-900: #121a2b;
+  --p-slate-700: #334155;
+  --p-slate-600: #475569;
+  --p-slate-500: #64748b;
+  --p-slate-300: #cbd5e1;
+  --p-slate-200: #dde3ec;
+  --p-slate-150: #e8edf4;
+  --p-slate-100: #eef2f7;
+  --p-slate-50: #f5f7fa;
+  --p-white: #ffffff;
+
+  --p-teal-900: #134e4a;
+  --p-teal-800: #115e59;
+  --p-teal-700: #0f766e;
+  --p-teal-600: #0d9488;
+  --p-teal-100: #ccfbf1;
+  --p-teal-50: #f0fdfa;
+
+  --p-indigo-800: #3730a3;
+  --p-indigo-700: #4338ca;
+  --p-indigo-100: #e0e7ff;
+  --p-indigo-50: #eef2ff;
+
+  --p-amber-900: #78350f;
+  --p-amber-800: #92400e;
+  --p-amber-600: #d97706;
+  --p-amber-100: #fef3c7;
+  --p-amber-50: #fffbeb;
+
+  --p-rose-900: #881337;
+  --p-rose-800: #9f1239;
+  --p-rose-600: #e11d48;
+  --p-rose-100: #ffe4e6;
+  --p-rose-50: #fff1f2;
+
+  /* Tier 2: Semantic role tokens */
+  --color-bg-canvas: var(--p-slate-50);
+  --color-bg-surface: var(--p-white);
+  --color-bg-subtle: var(--p-slate-100);
+  --color-bg-code: var(--p-slate-150);
+
+  --color-text-primary: var(--p-slate-900);
+  --color-text-secondary: var(--p-slate-700);
+  --color-text-muted: var(--p-slate-600);
+  --color-text-on-solid: var(--p-white);
+
+  --color-divider-hairline: var(--p-slate-200);
+  --color-axis-line: var(--p-slate-500);
+  --color-grid-line: var(--p-slate-200);
+  --color-connector-muted: var(--p-slate-300);
+
+  --color-accent-solid: var(--p-teal-700);
+  --color-accent-strong: var(--p-teal-800);
+  --color-accent-tint: var(--p-teal-50);
+  --color-accent-badge: var(--p-teal-100);
+
+  --color-sem-solid: var(--p-indigo-700);
+  --color-sem-strong: var(--p-indigo-800);
+  --color-sem-tint: var(--p-indigo-50);
+  --color-sem-badge: var(--p-indigo-100);
+
+  --color-verb-solid: var(--p-amber-600);
+  --color-verb-strong: var(--p-amber-800);
+  --color-verb-tint: var(--p-amber-50);
+  --color-verb-badge: var(--p-amber-100);
+
+  --color-danger-solid: var(--p-rose-600);
+  --color-danger-strong: var(--p-rose-800);
+  --color-danger-tint: var(--p-rose-50);
+  --color-danger-badge: var(--p-rose-100);
+
+  /* Spatial & geometry scale */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-7: 1.75rem;
+  --space-8: 2.5rem;
+
+  --radius-lg: 12px;
+  --radius-md: 8px;
+  --radius-sm: 6px;
+
+  --font-sans: 'Be Vietnam Pro', 'Cascadia Mono', system-ui, -apple-system, sans-serif;
+  --font-mono: 'Cascadia Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.slidev-layout {
+  background-color: var(--color-bg-canvas);
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+  font-size: 0.84rem;
+  line-height: 1.45;
+  text-align: start;
+}
+
+.slidev-layout h1,
+.slidev-layout h2,
+.slidev-layout h3,
+.slidev-layout h4 {
+  color: var(--color-text-primary);
+  letter-spacing: -0.015em;
+  text-wrap: balance;
+  margin: 0;
+}
+
+.slidev-layout p {
+  color: var(--color-text-secondary);
+  line-height: 1.42;
+  text-wrap: pretty;
+  margin: 0;
+  opacity: 1 !important;
+}
+
+.slidev-layout ul,
+.slidev-layout ol {
+  margin: 0;
+  padding-inline-start: 1.1rem;
+  color: var(--color-text-secondary);
+}
+
+.slidev-layout li {
+  margin-block: 0.22rem;
+  line-height: 1.4;
+}
+
+.slidev-layout li strong {
+  color: var(--color-text-primary);
+  font-weight: 600;
+}
+
+.slidev-layout code:not(pre code) {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  font-weight: 500;
+  background-color: var(--color-bg-code);
+  color: var(--color-text-primary);
+  padding: 0.08rem 0.34rem;
+  border-radius: 5px;
+}
+
+/* KaTeX math spacing & crisp sizing */
+.slidev-layout .katex-display {
+  margin: 0.28rem 0 !important;
+  overflow: visible;
+}
+
+.slidev-layout .katex {
+  font-size: 0.94em;
+  color: var(--color-text-primary);
+}
+
+/* Reusable Slide Layout Grids */
+.grid-2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+  align-items: stretch;
+}
+
+.grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3);
+  align-items: stretch;
+}
+
+.split-38-62 {
+  display: grid;
+  grid-template-columns: minmax(0, 0.62fr) minmax(0, 1fr);
+  gap: var(--space-3);
+  align-items: stretch;
+}
+
+.split-42-58 {
+  display: grid;
+  grid-template-columns: minmax(0, 0.86fr) minmax(0, 1.14fr);
+  gap: var(--space-3);
+  align-items: stretch;
+}
+
+.split-56-44 {
+  display: grid;
+  grid-template-columns: minmax(0, 1.28fr) minmax(0, 1fr);
+  gap: var(--space-3);
+  align-items: stretch;
+}
+
+.stack-sm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.stack-md {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Semantic Status / Channel Pills */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.28rem;
+  padding: 0.14rem 0.48rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.pill-accent {
+  background-color: var(--color-accent-badge);
+  color: var(--color-accent-strong);
+}
+
+.pill-sem {
+  background-color: var(--color-sem-badge);
+  color: var(--color-sem-strong);
+}
+
+.pill-verb {
+  background-color: var(--color-verb-badge);
+  color: var(--color-verb-strong);
+}
+
+.pill-danger {
+  background-color: var(--color-danger-badge);
+  color: var(--color-danger-strong);
+}
+
+.pill-neutral {
+  background-color: var(--color-bg-code);
+  color: var(--color-text-secondary);
+}
+
+/* Quantitative Data Table (/ui data-collections compliant) */
+.ui-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.73rem;
+  background-color: var(--color-bg-surface);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.ui-table th {
+  font-weight: 600;
+  color: var(--color-text-muted);
+  background-color: var(--color-bg-subtle);
+  padding: 0.4rem 0.55rem;
+  text-align: start;
+  white-space: nowrap;
+}
+
+.ui-table td {
+  padding: 0.36rem 0.55rem;
+  color: var(--color-text-secondary);
+  border-top: 1px solid var(--color-divider-hairline);
+}
+
+.ui-table th.num,
+.ui-table td.num {
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+.ui-table tr.row-highlight td {
+  background-color: var(--color-accent-tint);
+  color: var(--color-text-primary);
+  font-weight: 600;
+}

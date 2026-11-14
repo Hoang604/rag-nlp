@@ -1,0 +1,22 @@
+{
+  "name": "rag-nlp-slides",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "slidev --open false",
+    "build": "slidev build",
+    "export": "slidev export --output slides-export.pdf --per-slide --timeout 60000 --wait 1500 --executable-path /home/hoang/.cache/ms-playwright/chromium-1248/chrome-linux64/chrome"
+  },
+  "dependencies": {
+    "@fontsource/be-vietnam-pro": "^5.3.0",
+    "@slidev/cli": "^53.1.0",
+    "@slidev/theme-default": "latest",
+    "katex": "^0.16.21",
+    "vue": "^3.5.0"
+  },
+  "devDependencies": {
+    "@types/katex": "^0.16.7",
+    "playwright-chromium": "^1.50.0"
+  }
+}

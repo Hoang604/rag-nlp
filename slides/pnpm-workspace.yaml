@@ -1,0 +1,4 @@
+onlyBuiltDependencies:
+  - playwright-chromium
+overrides:
+  markdown-it: ^14.1.0

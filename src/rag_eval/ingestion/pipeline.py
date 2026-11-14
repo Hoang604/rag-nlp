@@ -7,6 +7,7 @@ from pathlib import Path
 import asyncpg
 
 from rag_eval.db.repositories import CorpusRepository
+from rag_eval.exceptions import E_CORPUS_INTEGRITY_VIOLATION, CorpusDomainError
 from rag_eval.ingestion.loader import DEFAULT_EMBEDDING_MODEL, PostgresBulkLoader
 from rag_eval.ingestion.parsers import (
     BaoHiemMarkdownParser,
@@ -21,9 +22,105 @@ from rag_eval.schemas import (
     GraphEdgeEntity,
     IngestionResult,
     ParsedDocumentDraft,
+    split_context_and_text,
+    validate_ltree_path,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _validate_document_draft(draft: ParsedDocumentDraft) -> None:
+    """Enforces domain-agnostic structural and geometric invariants before DB persistence."""
+    try:
+        doc_slug = validate_ltree_path(draft.doc_slug)
+    except ValueError as exc:
+        raise CorpusDomainError(
+            error_code=E_CORPUS_INTEGRITY_VIOLATION,
+            message=f"Invalid document slug '{draft.doc_slug}': {exc}",
+            data={"doc_slug": draft.doc_slug},
+        ) from exc
+
+    total_lines = len(draft.raw_text.splitlines())
+    seen_paths: set[str] = set()
+    spans: list[tuple[int, int, str]] = []
+
+    for chunk in draft.chunks:
+        try:
+            chunk_path = validate_ltree_path(chunk.path)
+        except ValueError as exc:
+            raise CorpusDomainError(
+                error_code=E_CORPUS_INTEGRITY_VIOLATION,
+                message=f"Invalid chunk ltree path '{chunk.path}': {exc}",
+                data={"doc_slug": doc_slug, "path": chunk.path},
+            ) from exc
+
+        if chunk_path != doc_slug and not chunk_path.startswith(f"{doc_slug}."):
+            raise CorpusDomainError(
+                error_code=E_CORPUS_INTEGRITY_VIOLATION,
+                message=f"Chunk path '{chunk_path}' escapes document namespace '{doc_slug}'.",
+                data={"doc_slug": doc_slug, "path": chunk_path},
+            )
+
+        if chunk_path in seen_paths:
+            raise CorpusDomainError(
+                error_code=E_CORPUS_INTEGRITY_VIOLATION,
+                message=f"Duplicate chunk path '{chunk_path}' in document '{doc_slug}'.",
+                data={"doc_slug": doc_slug, "path": chunk_path},
+            )
+        seen_paths.add(chunk_path)
+
+        clean_verb = chunk.verbatim_text.strip()
+        if not clean_verb:
+            raise CorpusDomainError(
+                error_code=E_CORPUS_INTEGRITY_VIOLATION,
+                message=f"Chunk '{chunk_path}' has empty verbatim_text.",
+                data={"doc_slug": doc_slug, "path": chunk_path},
+            )
+
+        _, extracted_text = split_context_and_text(chunk.contextualized_text, chunk.verbatim_text)
+        if extracted_text != clean_verb:
+            raise CorpusDomainError(
+                error_code=E_CORPUS_INTEGRITY_VIOLATION,
+                message=f"Chunk '{chunk_path}' contextualized_text does not match verbatim_text.",
+                data={"doc_slug": doc_slug, "path": chunk_path},
+            )
+
+        if chunk.start_line < 1 or chunk.end_line < chunk.start_line or chunk.end_line > total_lines:
+            raise CorpusDomainError(
+                error_code=E_CORPUS_INTEGRITY_VIOLATION,
+                message=(
+                    f"Chunk '{chunk_path}' line span [{chunk.start_line}, {chunk.end_line}] "
+                    f"is out of bounds for document with {total_lines} lines."
+                ),
+                data={
+                    "doc_slug": doc_slug,
+                    "path": chunk_path,
+                    "start_line": chunk.start_line,
+                    "end_line": chunk.end_line,
+                    "total_lines": total_lines,
+                },
+            )
+        spans.append((chunk.start_line, chunk.end_line, chunk_path))
+
+    spans.sort()
+    for idx in range(1, len(spans)):
+        prev_start, prev_end, prev_path = spans[idx - 1]
+        curr_start, curr_end, curr_path = spans[idx]
+        if curr_start <= prev_end:
+            raise CorpusDomainError(
+                error_code=E_CORPUS_INTEGRITY_VIOLATION,
+                message=(
+                    f"Overlapping chunk line spans in '{doc_slug}': "
+                    f"'{prev_path}' [{prev_start}, {prev_end}] overlaps '{curr_path}' [{curr_start}, {curr_end}]."
+                ),
+                data={
+                    "doc_slug": doc_slug,
+                    "prev_path": prev_path,
+                    "prev_span": [prev_start, prev_end],
+                    "curr_path": curr_path,
+                    "curr_span": [curr_start, curr_end],
+                },
+            )
 
 
 class DirectIngestionCoordinator:
@@ -57,6 +154,8 @@ class DirectIngestionCoordinator:
         draft: ParsedDocumentDraft,
         overwrite: bool = True,
     ) -> IngestionResult:
+        _validate_document_draft(draft)
+
         # Check existing document
         existing_doc = await self.corpus_repo.documents.get_by_slug(draft.doc_slug)
         if existing_doc is not None and not overwrite:
